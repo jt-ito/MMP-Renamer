@@ -68,7 +68,13 @@ app.use(cookieSession({
   keys: [EFFECTIVE_SESSION_KEY],
   maxAge: 24 * 60 * 60 * 1000,
   httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
+  // Allow explicit override for secure cookies. In Docker images NODE_ENV=production
+  // is often set, but the container may be served over plain HTTP (no TLS). In that
+  // case browsers will ignore cookies with the Secure flag. Set SESSION_COOKIE_SECURE
+  // to 'false' when running over plain HTTP in containers to allow cookies.
+  secure: (typeof process.env.SESSION_COOKIE_SECURE !== 'undefined')
+    ? String(process.env.SESSION_COOKIE_SECURE).toLowerCase() === 'true'
+    : (process.env.NODE_ENV === 'production'),
   sameSite: 'lax'
 }));
 
