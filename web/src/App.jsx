@@ -71,6 +71,9 @@ export default function App() {
   const [authChecked, setAuthChecked] = useState(false)
   const [renameTemplate, setRenameTemplate] = useLocalState('rename_template', '{title} ({year}) - {epLabel} - {episodeTitle}')
   const [tvdbKey, setTvdbKey] = useLocalState('tvdb_api_key', '')
+  // support modern TMDb key while staying backward-compatible with legacy tvdb_api_key
+  const [tmdbKey, setTmdbKey] = useLocalState('tmdb_api_key', '')
+  const providerKey = (tmdbKey && String(tmdbKey).length) ? tmdbKey : (tvdbKey || '')
   const scanOptionsRef = React.useRef({})
   const batchSize = 12
 
@@ -146,7 +149,7 @@ export default function App() {
     }
 
   // Determine whether to ask server to refresh authoritative metadata (TMDb only):
-  const shouldRefresh = Boolean(tvdbKey)
+  const shouldRefresh = Boolean(providerKey)
     if (shouldRefresh) {
       pushToast && pushToast('Scan', 'Preferred provider configured — refreshing metadata from provider')
       try {
@@ -171,7 +174,7 @@ export default function App() {
     try {
       const sid = await triggerScan({ id: libId }, { forceEnrich: true })
       // If user has provided a TMDb API key, request server-side refresh to populate TMDb metadata
-      const shouldRefresh = Boolean(tvdbKey)
+  const shouldRefresh = Boolean(providerKey)
       if (shouldRefresh) {
         pushToast && pushToast('Rescan', 'Preferred provider configured — refreshing metadata from provider')
         try {
@@ -207,7 +210,7 @@ export default function App() {
       }
 
       // POST to /enrich to generate/update enrichment (force bypasses cache check)
-      const w = await axios.post(API('/enrich'), { path: key, tmdb_api_key: tvdbKey || undefined })
+  const w = await axios.post(API('/enrich'), { path: key, tmdb_api_key: providerKey || undefined })
       if (w.data && w.data.enrichment) setEnrichCache(prev => ({ ...prev, [key]: w.data.enrichment }))
 
       // if the applied operation marked this item hidden, remove it from visible items
@@ -292,7 +295,7 @@ export default function App() {
   async function refreshScan(scanId) {
     if (!scanId) throw new Error('no scan id')
     try {
-      const r = await axios.post(API(`/scan/${scanId}/refresh`), { tvdb_api_key: tvdbKey || undefined })
+  const r = await axios.post(API(`/scan/${scanId}/refresh`), { tmdb_api_key: providerKey || undefined })
        // update enrichCache for items that were refreshed
        if (r.data && r.data.results) {
          // fetch each updated enrichment from server.cache
@@ -446,8 +449,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     }
     if (episodeTitle) displayName += (displayName ? ' - ' : '') + episodeTitle
     if (!displayName) {
-  // if user provided a TMDb API key, do not show the local parsedName as the primary display
-  if (tvdbKey) {
+  // if user provided a provider API key, do not show the local parsedName as the primary display
+  if (providerKey) {
         displayName = (it && it.canonicalPath ? it.canonicalPath.split('/').pop() : '')
       } else {
         displayName = enrichment?.parsedName || (it && it.canonicalPath ? it.canonicalPath.split('/').pop() : '')
