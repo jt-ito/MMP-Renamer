@@ -1,100 +1,127 @@
-MMP Renamer - Minimal Media Processor
+# MMP-Renamer
 
-Overview
+A small, local-first media renamer: a Node/Express backend with a Vite+React frontend that
+scans a local library, parses filenames, enriches metadata (TMDb when configured), and provides
+a safe preview / approve workflow that hardlinks files into a Jellyfin-friendly layout.
 
-This repository contains a lightweight Node/Express backend and a Vite+React frontend that implement a minimal MMP (media metadata processor) with the following features:
+Important: the `data/` directory contains runtime state and secrets. Do not commit it.
 
-- Full library scan (server performs full inventory; UI only shows results after scan completes)
-- Initial reveal of a small window of enriched items and progressive append as the user scrolls
-- Per-path enrichment using a mock external provider and server-side caching keyed by canonical path
-- Virtualized, fixed-height list rendering (react-window)
-- Preview and apply rename flow with safe defaults and per-item results
-- Simple logging endpoints and local UI persistence for visible window and enrichment cache
+## Features
 
-Quick start (Windows PowerShell)
+- Full library scanning and per-path enrichment with server-side caching (persisted to `data/`).
+- TMDb enrichment when you provide an API key (settings page).
+- Preview renames and apply non-destructively by creating hardlinks under the configured output path
+  (falls back to copying if hardlinking across devices fails).
+- Applied renames are recorded (applied, hidden, appliedAt, appliedTo, renderedName, metadataFilename)
+  and can be unapproved.
+- Virtualized list rendering (react-window) for smooth large-library browsing.
 
-1) Install dependencies
+## Quick start (development)
 
-# in repo root
-npm install
-
-# web app deps
-cd web; npm install
-
-2) Run server and web dev server
-
-# from repo root
-npm run dev
-
-The backend listens on port 5173 and the web dev server runs on 5174. The web app proxies /api to the backend when loaded from the same origin.
-
-Notes & next steps
-
-- The external metadata provider is mocked. Swap `externalEnrich` in `server.js` with a real provider and add API key handling in settings.
-- Enrichment caching is persisted in `data/enrich.json`.
-- Rename execution uses fs.renameSync and is guarded to allow dryRun; for atomic transactions across multiple moves consider two-phase commit or temporary staging.
-- Add authentication and sandboxing before running this against sensitive paths.
-
-Acceptance mapping
-
-- Scanning: server performs full synchronous scan and returns scanId only after done. (Done)
-- Initial reveal: UI only shows items after scan completes and loads initial batch. (Done)
-- Enrichment & caching: server caches per canonicalPath; client checks cache before requesting enrichment. (Done)
-- Progressive loading: client appends fixed-size batches when scrolling near end. (Done)
-- Virtualized list: implemented with react-window fixed row size. (Done)
-- Preview/apply: preview endpoint and apply endpoint exist; UI prompts before apply. (Done)
-- Persistence: localStorage used for visible window and enrichment cache. (Done)
-- Logging: logs saved to data/logs.txt and exposed via /api/logs/recent. (Done)
-
-License: MIT (example)
-
-Security & publishing notes
-
-- Do NOT commit runtime `data/` directory. It contains sensitive items like API keys and user password hashes. A `.gitignore` is included which excludes `data/` and common build artifacts.
-- To initialize an admin user without embedding secrets in the repo, set the `ADMIN_PASSWORD` environment variable before starting the server. Example:
+1. Install dependencies
 
 ```powershell
-# Windows PowerShell
-$env:ADMIN_PASSWORD = "your-secure-password-here" ; npm start
+npm install
+cd web
+npm install
+cd ..
 ```
 
-- Alternatively, copy `data/users.json.template` to `data/users.json` and populate the `passwordHash` field with a bcrypt hash (use `bcrypt` or an online tool that you trust).
-
-Creating a GitHub repo safely
-
-1. Make sure `data/` contains no secrets (or is empty) and `.gitignore` is present.
-2. Create the repository with `git init`, commit source files, and push to GitHub.
-3. After pushing, create the `data/users.json` locally on the deployment host and set the `ADMIN_PASSWORD` env var when starting the container/service.
-
-If you'd like, I can prepare a simple `docker-compose.yml` and a GitHub Actions workflow to build and publish the image without exposing secrets.
-
-Repository and deployment quick-start
-
-Repository: https://github.com/jt-ito/MMP-Renamer.git
-
-Docker (build & run)
+2. Run in dev mode
 
 ```powershell
-# Build the image locally
-docker build -t mmp-renamer:latest .
+npm run dev
+```
 
-# Run with data persisted to ./data and ports exposed
+The backend listens on port 5173. The web dev server (Vite) runs on 5174 and proxies `/api` to the backend.
+
+## Environment variables
+
+- `SESSION_KEY` (required): cookie/session signing key. Provide a secure random string.
+- `ADMIN_PASSWORD` (optional): when present at first startup an admin user will be created with this
+  password; remove it from the environment after initialization.
+
+## Docker
+
+Build the image locally:
+
+```powershell
+docker build -t mmp-renamer:latest .
+```
+
+Run it and mount `data/` from the host:
+
+```powershell
 docker run -p 5173:5173 -v ${PWD}\\data:/usr/src/app/data -e SESSION_KEY="<secure-session-key>" -e ADMIN_PASSWORD="<temporary-admin-pwd>" mmp-renamer:latest
 ```
 
-Push to GitHub (example)
+Build with custom repo/ref (the Dockerfile supports `REPO_URL` and `REPO_REF` build args):
 
 ```powershell
-git init
-git add .
-git commit -m "Initial sanitized import"
-git remote add origin https://github.com/jt-ito/MMP-Renamer.git
-git branch -M main
-git push -u origin main
+docker build --build-arg REPO_URL=https://github.com/jt-ito/MMP-Renamer.git --build-arg REPO_REF=main -t mmp-renamer:latest .
 ```
 
-Replace the `ADMIN_PASSWORD` and `SESSION_KEY` with secure values on your host or CI when starting the service. After initial admin setup, remove `ADMIN_PASSWORD` from env for runtime.
+Example `docker-compose.yml` snippet:
 
-Credits
+```yaml
+version: "3.8"
+services:
+  renamer:
+    image: mmp-renamer:latest
+    build:
+      context: .
+      args:
+        REPO_URL: "https://github.com/jt-ito/MMP-Renamer.git"
+        REPO_REF: "main"
+    ports:
+      - "5173:5173"
+    environment:
+      - SESSION_KEY=${SESSION_KEY}
+      # Provide ADMIN_PASSWORD only to initialize admin, then remove it.
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+    volumes:
+      - ./data:/usr/src/app/data
+    restart: unless-stopped
+```
 
-This project was prepared as a compact renamer demo. If you want, I can add CI, a docker-compose, or a GitHub Actions workflow next.
+## Security & initialization
+
+- Do NOT commit the `data/` directory. It holds runtime state and secrets (API keys, password hashes).
+- The repo includes `.gitignore` to exclude `data/` and common build artifacts.
+- To create an admin without storing plaintext passwords in the repo:
+  - Start the server once with `ADMIN_PASSWORD` set (it will create the admin on first run), then
+    remove `ADMIN_PASSWORD` from the environment.
+  - Or use the helper scripts in `scripts/` to generate a bcrypt hash and populate `data/users.json`.
+
+## What's changed in this fork
+
+- TMDb enrichment is used when a TMDb API key is configured (old Kitsu provider removed).
+- Preview/apply now prefers creating hardlinks under the configured output path and does not
+  mutate the original files.
+- Applied renames are persisted with metadata and can be unapproved from the UI.
+- Default rename template: `{title} ({year}) - {epLabel} - {episodeTitle}`.
+- Select-mode and batch approve UI added.
+
+## Development notes & next steps
+
+- The backend is a single `server.js` Express app; frontend lives in `web/` (Vite + React).
+- If you want CI or automated image publishing, I can add a GitHub Actions workflow that builds
+  the web assets and images using repository secrets (recommended approach for private tokens).
+
+## How I validated changes (local checks you can reproduce)
+
+- Confirm data persistence: `data/enrich.json` and `data/rendered-index.json` are written when
+  items are applied.
+- Sanity check: run server and use the UI to scan a small folder, preview a rename, and apply it.
+
+## Help me push this
+
+I updated and sanitized files in the workspace locally. To push the sanitized repo to GitHub from
+your machine run the usual git commands (set user.name / user.email, commit, and push). I could not
+complete the push here because this environment doesn't have your Git credentials.
+
+If you want, I can add a short `CONTRIBUTING.md`, a GitHub Actions workflow for CI, or a `docker-compose.override.yml` for development.
+
+---
+
+Licensed under MIT (example)
