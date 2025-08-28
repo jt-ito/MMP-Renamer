@@ -5,7 +5,8 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
-app.use(cors());
+// Enable CORS but allow credentials so cookies can be sent from the browser (echo origin)
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 const bcrypt = require('bcryptjs');
 const cookieSession = require('cookie-session');
@@ -539,6 +540,19 @@ app.get('/api/enrich/by-rendered', (req, res) => {
 })
 
 app.get('/api/settings', (req, res) => { const userSettings = (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings) ? users[req.session.username].settings : {}; res.json({ serverSettings: serverSettings || {}, userSettings }); });
+// Diagnostic: expose current session and user presence to help debug auth issues (no secrets)
+app.get('/api/debug/session', (req, res) => {
+  try {
+    const session = req.session || null;
+    const username = session && session.username ? session.username : null;
+    const userExists = username && users && users[username] ? true : false;
+    const usersCount = users ? Object.keys(users).length : 0;
+    // Do not leak password hashes; only surface counts and whether the user exists
+    return res.json({ session, username, userExists, usersCount });
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
 app.post('/api/settings', requireAuth, (req, res) => {
   const body = req.body || {};
   const username = req.session && req.session.username;
