@@ -11,15 +11,7 @@ const bcrypt = require('bcryptjs');
 const cookieSession = require('cookie-session');
 
 // simple cookie session for auth
-app.use(cookieSession({
-  name: 'session',
-  // SESSION_KEY must be provided in the environment for secure cookie signing
-  keys: process.env.SESSION_KEY ? [process.env.SESSION_KEY] : [],
-  maxAge: 24 * 60 * 60 * 1000,
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'lax'
-}));
+// cookie-session will be initialized after we ensure a persistent SESSION_KEY is available
 
 const DATA_DIR = path.resolve(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
@@ -31,8 +23,66 @@ const settingsFile = path.join(DATA_DIR, 'settings.json');
 const usersFile = path.join(DATA_DIR, 'users.json');
 const renderedIndexFile = path.join(DATA_DIR, 'rendered-index.json');
 
-function readJson(file, def) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return def; } }
-function writeJson(file, obj) { fs.writeFileSync(file, JSON.stringify(obj, null, 2)); }
+// Ensure essential data files exist so server can write to them even when they're not in repo
+function ensureFile(filePath, defaultContent) {
+  try {
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, typeof defaultContent === 'string' ? defaultContent : JSON.stringify(defaultContent, null, 2), { encoding: 'utf8' });
+    }
+  } catch (e) {
+    // best-effort
+    console.error('ensureFile error', filePath, e && e.message);
+  }
+}
+
+ensureFile(scanStoreFile, {});
+ensureFile(enrichStoreFile, {});
+ensureFile(logsFile, '');
+ensureFile(settingsFile, {});
+ensureFile(usersFile, {});
+ensureFile(renderedIndexFile, {});
+
+// Persist a generated SESSION_KEY to disk if none provided. This ensures cookie signing works
+// across restarts when using a host-mounted data directory, without requiring env vars.
+const sessionKeyFile = path.join(DATA_DIR, 'session.key');
+function loadOrCreateSessionKey() {
+  try {
+    // Accept either SESSION_KEY or MR_SESSION_KEY (compose env) for compatibility
+    const envKey = (process.env.SESSION_KEY && String(process.env.SESSION_KEY).trim()) ? String(process.env.SESSION_KEY).trim() : ((process.env.MR_SESSION_KEY && String(process.env.MR_SESSION_KEY).trim()) ? String(process.env.MR_SESSION_KEY).trim() : null);
+    if (envKey) return envKey;
+    if (fs.existsSync(sessionKeyFile)) {
+      const k = String(fs.readFileSync(sessionKeyFile, 'utf8') || '').trim();
+      if (k) return k;
+    }
+    const newKey = uuidv4();
+    try { fs.writeFileSync(sessionKeyFile, newKey, { encoding: 'utf8' }); } catch (e) { console.error('failed write session.key', e && e.message); }
+    return newKey;
+  } catch (e) { console.error('loadOrCreateSessionKey', e && e.message); return uuidv4(); }
+}
+const EFFECTIVE_SESSION_KEY = loadOrCreateSessionKey();
+
+// simple cookie session for auth (initialized with EFFECTIVE_SESSION_KEY)
+app.use(cookieSession({
+  name: 'session',
+  keys: [EFFECTIVE_SESSION_KEY],
+  maxAge: 24 * 60 * 60 * 1000,
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'lax'
+}));
+
+function readJson(file, def) { try { return JSON.parse(fs.readFileSync(file, 'utf8') || ''); } catch (e) { return def; } }
+function writeJson(file, obj) {
+  try {
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), { encoding: 'utf8' });
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    console.error('writeJson error', file, e && e.message);
+    // best-effort fallback
+    try { fs.writeFileSync(file, JSON.stringify(obj, null, 2), { encoding: 'utf8' }); } catch (e2) { console.error('writeJson fallback failed', e2 && e2.message); }
+  }
+}
 
 let scans = readJson(scanStoreFile, {});
 let enrichCache = readJson(enrichStoreFile, {});
@@ -42,15 +92,20 @@ let renderedIndex = readJson(renderedIndexFile, {});
 
 async function ensureAdmin() {
   try {
-    if (users && users['admin']) return;
-    // Only auto-create admin if ADMIN_PASSWORD environment variable is set.
-    const adminPwd = process.env.ADMIN_PASSWORD;
+    // If users already exist, nothing to do
+    if (users && Object.keys(users).length > 0) return;
+    // If an ADMIN_PASSWORD env var was provided, create an admin user automatically.
+    // Otherwise leave registration open so the first web registration will create the admin.
+  // Accept ADMIN_PASSWORD or MR_ADMIN_PASSWORD
+  const adminPwd = (process.env.ADMIN_PASSWORD && String(process.env.ADMIN_PASSWORD).trim()) ? String(process.env.ADMIN_PASSWORD).trim() : (process.env.MR_ADMIN_PASSWORD && String(process.env.MR_ADMIN_PASSWORD).trim() ? String(process.env.MR_ADMIN_PASSWORD).trim() : null);
     if (!adminPwd) {
-      appendLog('ADMIN_NOT_CREATED: set ADMIN_PASSWORD to initialize an admin user');
+      appendLog('NO_ADMIN_AUTOCREATE: registration open (no ADMIN_PASSWORD)');
       return;
     }
     const hash = await bcrypt.hash(String(adminPwd), 10);
-    users['admin'] = { username: 'admin', passwordHash: hash, role: 'admin' };
+    const uname = 'admin';
+    users = users || {};
+    users[uname] = { username: uname, passwordHash: hash, role: 'admin' };
     writeJson(usersFile, users);
     appendLog('USER_CREATED admin (from ADMIN_PASSWORD env)');
   } catch (e) {
