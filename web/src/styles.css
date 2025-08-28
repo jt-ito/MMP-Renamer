@@ -1,0 +1,240 @@
+/* Modern dark theme using a modern dark grey palette */
+:root{
+ 	/* Modern dark grey palette */
+ 	--bg-900: #0A0A0A; /* near-black */
+ 	--bg-800: #121212; /* deep surface */
+ 	--bg-700: #1E1E1E; /* card/bg */
+ 	--bg-600: #2A2A2A; /* border/hover */
+ 	--muted: #9AA0A6; /* muted text */
+ 	--accent: #E6E7E9; /* primary text - light grey for readability */
+ 	--accent-cta: #22C55E; /* subtle green accent */
+ 	--accent-cta-2: #60A5FA; /* blue accent (kept for variety) */
+	--hunter-green: #355E3B; /* hunter green for Save actions */
+ 	--radius: 10px;
+}
+
+body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 0; background: var(--bg-900); color: var(--accent); -webkit-font-smoothing:antialiased }
+.app, body, header, .list, .row, .side, .logs { transition: background-color 240ms ease, color 240ms ease, border-color 240ms ease }
+
+/* Motion respect */
+@media (prefers-reduced-motion: no-preference) {
+	button { transition: background-color 160ms ease, color 160ms ease, transform 120ms ease, box-shadow 160ms ease }
+	.theme-fade { transition: background-color 240ms ease, color 240ms ease }
+}
+.app header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; background: var(--bg-800); border-bottom:1px solid var(--bg-600) }
+.app header h1 { margin:0; font-size:1.1rem; letter-spacing:0.4px }
+.app header button { background: transparent; color: var(--accent); border: 1px solid var(--bg-600); padding:6px 10px; border-radius:8px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; height:36px; box-sizing:border-box }
+.app header button:hover { background: rgba(255,255,255,0.02) }
+.app header button:active { transform: translateY(1px) }
+
+/* Ensure header icon-only buttons are visually centered with text buttons */
+.app header { line-height: 1 }
+.app header .header-actions { display:flex; align-items:center; gap:6px }
+.app header .header-actions .icon-only { transform: translateY(3px); display:inline-flex; align-items:center; justify-content:center }
+.app header .header-actions .icon-only .icon { display:block; margin:0 }
+
+.btn-cta { background: var(--accent-cta); color: #021014; border: none; box-shadow: 0 6px 18px rgba(16,24,40,0.08) }
+.btn-ghost { background: transparent; border: 1px solid var(--bg-600); color: var(--accent); display:inline-flex; align-items:center; justify-content:center }
+.btn-ghost:hover { background: rgba(255,255,255,0.02) }
+
+/* Form and page centering utilities */
+.centered-page { display:flex; align-items:center; justify-content:center; min-height: calc(100vh - 120px); padding:20px }
+.form-card { background: var(--bg-800); padding:24px; border-radius: calc(var(--radius) + 2px); box-shadow: 0 14px 40px rgba(2,6,23,0.6); max-width:560px; width:100%; }
+.form-label { font-size:13px; color:var(--muted); margin-bottom:6px; display:block }
+.form-input { width:100%; padding:12px 14px; border-radius:12px; border:1px solid var(--bg-600); background:transparent; color:var(--accent); box-sizing:border-box }
+.input-group { display:flex; gap:8px; align-items:center }
+.small-muted { font-size:12px; color:var(--muted); margin-top:6px }
+
+/* Keep selects and adjacent buttons visually aligned in forms */
+.input-group select.form-input, .input-group .form-input { height:44px }
+.input-group .btn-ghost { height:44px; display:inline-flex; align-items:center }
+
+/* Ensure native select controls match the app theme in both light and dark modes */
+select.form-input {
+	/* Match regular text inputs; use a solid dark background so the native popup inherits darker styling in many browsers */
+	background: var(--bg-700);
+	color: var(--accent);
+	border: 1px solid var(--bg-600);
+	-webkit-appearance: none;
+	-moz-appearance: none;
+	appearance: none;
+	padding: 12px 14px;
+	border-radius: 12px;
+	line-height: 1.2;
+	box-sizing: border-box;
+}
+
+/* Dropdown options should also match theme colors where browsers allow styling */
+select.form-input option,
+select.form-input optgroup {
+	background: var(--bg-700);
+	color: var(--accent);
+}
+
+/* Vendor tweaks for better visuals on Firefox/Chromium */
+select.form-input:-moz-focusring { color: transparent; text-shadow: 0 0 0 var(--accent); }
+
+select.form-input:focus {
+	outline: 2px solid rgba(96,165,250,0.12);
+	outline-offset: 2px;
+}
+
+/* Save button variant (hunter green) used on Settings save */
+.btn-save { background: var(--hunter-green); color: #fff; border: none; border-radius:12px; padding:10px 14px; box-shadow: 0 8px 20px rgba(17,24,17,0.25); cursor:pointer }
+.btn-save:disabled { opacity:0.6 }
+
+/* Shift Scan button left slightly when select mode is active to avoid overlapping absolute approve button */
+.btn-save.shifted { transform: translateX(-74px); transition: transform 220ms ease }
+
+/* Approve selected fade/slide transition */
+.approve-button { transition: opacity 220ms ease, transform 220ms ease; opacity: 0; transform: translateX(-6px); }
+.approve-button.visible { opacity: 1; transform: translateX(0); }
+.approve-button { pointer-events: none; }
+.approve-button.visible { pointer-events: auto; }
+.btn-save.disabled { opacity: 0.6; pointer-events: none }
+
+/* Position approve-button absolutely inside its wrapper to avoid reserving layout space when hidden */
+.select-approve-wrap { position: relative; display: inline-block }
+.approve-button { position: absolute; right: calc(100% + 8px); top: 50%; transform: translateY(-50%) translateX(-6px); }
+.approve-button.visible { transform: translateY(-50%) translateX(0); }
+
+/* Make all settings/page buttons slightly more rounded to match modern look */
+.btn-ghost, .btn-cta, button { border-radius:12px }
+
+/* Light-mode: make ghost buttons have black borders for header/top-right controls */
+.light .btn-ghost { border-color: #000 }
+
+.app main { display:flex; gap:16px; padding:18px }
+.list { flex:1; background: var(--bg-800); padding:12px; border-radius: var(--radius); box-shadow: 0 6px 20px rgba(0,0,0,0.6); min-width:0 }
+.side { width:360px }
+
+/* Row styling matches the fixed itemSize in the virtualized list (80px) */
+.row { display:flex; justify-content:space-between; align-items:center; padding:14px; height:80px; box-sizing:border-box; border-bottom:1px solid var(--bg-600); background: var(--bg-700) }
+.row:nth-child(even) { background: var(--bg-800) }
+.row .meta { flex:1; min-width:0 }
+.row input[type="checkbox"] {
+	width:18px;
+	height:18px;
+	appearance:none;
+	-webkit-appearance:none;
+	border:2px solid rgba(255,255,255,0.07);
+	background:var(--bg-700);
+	border-radius:4px;
+	cursor:pointer;
+	display:inline-block;
+	position:relative;
+	box-shadow: inset 0 -1px 0 rgba(0,0,0,0.2);
+}
+.row input[type="checkbox"]:hover { border-color: rgba(96,165,250,0.25); }
+.row input[type="checkbox"]:focus { outline:2px solid rgba(96,165,250,0.12); outline-offset:2px }
+.row input[type="checkbox"]:checked { background:var(--accent-cta); border-color:var(--accent-cta); }
+.row input[type="checkbox"]:checked::after {
+	content: '\2713';
+	position:absolute;
+	color: #ffffff;
+	font-size:12px;
+	left: 50%;
+	top: 50%;
+	transform: translate(-50%, -54%);
+}
+.row .path { font-size:13px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.row .title { font-weight:600; color:var(--accent); margin-top:6px }
+.row .title,.row .path { display:block }
+
+.actions { display:flex; gap:8px; align-items:center }
+.actions button { padding:8px 12px; border-radius:12px; background:var(--bg-700); color:var(--accent); border:1px solid var(--bg-600); cursor:pointer }
+.actions button.btn-apply { background: var(--accent-cta); color:#021014; border:none; box-shadow: 0 8px 20px rgba(16,24,40,0.25) }
+.actions button.btn-plain { background:var(--bg-700) }
+.actions button:hover { background: var(--bg-600); transform: translateY(-1px) }
+.actions button:active { transform: translateY(1px) }
+
+.logs { background: var(--bg-800); padding:12px; border-radius:var(--radius); border:1px solid var(--bg-600) }
+.logs h3 { margin-top:0; color:var(--accent) }
+.logs pre { max-height:420px; overflow:auto; background:transparent; color:var(--muted); padding:8px; border-radius:6px; border:1px dashed var(--bg-600) }
+
+/* Buttons - general focus and active states */
+button:focus { outline:2px solid rgba(96,165,250,0.16); outline-offset:2px }
+button:active { transform: translateY(1px) }
+
+/* Toasts */
+.toast { background: var(--bg-700); padding:12px; border-radius:10px; color:var(--accent); min-width:220px; box-shadow:0 10px 30px rgba(2,6,23,0.6); border:1px solid var(--bg-600); animation: toast-in 300ms cubic-bezier(.2,.8,.2,1) }
+.toast-title { font-weight:700; margin-bottom:4px }
+.toast-body { font-size:13px; color:var(--muted) }
+
+/* Icon buttons */
+.icon { width:18px; height:18px; vertical-align:middle }
+.icon-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px }
+.icon-only { width:36px; height:36px; border-radius:50%; padding:0; }
+
+@keyframes toast-in {
+	from { transform: translateX(14px); opacity: 0 }
+	to { transform: translateX(0); opacity: 1 }
+}
+
+/* small responsive tweaks */
+@media (max-width: 900px){ .app main { flex-direction:column } .side{ width:100% } }
+
+/* Tablet and mobile responsiveness */
+@media (max-width: 900px) {
+	.app header { flex-direction: column; align-items: flex-start; gap:10px; padding:12px 14px }
+	.app header h1 { font-size: 1rem }
+	.app header .header-actions { width:100%; justify-content: flex-end; gap:8px }
+
+	/* Disable absolute approve positioning and Scan shifting on narrow widths so controls flow naturally */
+	.select-approve-wrap { position: static; display:flex; align-items:center }
+	.approve-button { position: static; right: auto; top: auto; transform: none; opacity: 1; pointer-events: auto; margin-right: 8px }
+	.approve-button.visible { transform: none }
+	.btn-save.shifted { transform: translateX(0); }
+
+	/* Slightly smaller list rows on tablet */
+	.row { height: 72px; padding:12px }
+	.row .title { font-size:15px }
+	.row .path { font-size:12px }
+	.row input[type="checkbox"] { width:16px; height:16px }
+
+	/* Make header buttons wrap and grow as needed on small screens */
+	.app header button { height:40px; padding:8px 10px }
+}
+
+@media (max-width: 480px) {
+	/* Mobile-specific scaling */
+	.app header { padding:10px 12px }
+	.app header h1 { font-size:0.95rem }
+	.app header .header-actions { gap:6px }
+
+	/* Ensure controls are tappable and laid out vertically if space is tight */
+	.header-actions { flex-wrap: wrap; }
+	.select-approve-wrap { width:100%; justify-content:flex-end }
+	.approve-button { margin-right:6px }
+
+	/* Compact rows for phones */
+	.row { height: 60px; padding:8px }
+	.row .title { font-size:14px }
+	.row .path { font-size:11px }
+	.actions button { padding:6px 8px }
+
+	/* Make primary actions easier to tap */
+	.btn-save, .btn-ghost, .btn-cta { padding:10px 12px; min-width:56px }
+}
+
+/* Light theme overrides */
+.light { --bg-900: #f8fafc; --bg-800: #ffffff; --bg-700: #f1f5f9; --bg-600: #e2e8f0; --muted: #555555; --accent: #0b1220 }
+
+/* Improve contrast for the light theme with modern tokens */
+.light {
+	--bg-900: #F8FAFC;
+	--bg-800: #FFFFFF;
+	--bg-700: #F1F5F9;
+	--bg-600: #E2E8F0;
+	--muted: #475569;
+	--accent: #0F172A;
+	--accent-cta: #0EA5A3;
+	--accent-cta-2: #2563EB;
+}
+
+/* Dimming for UI controls that are disabled but still visible */
+.disabled { opacity: 0.55 !important; pointer-events: none !important; }
+
+/* Spinner styling used in per-row rescan */
+.spinner { display:inline-block; vertical-align:middle; }
+

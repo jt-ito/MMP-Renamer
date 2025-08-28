@@ -1,0 +1,24 @@
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+
+# Build outputs
+web/dist/
+/dist/
+
+# Runtime data and logs (do not commit secrets or local paths)
+data/
+logs.txt
+
+# Environment files
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VSCode
+.vscode/
