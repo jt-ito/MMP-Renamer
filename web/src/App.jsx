@@ -397,7 +397,8 @@ export default function App() {
 
               <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
                 previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
-                selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })} />
+                selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
+                providerKey={providerKey} />
             </section>
             <aside className="side">
               <LogsPanel logs={logs} refresh={fetchLogs} pushToast={pushToast} />
@@ -424,7 +425,7 @@ function LogsPanel({ logs, refresh, pushToast }) {
   )
 }
 
-function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {} }) {
+function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '' }) {
   const Row = ({ index, style }) => {
     const it = items[index]
     const enrichment = it ? enrichCache?.[it.canonicalPath] : null
