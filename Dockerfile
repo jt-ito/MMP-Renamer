@@ -17,7 +17,6 @@ RUN git clone --depth 1 --branch ${REPO_REF} ${REPO_URL} repo
 WORKDIR /usr/src/app/repo/web
 # Prefer reproducible install; fall back to `npm install` if needed
 RUN npm ci --silent || npm install --silent
-COPY repo/web ./
 RUN npm run build --silent
 
 # Runtime image: slim, production-only
