@@ -66,21 +66,21 @@ Example `docker-compose.yml` snippet:
 ```yaml
 version: "3.8"
 services:
-  renamer:
-    image: mmp-renamer:latest
+  mmp-renamer:
     build:
-      context: .
-      args:
-        REPO_URL: "https://github.com/jt-ito/MMP-Renamer.git"
-        REPO_REF: "main"
+      context: ${MR_BUILD_PATH}
+      dockerfile: Dockerfile
+    # Optional: you can replace `build:` with `image: mmp-renamer:latest` to run a prebuilt image
+    privileged: true
     ports:
-      - "5173:5173"
+      - "${MR_EXTERNAL_PORT}:${MR_INTERNAL_PORT}"
     environment:
-      - SESSION_KEY=${SESSION_KEY}
-      # Provide ADMIN_PASSWORD only to initialize admin, then remove it.
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - SESSION_KEY=${MR_SESSION_KEY} # required for secure cookie signing
+      # - ADMIN_PASSWORD=${ADMIN_PASSWORD} # optional one-time admin password (remove after initial setup)
     volumes:
-      - ./data:/usr/src/app/data
+      - ${MR_DATA_PATH}:/usr/src/app/data   # persistent runtime data (users, enrich.json, rendered-index.json)
+      - ${JF_MEDIA_PATH}:/media:rw  # optional: media library for hardlinking
+      - ${MR_INPUT_PATH}:/input:rw   # optional: input folder to scan
     restart: unless-stopped
 ```
 
