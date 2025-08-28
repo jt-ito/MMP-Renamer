@@ -64,19 +64,19 @@ docker build --build-arg REPO_URL=https://github.com/jt-ito/MMP-Renamer.git --bu
 Example `docker-compose.yml` snippet:
 
 ```yaml
-version: "3.8"
 services:
   mmp-renamer:
     build:
       context: ${MR_BUILD_PATH}
       dockerfile: Dockerfile
     # Optional: you can replace `build:` with `image: mmp-renamer:latest` to run a prebuilt image
+    # Ensure the container (the user really) has R/W privileges by running (enter the path to where you have your data path set in the yml):sudo chown -R 1000:1000 /home/jt/containers/MMP-Renamer/data
     privileged: true
     ports:
       - "${MR_EXTERNAL_PORT}:${MR_INTERNAL_PORT}"
     environment:
       - SESSION_KEY=${MR_SESSION_KEY} # required for secure cookie signing
-      # - ADMIN_PASSWORD=${ADMIN_PASSWORD} # optional one-time admin password (remove after initial setup)
+      - SESSION_COOKIE_SECURE=${MR_SESSION_COOKIE_SECURE} # optional: override secure cookie setting. Usefull when running on localhost (anything without https)
     volumes:
       - ${MR_DATA_PATH}:/usr/src/app/data   # persistent runtime data (users, enrich.json, rendered-index.json)
       - ${JF_MEDIA_PATH}:/media:rw  # optional: media library for hardlinking
