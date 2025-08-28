@@ -1,19 +1,23 @@
 # Multi-stage Dockerfile for mmp-renamer
-# Builder stage: build the Vite web UI
+# Builder stage: clone repo and build the Vite web UI
 FROM node:20-bullseye AS builder
 WORKDIR /usr/src/app
 
-# Install minimal packages useful for some native builds and TLS certs
+# Build args: allow overriding repo and ref at build time
+ARG REPO_URL=https://github.com/jt-ito/MMP-Renamer.git
+ARG REPO_REF=main
+
+# Install git + ca-certs for cloning and TLS
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends ca-certificates \
+	&& apt-get install -y --no-install-recommends git ca-certificates \
 	&& rm -rf /var/lib/apt/lists/*
 
-# Install web dependencies and build static assets
-COPY web/package.json web/package-lock.json* ./web/
-WORKDIR /usr/src/app/web
-# Prefer reproducible install; fall back to `npm install` if no lockfile is present
+# Clone the repository (shallow) and prepare web build
+RUN git clone --depth 1 --branch ${REPO_REF} ${REPO_URL} repo
+WORKDIR /usr/src/app/repo/web
+# Prefer reproducible install; fall back to `npm install` if needed
 RUN npm ci --silent || npm install --silent
-COPY web/ ./
+COPY repo/web ./
 RUN npm run build --silent
 
 # Runtime image: slim, production-only
@@ -23,25 +27,23 @@ ENV NODE_ENV=production
 ENV PORT=5173
 
 # Ensure CA certs for TLS calls
-RUN apt-get update \ 
-	&& apt-get install -y --no-install-recommends ca-certificates \ 
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends ca-certificates git \
 	&& rm -rf /var/lib/apt/lists/*
 
-# Copy server package files and install production deps only
-COPY package.json package-lock.json* ./
-# Use npm ci if lockfile exists, otherwise fall back to npm install
+# Copy package files from the cloned repo in the builder and install production deps
+COPY --from=builder /usr/src/app/repo/package.json ./package.json
+COPY --from=builder /usr/src/app/repo/package-lock.json* ./package-lock.json*
 RUN npm ci --production --silent --no-audit --no-fund || npm install --production --silent --no-audit --no-fund
 
-# Copy only the files needed to run the server
-COPY server.js ./server.js
-COPY lib ./lib
-COPY README.md ./README.md
+# Copy server source and built web assets from builder
+COPY --from=builder /usr/src/app/repo/server.js ./server.js
+COPY --from=builder /usr/src/app/repo/lib ./lib
+COPY --from=builder /usr/src/app/repo/README.md ./README.md
+COPY --from=builder /usr/src/app/repo/web/dist ./web/dist
 
 # Create the data directory and ensure node user owns it (server persists JSON here)
 RUN mkdir -p /usr/src/app/data && chown -R node:node /usr/src/app
-
-# Copy built web assets from builder stage
-COPY --from=builder /usr/src/app/web/dist ./web/dist
 
 # Run as non-root
 USER node
