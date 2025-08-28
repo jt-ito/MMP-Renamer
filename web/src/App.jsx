@@ -4,6 +4,7 @@ import { FixedSizeList as List } from 'react-window'
 import ToastContainer from './components/Toast'
 import Settings from './Settings'
 import Login from './Login'
+import Register from './Register'
 import Users from './Users'
 
 function IconRefresh(){
@@ -372,7 +373,10 @@ export default function App() {
         {!authChecked ? (
           <section className="list"><div style={{padding:24}}>Checking authentication...</div></section>
         ) : !auth ? (
-          <section className="list"><Login onLogin={(d)=>{ setAuth(d); setAuthChecked(true) }} pushToast={pushToast} /></section>
+          <section className="list">
+            <Register onRegistered={(d) => { setAuth(d); setAuthChecked(true) }} pushToast={pushToast} />
+            <Login onLogin={(d)=>{ setAuth(d); setAuthChecked(true) }} pushToast={pushToast} />
+          </section>
         ) : route === '#/users' ? (
             <section className="list">
               <Users pushToast={pushToast} />

@@ -66,6 +66,34 @@ app.post('/api/login', async (req, res) => { const { username, password } = req.
 app.post('/api/logout', (req, res) => { req.session = null; res.json({ ok: true }); });
 app.get('/api/session', (req, res) => { if (req.session && req.session.username && users[req.session.username]) { const u = users[req.session.username]; return res.json({ authenticated: true, username: u.username, role: u.role }); } res.json({ authenticated: false }); });
 
+// Expose whether registration is open (no users exist)
+app.get('/api/auth/status', (req, res) => {
+  try {
+    const hasUsers = users && Object.keys(users).length > 0;
+    return res.json({ hasUsers });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// One-time open registration: only allowed when there are no users recorded yet.
+app.post('/api/register', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) return res.status(400).json({ error: 'username and password required' });
+    // If users already exist, close registration
+    if (users && Object.keys(users).length > 0) return res.status(403).json({ error: 'registration closed' });
+    if (String(password).length < 6) return res.status(400).json({ error: 'password too short (min 6 chars)' });
+    const uname = String(username).trim();
+    const hash = await bcrypt.hash(String(password), 10);
+    // First created user becomes admin
+    users[uname] = { username: uname, passwordHash: hash, role: 'admin' };
+    writeJson(usersFile, users);
+    // create session for the new user
+    req.session.username = uname;
+    appendLog(`USER_REGISTERED initial admin=${uname}`);
+    return res.json({ ok: true, username: uname, role: 'admin' });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/users', requireAuth, requireAdmin, (req, res) => { const list = Object.values(users).map(u => ({ username: u.username, role: u.role })); res.json({ users: list }); });
 app.post('/api/users', requireAuth, requireAdmin, async (req, res) => { const { username, password, role } = req.body || {}; if (!username || !password) return res.status(400).json({ error: 'username and password required' }); if (users[username]) return res.status(400).json({ error: 'user exists' }); try { const hash = await bcrypt.hash(password, 10); users[username] = { username, passwordHash: hash, role: role || 'user' }; writeJson(usersFile, users); appendLog(`USER_CREATE ${username} by=${req.session.username}`); res.json({ ok: true, username, role: users[username].role }); } catch (err) { res.status(500).json({ error: err.message }); } });
 app.delete('/api/users/:username', requireAuth, requireAdmin, (req, res) => { const target = req.params.username; if (!users[target]) return res.status(404).json({ error: 'not found' }); if (target === 'admin') return res.status(400).json({ error: 'cannot delete admin' }); delete users[target]; writeJson(usersFile, users); appendLog(`USER_DELETE ${target} by=${req.session.username}`); res.json({ ok: true }); });
