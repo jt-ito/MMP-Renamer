@@ -742,7 +742,10 @@ app.post('/api/rename/preview', (req, res) => {
     if (meta && meta.episodeRange) {
       epLabel = meta.season != null ? `S${pad(meta.season)}E${meta.episodeRange}` : `E${meta.episodeRange}`
     } else if (meta && meta.episode != null) {
-      epLabel = meta.season != null ? `S${pad(meta.season)}E${pad(meta.episode)}` : `E${pad(meta.episode)}`
+      // preserve fractional episodes (11.5) while padding integer part
+      const epVal = String(meta.episode)
+      const epLabelPart = /^\d+(?:\.\d+)?$/.test(epVal) ? (epVal.indexOf('.') === -1 ? pad(epVal) : (() => { const p = epVal.split('.'); return pad(p[0]) + '.' + p[1] })()) : epVal
+      epLabel = meta.season != null ? `S${pad(meta.season)}E${epLabelPart}` : `E${epLabelPart}`
     }
   const episodeTitleToken = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : ''
 
@@ -850,7 +853,9 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               if (enrichment && enrichment.episodeRange) {
                 epLabel2 = enrichment.season != null ? `S${pad(enrichment.season)}E${enrichment.episodeRange}` : `E${enrichment.episodeRange}`
               } else if (enrichment && enrichment.episode != null) {
-                epLabel2 = enrichment.season != null ? `S${pad(enrichment.season)}E${pad(enrichment.episode)}` : `E${pad(enrichment.episode)}`
+                const epVal2 = String(enrichment.episode)
+                const epLabelPart2 = /^\d+(?:\.\d+)?$/.test(epVal2) ? (epVal2.indexOf('.') === -1 ? pad(epVal2) : (() => { const p = epVal2.split('.'); return pad(p[0]) + '.' + p[1] })()) : epVal2
+                epLabel2 = enrichment.season != null ? `S${pad(enrichment.season)}E${epLabelPart2}` : `E${epLabelPart2}`
               }
               const episodeTitleToken2 = enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : ''
               const seasonToken2 = (enrichment && enrichment.season != null) ? String(enrichment.season) : ''

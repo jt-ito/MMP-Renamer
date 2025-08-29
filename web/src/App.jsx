@@ -426,11 +426,11 @@ function LogsPanel({ logs, refresh, pushToast }) {
 }
 
 function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '' }) {
-  const Row = ({ index, style }) => {
-    const it = items[index]
-    const enrichment = it ? enrichCache?.[it.canonicalPath] : null
-    useEffect(() => { if (it && !enrichment) enrichOne && enrichOne(it) }, [it?.canonicalPath, enrichment, enrichOne])
-    const loading = it && Boolean(loadingEnrich[it.canonicalPath])
+  function RowComponent({ index, style, items, enrichCache, enrichOne, loadingEnrich, selectMode, selected, toggleSelect, previewRename, applyRename, pushToast, providerKey }) {
+  const it = items[index]
+  const enrichment = it ? enrichCache?.[it.canonicalPath] : null
+  React.useEffect(() => { if (it && !enrichment) enrichOne && enrichOne(it) }, [it?.canonicalPath, enrichment, enrichOne])
+  const loading = it && Boolean(loadingEnrich[it.canonicalPath])
     // Build displayName from structured enrichment fields (prefer API data over raw parsedName)
   const baseSeriesTitle = (enrichment && (enrichment.title || (enrichment.tvdb && enrichment.tvdb.matched && enrichment.tvdb.name))) || enrichment?.extraGuess?.title || null
   const seriesTitle = baseSeriesTitle ? (baseSeriesTitle + (enrichment && enrichment.year ? ` (${enrichment.year})` : '')) : null
@@ -445,7 +445,9 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
       const epLabel = season != null ? `S${pad(season)}E${epRange}` : `E${epRange}`
       displayName = (displayName ? displayName + ' - ' + epLabel : epLabel)
     } else if (episode != null) {
-      const epLabel = season != null ? `S${pad(season)}E${pad(episode)}` : `E${pad(episode)}`
+      const epVal = String(episode)
+      const epLabelPart = /^\d+(?:\.\d+)?$/.test(epVal) ? (epVal.indexOf('.') === -1 ? pad(epVal) : (() => { const p = epVal.split('.'); return pad(p[0]) + '.' + p[1] })()) : epVal
+      const epLabel = season != null ? `S${pad(season)}E${epLabelPart}` : `E${epLabelPart}`
       displayName = (displayName ? displayName + ' - ' + epLabel : epLabel)
     }
     if (episodeTitle) displayName += (displayName ? ' - ' : '') + episodeTitle
@@ -470,7 +472,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
             {displayName}
             { (season != null || episode != null) ? (
               <div style={{fontSize:12, opacity:0.8, marginTop:4}}>
-                { (season != null && episode != null) ? `S${String(season).padStart(2,'0')}E${String(episode).padStart(2,'0')}` : (episode != null ? `E${String(episode).padStart(2,'0')}` : '') }
+                { (season != null && episode != null) ? (() => { const ep = String(episode); const epPart = ep.indexOf('.') === -1 ? String(ep).padStart(2,'0') : (String(ep).split('.')[0].padStart(2,'0') + '.' + String(ep).split('.')[1]); return `S${String(season).padStart(2,'0')}E${epPart}` })() : (episode != null ? (() => { const ep = String(episode); return ep.indexOf('.')===-1 ? `E${String(ep).padStart(2,'0')}` : `E${String(ep).split('.')[0].padStart(2,'0')}.${String(ep).split('.')[1]}` })() : '') }
               </div>
             ) : null }
             {/* small source indicator for episodeTitle: TMDb vs parsed */}
@@ -494,15 +496,15 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
       </div>
     )
   }
+  const Row = React.memo(RowComponent);
 
   function onItemsRendered(info) {
     const visibleStopIndex = info.visibleStopIndex ?? info.visibleRange?.[1]
     if (typeof visibleStopIndex === 'number' && visibleStopIndex >= items.length - 3) onNearEnd && onNearEnd()
   }
-
   return (
     <List height={600} itemCount={items.length} itemSize={80} width={'100%'} onItemsRendered={onItemsRendered}>
-      {Row}
+      {props => <Row {...props} items={items} enrichCache={enrichCache} enrichOne={enrichOne} loadingEnrich={loadingEnrich} selectMode={selectMode} selected={selected} toggleSelect={toggleSelect} previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} providerKey={providerKey} />}
     </List>
   )
 }
