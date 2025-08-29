@@ -23,6 +23,7 @@ const logsFile = path.join(DATA_DIR, 'logs.txt');
 const settingsFile = path.join(DATA_DIR, 'settings.json');
 const usersFile = path.join(DATA_DIR, 'users.json');
 const renderedIndexFile = path.join(DATA_DIR, 'rendered-index.json');
+const parsedCacheFile = path.join(DATA_DIR, 'parsed-cache.json');
 
 // Ensure essential data files exist so server can write to them even when they're not in repo
 function ensureFile(filePath, defaultContent) {
@@ -42,6 +43,7 @@ ensureFile(logsFile, '');
 ensureFile(settingsFile, {});
 ensureFile(usersFile, {});
 ensureFile(renderedIndexFile, {});
+ensureFile(parsedCacheFile, {});
 
 // Persist a generated SESSION_KEY to disk if none provided. This ensures cookie signing works
 // across restarts when using a host-mounted data directory, without requiring env vars.
@@ -96,6 +98,7 @@ let enrichCache = readJson(enrichStoreFile, {});
 let serverSettings = readJson(settingsFile, {});
 let users = readJson(usersFile, {});
 let renderedIndex = readJson(renderedIndexFile, {});
+let parsedCache = readJson(parsedCacheFile, {});
 
 async function ensureAdmin() {
   try {
@@ -641,13 +644,24 @@ app.post('/api/scan', async (req, res) => {
     for (const it of items) {
       try {
         const base = path.basename(it.canonicalPath, path.extname(it.canonicalPath));
-        const parsed = parseFilename(base);
         const key = canonicalize(it.canonicalPath);
-        // only suppress local parsed episodeTitle when the user's effective preferred provider is TMDb and a TMDb key is present
-        const episodeTitle = userHasAuthoritativeProviderKey ? '' : (parsed.episodeTitle || '');
-        enrichCache[key] = Object.assign({}, enrichCache[key] || {}, { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeTitle: episodeTitle, language: 'en', timestamp: Date.now() });
+        // If we have a parsed cache for this path, reuse it
+        let parsed = parsedCache[key] || null
+        if (!parsed) {
+          try {
+            parsed = parseFilename(base)
+            // store a lightweight parse result
+            parsedCache[key] = { title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }
+          } catch (e) { parsed = null }
+        }
+        const episodeTitle = userHasAuthoritativeProviderKey ? '' : ((parsed && parsed.episodeTitle) || '');
+        if (parsed) {
+          enrichCache[key] = Object.assign({}, enrichCache[key] || {}, { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeTitle: episodeTitle, language: 'en', timestamp: Date.now() });
+        }
       } catch (e) { appendLog(`PARSE_ITEM_FAIL path=${it.canonicalPath} err=${e.message}`); }
     }
+    // persist parsed cache and enrich cache
+    try { writeJson(parsedCacheFile, parsedCache) } catch (e) {}
     writeJson(enrichStoreFile, enrichCache);
   } catch (e) { appendLog(`PARSE_MODULE_FAIL err=${e.message}`); }
 
@@ -720,10 +734,26 @@ app.post('/api/settings', requireAuth, (req, res) => {
 app.get('/api/path/exists', (req, res) => { const p = req.query.path || ''; try { const rp = path.resolve(p); const exists = fs.existsSync(rp); const stat = exists ? fs.statSync(rp) : null; res.json({ exists, isDirectory: stat ? stat.isDirectory() : false, resolved: rp }); } catch (err) { res.json({ exists: false, isDirectory: false, error: err.message }); } });
 
 app.post('/api/enrich', async (req, res) => {
-  const { path: p, tvdb_api_key: tvdb_override, tmdb_api_key: tmdb_override } = req.body;
+  const { path: p, tvdb_api_key: tvdb_override, tmdb_api_key: tmdb_override, force } = req.body;
   const key = canonicalize(p || '');
-  appendLog(`ENRICH_REQUEST path=${key}`);
+  appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'}`);
   try {
+    // prefer existing enrichment when present and not forcing
+    if (!force && enrichCache[key] && enrichCache[key].provider && enrichCache[key].provider.matched) {
+      return res.json({ enrichment: enrichCache[key] });
+    }
+
+    // If we have a parsedCache entry and not forcing a provider refresh, return a lightweight enrichment
+    if (!force && parsedCache[key]) {
+      const pc = parsedCache[key]
+      const epTitle = (enrichCache[key] && enrichCache[key].episodeTitle) ? enrichCache[key].episodeTitle : ''
+      const e = Object.assign({}, enrichCache[key] || {}, { sourceId: 'parsed-cache', title: pc.title, parsedName: pc.parsedName, season: pc.season, episode: pc.episode, episodeTitle: epTitle, language: 'en', timestamp: Date.now() })
+      enrichCache[key] = e
+      writeJson(enrichStoreFile, enrichCache)
+      return res.json({ enrichment: e })
+    }
+
+    // otherwise perform authoritative external enrich (used by rescan/force)
     let tvdbKey = null
     try {
       if (tmdb_override) tvdbKey = tmdb_override;
@@ -731,8 +761,20 @@ app.post('/api/enrich', async (req, res) => {
       else if (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && (users[req.session.username].settings.tmdb_api_key || users[req.session.username].settings.tvdb_api_key)) tvdbKey = users[req.session.username].settings.tmdb_api_key || users[req.session.username].settings.tvdb_api_key;
       else if (serverSettings && (serverSettings.tmdb_api_key || serverSettings.tvdb_api_key)) tvdbKey = serverSettings.tmdb_api_key || serverSettings.tvdb_api_key;
     } catch (e) { tvdbKey = null }
-  const data = await externalEnrich(key, tvdbKey, { username: req.session && req.session.username });
+    const data = await externalEnrich(key, tvdbKey, { username: req.session && req.session.username });
     enrichCache[key] = { ...data, cachedAt: Date.now() };
+    // if provider returned authoritative title/parsedName, persist into parsedCache so subsequent scans use it
+    try {
+      if (data && data.title) {
+        parsedCache[key] = parsedCache[key] || {}
+        parsedCache[key].title = data.title
+        parsedCache[key].parsedName = data.parsedName || parsedCache[key].parsedName
+        parsedCache[key].season = data.season != null ? data.season : parsedCache[key].season
+        parsedCache[key].episode = data.episode != null ? data.episode : parsedCache[key].episode
+        parsedCache[key].timestamp = Date.now()
+        writeJson(parsedCacheFile, parsedCache)
+      }
+    } catch (e) {}
     writeJson(enrichStoreFile, enrichCache);
     appendLog(`ENRICH_SUCCESS path=${key}`);
     res.json({ enrichment: enrichCache[key] });
