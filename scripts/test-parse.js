@@ -20,6 +20,9 @@ const examples = [
   'Movie.Title.2019.1080p.BluRay.mkv',
   // messy release name
   'Anime.Title.S03E12.1080p.WEBRip.x265.AAC-Group [eng].mkv'
+  ,
+  // decimal episode example
+  'Decimal.Show.S01E11.5.1080p.WEB-DL.x264-Group.mkv'
 ];
 
 for (const e of examples) {
@@ -43,6 +46,9 @@ async function run() {
     'Weird.Title.(2018).1080p.BluRay.x264-GRP.mkv',
     'Dual.Audio.Movie.2017.1080p.BluRay.Dual-Audio.mkv'
   ];
+
+  // decimal episode sample
+  samples.push('Decimal.Show.S01E11.5.1080p.WEB-DL.x264-Group.mkv');
 
   // added range sample for parser verification
   samples.push('Some.Show.-.01-02.-.Multi_Episode_Title_[1080p].mkv');
