@@ -82,6 +82,24 @@ export default function App() {
   const scanOptionsRef = React.useRef({})
   const batchSize = 12
 
+  // Helper: normalize server enrich responses to { parsed, provider, hidden, applied }
+  function normalizeEnrichResponse(data) {
+    if (!data) return null
+    // Direct GET /api/enrich returns { cached, parsed, provider }
+    if (data.parsed || data.provider) {
+      return { parsed: data.parsed || null, provider: data.provider || null, hidden: data.hidden || false, applied: data.applied || false }
+    }
+    // POST /api/enrich historically returned { enrichment: {...} } or direct enrichment object
+    const e = data.enrichment || data
+    if (!e) return null
+    // If already normalized
+    if (e.parsed || e.provider) return { parsed: e.parsed || null, provider: e.provider || null, hidden: e.hidden || false, applied: e.applied || false }
+    // Otherwise build parsed/provider blocks from legacy enrichment shape
+    const parsed = (e.parsed) ? e.parsed : (e.parsedName || e.title ? { title: e.title || '', parsedName: e.parsedName || '', season: e.season, episode: e.episode, timestamp: e.timestamp } : null)
+    const provider = (e.provider) ? e.provider : ((e.episodeTitle || e.year || e.providerRenderedName || e.tvdb) ? { title: e.title || parsed && parsed.title || '', year: e.year || null, season: e.season, episode: e.episode, episodeTitle: e.episodeTitle || '', raw: e.provider || e.tvdb || null, renderedName: e.providerRenderedName || e.renderedName || null, matched: !!(e.title || e.episodeTitle) } : null)
+    return { parsed: parsed || null, provider: provider || null, hidden: e.hidden || false, applied: e.applied || false }
+  }
+
   function pushToast(title, message){
     const id = Math.random().toString(36).slice(2,9)
     setToasts(t => [...t, { id, title, message }])
@@ -175,8 +193,8 @@ export default function App() {
           await Promise.all(chunk.map(async p => {
             try {
               const er = await axios.get(API('/enrich'), { params: { path: p } })
-              if (er.data && er.data.cached) {
-                const enriched = er.data.enrichment
+          if (er.data && er.data.cached) {
+                const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
                 setEnrichCache(prev => ({ ...prev, [p]: enriched }))
                 if (enriched && enriched.hidden) {
                   setItems(prev => prev.filter(it => it.canonicalPath !== p))
@@ -251,9 +269,10 @@ export default function App() {
       // First try to GET cached enrichment from server
       try {
         const r = await axios.get(API('/enrich'), { params: { path: key } })
-        if (r.data && r.data.cached && !force) {
-          setEnrichCache(prev => ({ ...prev, [key]: r.data.enrichment }))
-          return r.data.enrichment
+      if (r.data && r.data.cached && !force) {
+        const norm = normalizeEnrichResponse(r.data.enrichment || r.data)
+        setEnrichCache(prev => ({ ...prev, [key]: norm }))
+        return norm
         }
       } catch (e) {
         // ignore and continue to POST
@@ -261,19 +280,25 @@ export default function App() {
 
       // POST to /enrich to generate/update enrichment (force bypasses cache check)
   const w = await axios.post(API('/enrich'), { path: key, tmdb_api_key: providerKey || undefined })
-      if (w.data && w.data.enrichment) setEnrichCache(prev => ({ ...prev, [key]: w.data.enrichment }))
+      if (w.data) {
+        const norm = normalizeEnrichResponse(w.data.enrichment || w.data)
+        if (norm) setEnrichCache(prev => ({ ...prev, [key]: norm }))
+      }
 
       // if the applied operation marked this item hidden, remove it from visible items
       try {
-        if (w.data && w.data.enrichment && w.data.enrichment.hidden) {
+        const _norm2 = (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
+        if (_norm2 && _norm2.hidden) {
           setItems(prev => prev.filter(it => it.canonicalPath !== key))
         }
       } catch (e) {}
 
       // choose a friendly name for toast
-      const nameForToast = (w.data && w.data.enrichment && (w.data.enrichment.extraGuess && w.data.enrichment.extraGuess.title)) || (w.data && w.data.enrichment && w.data.enrichment.title) || (key && key.split('/')?.pop()) || key
-      pushToast && pushToast('Enrich', `Updated metadata for ${nameForToast}`)
-      return w.data.enrichment
+  // choose a friendly name for toast from normalized enrichment (prefer parsed then provider)
+  const _norm = (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
+  const nameForToast = (_norm && (_norm.parsed?.title || _norm.provider?.title)) || (key && key.split('/')?.pop()) || key
+  pushToast && pushToast('Enrich', `Updated metadata for ${nameForToast}`)
+  return (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
     } catch (err) {
       setEnrichCache(prev => ({ ...prev, [key]: { error: err?.message || String(err) } }))
       return null
@@ -310,7 +335,7 @@ export default function App() {
       try {
         const er = await axios.get(API('/enrich'), { params: { path: p } })
         if (er.data && er.data.cached) {
-          const enriched = er.data.enrichment
+          const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
           setEnrichCache(prev => ({ ...prev, [p]: enriched }))
           // if the item is now hidden/applied remove it from visible items
           if (enriched && enriched.hidden) {
@@ -352,7 +377,10 @@ export default function App() {
          for (const res of r.data.results) {
            try {
              const er = await axios.get(API('/enrich'), { params: { path: res.path } })
-             if (er.data && er.data.cached) setEnrichCache(prev => ({ ...prev, [res.path]: er.data.enrichment }))
+             if (er.data && er.data.cached) {
+               const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
+               setEnrichCache(prev => ({ ...prev, [res.path]: norm }))
+             }
            } catch (e) {}
          }
        }
@@ -495,36 +523,32 @@ function LogsPanel({ logs, refresh, pushToast }) {
 
 function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '' }) {
   const Row = ({ index, style }) => {
-    const it = items[index]
-    const enrichment = it ? enrichCache?.[it.canonicalPath] : null
-    useEffect(() => { if (it && !enrichment) enrichOne && enrichOne(it) }, [it?.canonicalPath, enrichment, enrichOne])
-    const loading = it && Boolean(loadingEnrich[it.canonicalPath])
-    // Build displayName from structured enrichment fields (prefer API data over raw parsedName)
-  const baseSeriesTitle = (enrichment && (enrichment.title || (enrichment.tvdb && enrichment.tvdb.matched && enrichment.tvdb.name))) || enrichment?.extraGuess?.title || null
-  const seriesTitle = baseSeriesTitle ? (baseSeriesTitle + (enrichment && enrichment.year ? ` (${enrichment.year})` : '')) : null
-  const epRange = enrichment?.episodeRange
-    const season = enrichment?.season
-    const episode = enrichment?.episode
-    const episodeTitle = enrichment?.episodeTitle || enrichment?.extraGuess?.episodeTitle || ''
+  const it = items[index]
+  const rawEnrichment = it ? enrichCache?.[it.canonicalPath] : null
+  const enrichment = normalizeEnrichResponse(rawEnrichment)
+  useEffect(() => { if (it && !rawEnrichment) enrichOne && enrichOne(it) }, [it?.canonicalPath, rawEnrichment, enrichOne])
+  const loading = it && Boolean(loadingEnrich[it.canonicalPath])
 
-    let displayName = seriesTitle || ''
-    function pad(n){ return String(n).padStart(2,'0') }
-    if (epRange) {
-      const epLabel = season != null ? `S${pad(season)}E${epRange}` : `E${epRange}`
-      displayName = (displayName ? displayName + ' - ' + epLabel : epLabel)
-    } else if (episode != null) {
-      const epLabel = season != null ? `S${pad(season)}E${pad(episode)}` : `E${pad(episode)}`
-      displayName = (displayName ? displayName + ' - ' + epLabel : epLabel)
-    }
-    if (episodeTitle) displayName += (displayName ? ' - ' : '') + episodeTitle
-    if (!displayName) {
-  // if user provided a provider API key, do not show the local parsedName as the primary display
-  if (providerKey) {
-        displayName = (it && it.canonicalPath ? it.canonicalPath.split('/').pop() : '')
-      } else {
-        displayName = enrichment?.parsedName || (it && it.canonicalPath ? it.canonicalPath.split('/').pop() : '')
-      }
-    }
+  // Only use the two canonical outputs: parsed and provider
+  const parsed = enrichment?.parsed || null
+  const provider = enrichment?.provider || null
+
+  // parsed name should be provided by server as parsed.parsedName
+  const parsedName = parsed?.parsedName || (parsed?.title ? `${parsed.title}` : null)
+
+  // provider rendered name: prefer provider.renderedName, otherwise compose from provider tokens
+  function pad(n){ return String(n).padStart(2,'0') }
+  const useSeason = (provider?.season != null) ? provider?.season : parsed?.season
+  const useEpisode = (provider?.episode != null) ? provider?.episode : parsed?.episode
+  let epLabel = null
+  if (useEpisode != null) epLabel = (useSeason != null) ? `S${pad(useSeason)}E${pad(useEpisode)}` : `E${pad(useEpisode)}`
+  const providerTitle = provider?.title || null
+  const providerYear = provider?.year ? ` (${provider.year})` : ''
+  const providerEpisodeTitle = provider?.episodeTitle || ''
+  const providerRendered = provider?.renderedName || (providerTitle ? `${providerTitle}${providerYear}${epLabel ? ' - ' + epLabel : ''}${providerEpisodeTitle ? ' - ' + providerEpisodeTitle : ''}` : null)
+
+  const basename = (it && it.canonicalPath ? it.canonicalPath.split('/').pop() : '')
+  const primary = providerRendered || parsedName || basename || ''
     return (
       <div className="row" style={style}>
         {selectMode ? (
@@ -535,17 +559,14 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
         <div className="meta">
           <div className="path" style={{marginTop:3}}>{it?.canonicalPath}</div>
            <div className="title">
-            {displayName}
-            { (season != null || episode != null) ? (
+            {primary}
+            { (useSeason != null || useEpisode != null) ? (
               <div style={{fontSize:12, opacity:0.8, marginTop:4}}>
-                { (season != null && episode != null) ? `S${String(season).padStart(2,'0')}E${String(episode).padStart(2,'0')}` : (episode != null ? `E${String(episode).padStart(2,'0')}` : '') }
+                { (useSeason != null && useEpisode != null) ? `S${String(useSeason).padStart(2,'0')}E${String(useEpisode).padStart(2,'0')}` : (useEpisode != null ? `E${String(useEpisode).padStart(2,'0')}` : '') }
               </div>
             ) : null }
-            {/* small source indicator for episodeTitle: TMDb vs parsed */}
-            { (episodeTitle) ? (() => {
-                const epSource = (enrichment && enrichment.tvdb && (enrichment.tvdb.episode || enrichment.tvdb.matched)) ? 'TMDb' : 'parsed'
-                return (<div style={{fontSize:11, opacity:0.65, marginTop:3}}>Source: {epSource}</div>)
-              })() : null }
+            {/* show source of primary info: provider vs parsed */}
+            <div style={{fontSize:11, opacity:0.65, marginTop:3}}>Source: {provider ? 'provider' : (parsed ? 'parsed' : 'unknown')}</div>
           </div>
         </div>
   <div className="actions">
