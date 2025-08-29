@@ -60,6 +60,9 @@ export default function App() {
   const [lastLibraryId, setLastLibraryId] = useLocalState('lastLibraryId', '')
   const [items, setItems] = useState([])
   const [total, setTotal] = useState(0)
+  const [scanning, setScanning] = useState(false)
+  const [scanLoaded, setScanLoaded] = useState(0)
+  const [scanProgress, setScanProgress] = useState(0)
   const [theme, setTheme] = useLocalState('theme', 'dark')
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState({})
@@ -125,43 +128,54 @@ export default function App() {
     const libId = lib?.id || (r.data && r.data.libraryId) || (scanMeta && scanMeta.libraryId) || ''
     try { setLastLibraryId(libId) } catch (e) {}
 
-    // fetch scan metadata and first page of items
+    // fetch scan metadata
     const meta = await axios.get(API(`/scan/${r.data.scanId}`))
     setScanMeta(meta.data)
     setTotal(meta.data.totalCount)
-    const page = await axios.get(API(`/scan/${r.data.scanId}/items?offset=0&limit=${batchSize}`))
-    // Filter out items that are marked hidden/applied in server cache
-    const filtered = page.data.items.filter(it => {
+
+    // Collect all pages before revealing any items to the UI
+    setScanning(true)
+    setScanLoaded(0)
+    setScanProgress(0)
+    const collected = []
+    let offset = 0
+    while (offset < meta.data.totalCount) {
+      const page = await axios.get(API(`/scan/${r.data.scanId}/items?offset=${offset}&limit=${batchSize}`))
+      const pageItems = page.data.items || []
+      collected.push(...pageItems)
+      offset += pageItems.length
+      setScanLoaded(prev => {
+        const n = prev + pageItems.length
+        try { setScanProgress(Math.min(100, Math.round((n / Math.max(1, meta.data.totalCount)) * 100))) } catch(e){}
+        return n
+      })
+    }
+
+    // Persist options
+    scanOptionsRef.current = options || {}
+
+    // After collecting all items, run the same server-side refresh the rescan uses so parsing is consistent
+    try {
+      pushToast && pushToast('Scan', 'Refreshing metadata (server-side) — this may take a while')
+      await refreshScan(r.data.scanId)
+      // Ensure client-side cache is populated for all paths
+      await refreshEnrichForPaths(collected.map(it => it.canonicalPath))
+      pushToast && pushToast('Scan', 'Provider metadata refresh complete')
+    } catch (e) {
+      pushToast && pushToast('Scan', 'Provider refresh failed')
+    }
+
+    // Filter out items that are marked hidden/applied in server cache and reveal
+    const filtered = collected.filter(it => {
       const e = enrichCache[it.canonicalPath]
       return !(e && (e.hidden === true || e.applied === true))
     })
     setItems(filtered)
+    setScanning(false)
+    setScanProgress(100)
 
-    // handle optional forceEnrich option and persist options for lazy-load pages
-    const forceEnrich = options.forceEnrich === true
-    scanOptionsRef.current = options || {}
-    for (const it of page.data.items) {
-      if (forceEnrich) {
-        enrichOne && enrichOne(it, true)
-      } else {
-        if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
-      }
-    }
-
-  // Determine whether to ask server to refresh authoritative metadata (TMDb only):
-  const shouldRefresh = Boolean(providerKey)
-    if (shouldRefresh) {
-      pushToast && pushToast('Scan', 'Preferred provider configured — refreshing metadata from provider')
-      try {
-        await refreshScan(r.data.scanId)
-        pushToast && pushToast('Scan', 'Provider metadata refresh complete')
-      } catch (e) {
-        pushToast && pushToast('Scan', 'Provider refresh failed')
-      }
-    }
-
-    // return created scan id for callers that want to act on it
-    return r.data.scanId
+  // return created scan id for callers that want to act on it
+  return r.data.scanId
   }
 
   async function rescan() {
@@ -392,13 +406,27 @@ export default function App() {
           <>
             <section className="list">
               {scanMeta ? (
-                <div>Found {total} items. Showing {items.length} loaded items.</div>
-              ) : (<div>No scan yet</div>)}
+                (scanning) ? (
+                  <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                    <div>Found {total} items. Scanning: {scanLoaded}/{total} ({scanProgress}%)</div>
+                    <div style={{height:12, width:'100%', background:'#222', borderRadius:6, overflow:'hidden'}}>
+                      <div style={{height:'100%', width: `${scanProgress}%`, background:'linear-gradient(90deg,#4ade80,#06b6d4)', transition:'width 300ms ease'}} />
+                    </div>
+                  </div>
+                ) : (
+                  <div>Found {total} items. Showing {items.length} loaded items.</div>
+                )
+              ) : (
+                <div>No scan yet</div>
+              )}
 
-              <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
-                previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
-                selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
-                providerKey={providerKey} />
+              {/* only show the list after the full scan collection finished */}
+              {!scanning && scanMeta ? (
+                <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
+                  previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
+                  selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
+                  providerKey={providerKey} />
+              ) : null}
             </section>
             <aside className="side">
               <LogsPanel logs={logs} refresh={fetchLogs} pushToast={pushToast} />
