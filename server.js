@@ -841,7 +841,7 @@ app.post('/api/rename/preview', (req, res) => {
     const fromPath = canonicalize(it.canonicalPath);
     const meta = enrichCache[fromPath] || {};
   // prefer provider/enrichment values when present, fall back to parsed/title/basename
-  const title = (meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath));
+  const rawTitle = (meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath));
   const year = (meta && (meta.year || (meta.extraGuess && meta.extraGuess.year))) ? (meta.year || (meta.extraGuess && meta.extraGuess.year)) : extractYear(meta, fromPath);
     const ext = path.extname(fromPath);
   // support {year} token in template; choose effective template in order: request -> user setting -> server setting -> default
@@ -862,6 +862,8 @@ app.post('/api/rename/preview', (req, res) => {
     const episodeToken = (meta && meta.episode != null) ? String(meta.episode) : ''
     const episodeRangeToken = (meta && meta.episodeRange) ? String(meta.episodeRange) : ''
     const tvdbIdToken = (meta && meta.tvdb && meta.tvdb.raw && (meta.tvdb.raw.id || meta.tvdb.raw.seriesId)) ? String(meta.tvdb.raw.id || meta.tvdb.raw.seriesId) : ''
+
+  const title = cleanTitleForRender(rawTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '');
 
     // Render template with preferência to enrichment-provided tokens
     const nameWithoutExtRaw = baseNameTemplate
@@ -905,6 +907,26 @@ app.post('/api/rename/preview', (req, res) => {
 
 function sanitize(s) {
   return String(s).replace(/[\\/:*?"<>|]/g, '');
+}
+
+// Helper: clean series title to avoid duplicated episode label or episode title fragments
+function escapeRegExp(s) { return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function cleanTitleForRender(t, epLabel, epTitle) {
+  if (!t) return '';
+  let s = String(t).trim();
+  try {
+    if (epLabel) {
+      const lbl = String(epLabel).trim();
+      if (lbl) s = s.replace(new RegExp('\\b' + escapeRegExp(lbl) + '\\b', 'i'), '').trim();
+    }
+    s = s.replace(/^\s*S\d{1,2}[\s_\-:\.]*[EPp]?\d{1,3}(?:\.\d+)?[\s_\-:\.]*/i, '').trim();
+    if (epTitle) {
+      const et = String(epTitle).trim();
+      if (et) s = s.replace(new RegExp('[\-–—:\\s]*' + escapeRegExp(et) + '$', 'i'), '').trim();
+    }
+    s = s.replace(/^[\-–—:\s]+|[\-–—:\s]+$/g, '').trim();
+  } catch (e) { /* best-effort */ }
+  return s || String(t).trim();
 }
 
 function extractYear(meta, fromPath) {
@@ -968,7 +990,9 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const episodeToken2 = (enrichment && enrichment.episode != null) ? String(enrichment.episode) : ''
               const episodeRangeToken2 = (enrichment && enrichment.episodeRange) ? String(enrichment.episodeRange) : ''
               const tvdbIdToken2 = (enrichment && enrichment.tvdb && enrichment.tvdb.raw && (enrichment.tvdb.raw.id || enrichment.tvdb.raw.seriesId)) ? String(enrichment.tvdb.raw.id || enrichment.tvdb.raw.seriesId) : ''
-              const titleToken2 = (enrichment && (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title))) ? (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title)) : path.basename(from, ext2)
+              const rawTitle2 = (enrichment && (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title))) ? (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title)) : path.basename(from, ext2)
+              // reuse cleaning logic from preview to avoid duplicated episode labels/titles in rendered filenames
+              const titleToken2 = cleanTitleForRender(rawTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
               const yearToken2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : (extractYear(enrichment, from) || '')
               const nameWithoutExtRaw2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
                 .replace('{basename}', sanitize(path.basename(from, ext2)))
