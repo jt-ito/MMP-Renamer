@@ -943,8 +943,8 @@ app.post('/api/rename/preview', (req, res) => {
   const plans = items.map(it => {
     const fromPath = canonicalize(it.canonicalPath);
     const meta = enrichCache[fromPath] || {};
-  // prefer providerRenderedName -> enrichment title -> parsed/title/basename
-  const rawTitle = (meta && meta.providerRenderedName) ? meta.providerRenderedName : ((meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath)));
+  // prefer enrichment title (provider token) -> parsed/title/basename
+  const rawTitle = (meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath));
   const year = (meta && (meta.year || (meta.extraGuess && meta.extraGuess.year))) ? (meta.year || (meta.extraGuess && meta.extraGuess.year)) : extractYear(meta, fromPath);
     const ext = path.extname(fromPath);
   // support {year} token in template; choose effective template in order: request -> user setting -> server setting -> default
@@ -966,13 +966,9 @@ app.post('/api/rename/preview', (req, res) => {
     const episodeRangeToken = (meta && meta.episodeRange) ? String(meta.episodeRange) : ''
     const tvdbIdToken = (meta && meta.tvdb && meta.tvdb.raw && (meta.tvdb.raw.id || meta.tvdb.raw.seriesId)) ? String(meta.tvdb.raw.id || meta.tvdb.raw.seriesId) : ''
 
-    // If providerRenderedName exists, it is already a fully-rendered name according to template; use it as-is (clean it slightly)
-    let title;
-    if (meta && meta.providerRenderedName) {
-      title = String(meta.providerRenderedName).trim();
-    } else {
-      title = cleanTitleForRender(rawTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '');
-    }
+  // Build title token from provider/parsed tokens and clean it for render.
+  const episodeTitleTokenFromMeta = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '';
+  const title = cleanTitleForRender(rawTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
 
     // Render template with preferência to enrichment-provided tokens
     const nameWithoutExtRaw = baseNameTemplate
