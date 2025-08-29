@@ -100,6 +100,40 @@ let users = readJson(usersFile, {});
 let renderedIndex = readJson(renderedIndexFile, {});
 let parsedCache = readJson(parsedCacheFile, {});
 
+// Helper: normalize enrich cache entries to a clear shape { parsed: {...}, provider: {...}, ... }
+function makeParsedEntry(parsed) {
+  if (!parsed) return null;
+  return { title: parsed.title || '', parsedName: parsed.parsedName || '', season: parsed.season != null ? parsed.season : null, episode: parsed.episode != null ? parsed.episode : null, timestamp: parsed.timestamp || Date.now() };
+}
+
+function makeProviderEntry(data, renderedName) {
+  if (!data) return null;
+  return { title: data.title || '', year: data.year || null, season: data.season != null ? data.season : null, episode: data.episode != null ? data.episode : null, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: renderedName || null, matched: !!data.title };
+}
+
+function normalizeEnrichEntry(raw) {
+  raw = raw || {};
+  const out = {};
+  // retain applied/hidden flags at top-level
+  if (raw.applied) out.applied = raw.applied;
+  if (raw.hidden) out.hidden = raw.hidden;
+  if (raw.appliedAt) out.appliedAt = raw.appliedAt;
+  if (raw.appliedTo) out.appliedTo = raw.appliedTo;
+  if (raw.renderedName) out.renderedName = raw.renderedName;
+  if (raw.metadataFilename) out.metadataFilename = raw.metadataFilename;
+  // parsed block
+  if (raw.parsed) out.parsed = makeParsedEntry(raw.parsed);
+  else if (raw.title || raw.parsedName || raw.season != null || raw.episode != null) out.parsed = makeParsedEntry({ title: raw.title || '', parsedName: raw.parsedName || '', season: raw.season, episode: raw.episode, timestamp: raw.timestamp });
+  else out.parsed = null;
+  // provider block
+  if (raw.provider) out.provider = makeProviderEntry(raw.provider, raw.providerRenderedName || raw.provider && raw.provider.renderedName || raw.renderedName || null);
+  else if (raw.providerRenderedName || raw.episodeTitle || raw.year) out.provider = makeProviderEntry({ title: raw.title || (raw.parsed && raw.parsed.title) || '', year: raw.year || null, season: raw.season, episode: raw.episode, episodeTitle: raw.episodeTitle || '' }, raw.providerRenderedName || raw.renderedName || null);
+  else out.provider = null;
+  out.cachedAt = raw.cachedAt || Date.now();
+  out.sourceId = raw.sourceId || null;
+  return out;
+}
+
 async function ensureAdmin() {
   try {
     // If users already exist, nothing to do
@@ -685,8 +719,11 @@ app.post('/api/scan', async (req, res) => {
               .trim();
             // persist parsed-rendered name and lightweight parse tokens
             parsedCache[key] = Object.assign({}, parsedCache[key] || {}, { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() })
-            // store an initial enrichment entry derived from parsing only
-            enrichCache[key] = Object.assign({}, enrichCache[key] || {}, { sourceId: 'parsed-cache', title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, episodeTitle: '', language: 'en', timestamp: Date.now() });
+            // store a normalized enrichment entry derived from parsing only
+            try {
+              const parsedBlock = { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }
+              enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
+            } catch (e) { enrichCache[key] = normalizeEnrichEntry({ parsed: { title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }, sourceId: 'parsed-cache', cachedAt: Date.now() }); }
           }
         } catch (renderErr) {
           // fallback to previous behavior on any error
@@ -758,8 +795,13 @@ app.post('/api/scan', async (req, res) => {
               .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
               .replace(/\s{2,}/g, ' ')
               .trim();
-            // write into enrich cache: keep parsedName separate, but provide providerRenderedName which takes display priority
-            enrichCache[key] = Object.assign({}, enrichCache[key] || {}, data, { providerRenderedName: providerRendered, cachedAt: Date.now(), sourceId: 'provider' });
+            // write into enrich cache: add provider block and keep parsed block intact
+            try {
+              const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title }
+              enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+            } catch (e) {
+              enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, data, { providerRenderedName: providerRendered, sourceId: 'provider', cachedAt: Date.now() }));
+            }
             // persist caches
             try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
           } catch (e) {
@@ -776,7 +818,16 @@ app.post('/api/scan', async (req, res) => {
 app.get('/api/scan/:scanId', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
 app.get('/api/scan/:scanId/items', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); const offset = parseInt(req.query.offset || '0', 10); const limit = Math.min(parseInt(req.query.limit || '50', 10), 500); const slice = s.items.slice(offset, offset + limit); res.json({ items: slice, offset, limit, total: s.totalCount }); });
 
-app.get('/api/enrich', (req, res) => { const { path: p } = req.query; const key = canonicalize(p || ''); if (enrichCache[key]) return res.json({ cached: true, enrichment: enrichCache[key] }); return res.json({ cached: false }); });
+app.get('/api/enrich', (req, res) => {
+  const { path: p } = req.query;
+  const key = canonicalize(p || '');
+  try {
+    const raw = enrichCache[key] || null;
+    const normalized = normalizeEnrichEntry(raw);
+    if (normalized && (normalized.parsed || normalized.provider)) return res.json({ cached: true, parsed: normalized.parsed || null, provider: normalized.provider || null });
+    return res.json({ cached: false, parsed: null, provider: null });
+  } catch (e) { return res.status(500).json({ error: e.message }) }
+});
 
 // Lookup enrichment by rendered metadata filename (without extension)
 app.get('/api/enrich/by-rendered', (req, res) => {
@@ -847,13 +898,14 @@ app.post('/api/enrich', async (req, res) => {
     // If we have a parsedCache entry and not forcing a provider refresh, return a lightweight enrichment
     if (!force && parsedCache[key]) {
       const pc = parsedCache[key]
-      const epTitle = (enrichCache[key] && enrichCache[key].episodeTitle) ? enrichCache[key].episodeTitle : ''
-      // prefer providerRenderedName when present in enrichCache; otherwise expose parsedCache.parsedName as parsedName
-      const providerName = enrichCache[key] && enrichCache[key].providerRenderedName ? enrichCache[key].providerRenderedName : null;
-      const e = Object.assign({}, enrichCache[key] || {}, { sourceId: 'parsed-cache', title: pc.title, parsedName: pc.parsedName, renderedName: providerName || pc.parsedName, season: pc.season, episode: pc.episode, episodeTitle: epTitle, language: 'en', timestamp: Date.now() })
-      enrichCache[key] = e
-      writeJson(enrichStoreFile, enrichCache)
-      return res.json({ enrichment: e })
+      const epTitle = (enrichCache[key] && enrichCache[key].provider && enrichCache[key].provider.episodeTitle) ? enrichCache[key].provider.episodeTitle : ''
+      // build normalized entry
+      const parsedBlock = { title: pc.title, parsedName: pc.parsedName, season: pc.season, episode: pc.episode, timestamp: Date.now() }
+      const providerBlock = (enrichCache[key] && enrichCache[key].provider) ? enrichCache[key].provider : null
+      const normalized = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, provider: providerBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
+      enrichCache[key] = normalized
+      try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
+      return res.json({ parsed: normalized.parsed || null, provider: normalized.provider || null })
     }
 
     // otherwise perform authoritative external enrich (used by rescan/force)
