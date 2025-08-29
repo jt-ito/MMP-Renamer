@@ -650,13 +650,50 @@ app.post('/api/scan', async (req, res) => {
         if (!parsed) {
           try {
             parsed = parseFilename(base)
-            // store a lightweight parse result
+            // store a lightweight parse result; parsedName will be rendered below using the effective template
             parsedCache[key] = { title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }
           } catch (e) { parsed = null }
         }
-        const episodeTitle = userHasAuthoritativeProviderKey ? '' : ((parsed && parsed.episodeTitle) || '');
-        if (parsed) {
-          enrichCache[key] = Object.assign({}, enrichCache[key] || {}, { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeTitle: episodeTitle, language: 'en', timestamp: Date.now() });
+        // Render the parsed-name consistently using the effective rename template
+        try {
+          const userTemplate = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.rename_template) ? users[req.session.username].settings.rename_template : null;
+          const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
+          if (parsed) {
+            // build tokens for rendering parsed name; episodeTitle intentionally empty for parsed result
+            const parsedTitleRaw = parsed.title || '';
+            const parsedYear = parsed.year || '';
+            function pad(n){ return String(n).padStart(2,'0') }
+            let parsedEpLabel = '';
+            if (parsed.episodeRange) parsedEpLabel = parsed.season != null ? `S${pad(parsed.season)}E${parsed.episodeRange}` : `E${parsed.episodeRange}`
+            else if (parsed.episode != null) parsedEpLabel = parsed.season != null ? `S${pad(parsed.season)}E${pad(parsed.episode)}` : `E${pad(parsed.episode)}`
+            const titleToken = cleanTitleForRender(parsedTitleRaw, parsedEpLabel, '');
+            const nameWithoutExtRaw = String(baseNameTemplate)
+              .replace('{title}', sanitize(titleToken))
+              .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
+              .replace('{year}', parsedYear || '')
+              .replace('{epLabel}', sanitize(parsedEpLabel))
+              .replace('{episodeTitle}', '')
+              .replace('{season}', parsed.season != null ? String(parsed.season) : '')
+              .replace('{episode}', parsed.episode != null ? String(parsed.episode) : '')
+              .replace('{episodeRange}', parsed.episodeRange || '')
+              .replace('{tvdbId}', '')
+            const parsedRendered = String(nameWithoutExtRaw)
+              .replace(/\s*\(\s*\)\s*/g, '')
+              .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
+              .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
+              .replace(/\s{2,}/g, ' ')
+              .trim();
+            // persist parsed-rendered name and lightweight parse tokens
+            parsedCache[key] = Object.assign({}, parsedCache[key] || {}, { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() })
+            // store an initial enrichment entry derived from parsing only
+            enrichCache[key] = Object.assign({}, enrichCache[key] || {}, { sourceId: 'parsed-cache', title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, episodeTitle: '', language: 'en', timestamp: Date.now() });
+          }
+        } catch (renderErr) {
+          // fallback to previous behavior on any error
+          const episodeTitle = userHasAuthoritativeProviderKey ? '' : ((parsed && parsed.episodeTitle) || '');
+          if (parsed) {
+            enrichCache[key] = Object.assign({}, enrichCache[key] || {}, { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeTitle: episodeTitle, language: 'en', timestamp: Date.now() });
+          }
         }
       } catch (e) { appendLog(`PARSE_ITEM_FAIL path=${it.canonicalPath} err=${e.message}`); }
     }
@@ -670,6 +707,70 @@ app.post('/api/scan', async (req, res) => {
   writeJson(scanStoreFile, scans);
   appendLog(`SCAN_COMPLETE id=${scanId} total=${items.length}`);
   res.json({ scanId, totalCount: items.length });
+
+  // Kick off a background enrichment pass for the first N items (non-blocking).
+  // This will call the external provider for up to the first 12 items and cache provider-rendered names
+  (async function backgroundFirstNEnrich() {
+    try {
+      const N = 12;
+      const first = artifact.items.slice(0, N);
+      // pick tvdb/tmdb key similar to other endpoints (prefer session user's key, then server)
+      let tvdbKey = null;
+      try {
+        const username = req.session && req.session.username;
+        if (username && users[username] && users[username].settings && (users[username].settings.tmdb_api_key || users[username].settings.tvdb_api_key)) tvdbKey = users[username].settings.tmdb_api_key || users[username].settings.tvdb_api_key;
+        else if (serverSettings && (serverSettings.tmdb_api_key || serverSettings.tvdb_api_key)) tvdbKey = serverSettings.tmdb_api_key || serverSettings.tvdb_api_key;
+      } catch (e) { tvdbKey = null }
+
+      for (const it of first) {
+        try {
+          const key = canonicalize(it.canonicalPath);
+          // skip if we already have authoritative provider data cached
+          const existing = enrichCache[key] || null;
+          if (existing && existing.provider && existing.provider.matched) continue;
+          const data = await externalEnrich(key, tvdbKey, { username: req.session && req.session.username });
+          if (!data) continue;
+          // compute provider-rendered name using effective template
+          try {
+            const userTemplate = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.rename_template) ? users[req.session.username].settings.rename_template : null;
+            const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
+            // build tokens from provider data
+            const rawTitle = data.title || '';
+            const yearToken = data.year || extractYear(data, key) || '';
+            function pad(n){ return String(n).padStart(2,'0') }
+            let epLabel = '';
+            if (data.episodeRange) epLabel = data.season != null ? `S${pad(data.season)}E${data.episodeRange}` : `E${data.episodeRange}`
+            else if (data.episode != null) epLabel = data.season != null ? `S${pad(data.season)}E${pad(data.episode)}` : `E${pad(data.episode)}`
+            const titleToken = cleanTitleForRender(rawTitle, epLabel, data.episodeTitle || '');
+            const nameWithoutExtRaw = String(baseNameTemplate)
+              .replace('{title}', sanitize(titleToken))
+              .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
+              .replace('{year}', yearToken || '')
+              .replace('{epLabel}', sanitize(epLabel))
+              .replace('{episodeTitle}', sanitize(data.episodeTitle || ''))
+              .replace('{season}', data.season != null ? String(data.season) : '')
+              .replace('{episode}', data.episode != null ? String(data.episode) : '')
+              .replace('{episodeRange}', data.episodeRange || '')
+              .replace('{tvdbId}', (data.tvdb && data.tvdb.raw && (data.tvdb.raw.id || data.tvdb.raw.seriesId)) ? String(data.tvdb.raw.id || data.tvdb.raw.seriesId) : '')
+            const providerRendered = String(nameWithoutExtRaw)
+              .replace(/\s*\(\s*\)\s*/g, '')
+              .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
+              .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
+              .replace(/\s{2,}/g, ' ')
+              .trim();
+            // write into enrich cache: keep parsedName separate, but provide providerRenderedName which takes display priority
+            enrichCache[key] = Object.assign({}, enrichCache[key] || {}, data, { providerRenderedName: providerRendered, cachedAt: Date.now(), sourceId: 'provider' });
+            // persist caches
+            try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
+          } catch (e) {
+            // if provider render fails, still persist raw provider data
+            enrichCache[key] = Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' });
+            try { writeJson(enrichStoreFile, enrichCache) } catch (ee) {}
+          }
+        } catch (e) { appendLog(`BACKGROUND_ENRICH_FAIL path=${it.canonicalPath} err=${e.message}`); }
+      }
+    } catch (e) { appendLog(`BACKGROUND_FIRSTN_ENRICH_FAIL scan=${scanId} err=${e.message}`); }
+  })();
 });
 
 app.get('/api/scan/:scanId', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
@@ -747,7 +848,9 @@ app.post('/api/enrich', async (req, res) => {
     if (!force && parsedCache[key]) {
       const pc = parsedCache[key]
       const epTitle = (enrichCache[key] && enrichCache[key].episodeTitle) ? enrichCache[key].episodeTitle : ''
-      const e = Object.assign({}, enrichCache[key] || {}, { sourceId: 'parsed-cache', title: pc.title, parsedName: pc.parsedName, season: pc.season, episode: pc.episode, episodeTitle: epTitle, language: 'en', timestamp: Date.now() })
+      // prefer providerRenderedName when present in enrichCache; otherwise expose parsedCache.parsedName as parsedName
+      const providerName = enrichCache[key] && enrichCache[key].providerRenderedName ? enrichCache[key].providerRenderedName : null;
+      const e = Object.assign({}, enrichCache[key] || {}, { sourceId: 'parsed-cache', title: pc.title, parsedName: pc.parsedName, renderedName: providerName || pc.parsedName, season: pc.season, episode: pc.episode, episodeTitle: epTitle, language: 'en', timestamp: Date.now() })
       enrichCache[key] = e
       writeJson(enrichStoreFile, enrichCache)
       return res.json({ enrichment: e })
@@ -840,8 +943,8 @@ app.post('/api/rename/preview', (req, res) => {
   const plans = items.map(it => {
     const fromPath = canonicalize(it.canonicalPath);
     const meta = enrichCache[fromPath] || {};
-  // prefer provider/enrichment values when present, fall back to parsed/title/basename
-  const rawTitle = (meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath));
+  // prefer providerRenderedName -> enrichment title -> parsed/title/basename
+  const rawTitle = (meta && meta.providerRenderedName) ? meta.providerRenderedName : ((meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath)));
   const year = (meta && (meta.year || (meta.extraGuess && meta.extraGuess.year))) ? (meta.year || (meta.extraGuess && meta.extraGuess.year)) : extractYear(meta, fromPath);
     const ext = path.extname(fromPath);
   // support {year} token in template; choose effective template in order: request -> user setting -> server setting -> default
@@ -863,7 +966,13 @@ app.post('/api/rename/preview', (req, res) => {
     const episodeRangeToken = (meta && meta.episodeRange) ? String(meta.episodeRange) : ''
     const tvdbIdToken = (meta && meta.tvdb && meta.tvdb.raw && (meta.tvdb.raw.id || meta.tvdb.raw.seriesId)) ? String(meta.tvdb.raw.id || meta.tvdb.raw.seriesId) : ''
 
-  const title = cleanTitleForRender(rawTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '');
+    // If providerRenderedName exists, it is already a fully-rendered name according to template; use it as-is (clean it slightly)
+    let title;
+    if (meta && meta.providerRenderedName) {
+      title = String(meta.providerRenderedName).trim();
+    } else {
+      title = cleanTitleForRender(rawTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '');
+    }
 
     // Render template with preferência to enrichment-provided tokens
     const nameWithoutExtRaw = baseNameTemplate
