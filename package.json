@@ -7,6 +7,7 @@
     "dev": "concurrently \"node server.js\" \"cd web && npm run dev\"",
     "web:install": "cd web && npm install",
     "install:all": "npm install && cd web && npm install"
+  ,"test:unit": "node ./scripts/tests/enrich-path.test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

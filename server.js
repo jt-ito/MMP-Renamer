@@ -327,16 +327,33 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // If parsed title looks like an episode (e.g., filename only contains SxxEyy - Title), prefer a parent-folder as series title
   if (isEpisodeLike(seriesName) || isNoiseLike(seriesName)) {
     try {
-      const parent = path.dirname(canonicalPath)
-      const parts = parent.split(path.sep).filter(Boolean)
+  const parent = path.dirname(canonicalPath)
+  // normalize separators to '/' so splitting works for both Windows and POSIX-style input
+  const parts = String(parent).replace(/\\/g,'/').split('/').filter(Boolean)
+      const SKIP_FOLDER_TOKENS = new Set(['input','library','scan','local','media','video']);
       for (let i = parts.length - 1; i >= 0; i--) {
         try {
           const seg = parts[i]
           if (!seg) continue
           const pParsed = parseFilename(seg)
-          const cand = pParsed && pParsed.title ? String(pParsed.title).trim() : ''
+          let cand = pParsed && pParsed.title ? String(pParsed.title).trim() : ''
           if (!cand) continue
-          if (isEpisodeLike(cand) || isNoiseLike(cand)) continue
+          // If the candidate begins with a common folder keyword (e.g. 'input 86'), strip it
+          try {
+            const toks = cand.split(/\s+/).filter(Boolean)
+            if (toks.length > 1 && SKIP_FOLDER_TOKENS.has(String(toks[0]).toLowerCase())) {
+              cand = toks.slice(1).join(' ')
+            }
+              // if after stripping it's still a skip token, ignore
+              if (SKIP_FOLDER_TOKENS.has(String(cand).toLowerCase())) continue
+            } catch (e) { /* ignore token cleanup errors */ }
+            // If candidate is numeric-only but the original folder segment contains an explicit season marker
+            // (e.g., 'S01' or '1x02'), accept the numeric series name. Otherwise skip episode-like or noisy candidates.
+            const rawSeg = String(seg || '')
+            const hasSeasonMarker = /\bS\d{1,2}([EPp]\d{1,3})?\b|\b\d{1,2}x\d{1,3}\b/i.test(rawSeg)
+            if (!(/^[0-9]+$/.test(String(cand).trim()) && hasSeasonMarker)) {
+              if (isEpisodeLike(cand) || isNoiseLike(cand)) continue
+            }
           // prefer parent folder candidate
           seriesName = cand
           break
@@ -712,8 +729,9 @@ app.post('/api/rename/preview', (req, res) => {
   const plans = items.map(it => {
     const fromPath = canonicalize(it.canonicalPath);
     const meta = enrichCache[fromPath] || {};
-    const title = meta.title || path.basename(fromPath, path.extname(fromPath));
-    const year = extractYear(meta, fromPath);
+  // prefer provider/enrichment values when present, fall back to parsed/title/basename
+  const title = (meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath));
+  const year = (meta && (meta.year || (meta.extraGuess && meta.extraGuess.year))) ? (meta.year || (meta.extraGuess && meta.extraGuess.year)) : extractYear(meta, fromPath);
     const ext = path.extname(fromPath);
   // support {year} token in template; choose effective template in order: request -> user setting -> server setting -> default
   const userTemplate = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.rename_template) ? users[req.session.username].settings.rename_template : null;
@@ -726,7 +744,7 @@ app.post('/api/rename/preview', (req, res) => {
     } else if (meta && meta.episode != null) {
       epLabel = meta.season != null ? `S${pad(meta.season)}E${pad(meta.episode)}` : `E${pad(meta.episode)}`
     }
-    const episodeTitleToken = meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : ''
+  const episodeTitleToken = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : ''
 
     // Support extra template tokens: {season}, {episode}, {episodeRange}, {tvdbId}
     const seasonToken = (meta && meta.season != null) ? String(meta.season) : ''
@@ -734,7 +752,8 @@ app.post('/api/rename/preview', (req, res) => {
     const episodeRangeToken = (meta && meta.episodeRange) ? String(meta.episodeRange) : ''
     const tvdbIdToken = (meta && meta.tvdb && meta.tvdb.raw && (meta.tvdb.raw.id || meta.tvdb.raw.seriesId)) ? String(meta.tvdb.raw.id || meta.tvdb.raw.seriesId) : ''
 
-    const nameWithoutExt = baseNameTemplate
+    // Render template with preferência to enrichment-provided tokens
+    const nameWithoutExtRaw = baseNameTemplate
       .replace('{title}', sanitize(title))
       .replace('{basename}', sanitize(path.basename(fromPath, ext)))
       .replace('{year}', year || '')
@@ -744,6 +763,13 @@ app.post('/api/rename/preview', (req, res) => {
       .replace('{episode}', sanitize(episodeToken))
       .replace('{episodeRange}', sanitize(episodeRangeToken))
       .replace('{tvdbId}', sanitize(tvdbIdToken));
+    // Clean up common artifact patterns from empty tokens: stray parentheses, repeated separators
+    const nameWithoutExt = String(nameWithoutExtRaw)
+      .replace(/\s*\(\s*\)\s*/g, '') // remove empty ()
+      .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ') // collapse repeated dashes
+      .replace(/(^\s*-\s*)|(\s*-\s*$)/g, '') // trim leading/trailing dashes
+      .replace(/\s{2,}/g, ' ') // collapse multiple spaces
+      .trim();
     const fileName = (nameWithoutExt + ext).trim();
     // If an output path is configured, plan a hardlink under that path preserving a Jellyfin-friendly layout
     let toPath;
@@ -831,9 +857,9 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const episodeToken2 = (enrichment && enrichment.episode != null) ? String(enrichment.episode) : ''
               const episodeRangeToken2 = (enrichment && enrichment.episodeRange) ? String(enrichment.episodeRange) : ''
               const tvdbIdToken2 = (enrichment && enrichment.tvdb && enrichment.tvdb.raw && (enrichment.tvdb.raw.id || enrichment.tvdb.raw.seriesId)) ? String(enrichment.tvdb.raw.id || enrichment.tvdb.raw.seriesId) : ''
-              const titleToken2 = enrichment && (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title)) ? (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title)) : path.basename(from, ext2)
-              const yearToken2 = extractYear(enrichment, from) || ''
-              const nameWithoutExt2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
+              const titleToken2 = (enrichment && (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title))) ? (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title)) : path.basename(from, ext2)
+              const yearToken2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : (extractYear(enrichment, from) || '')
+              const nameWithoutExtRaw2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
                 .replace('{basename}', sanitize(path.basename(from, ext2)))
                 .replace('{year}', yearToken2)
                 .replace('{epLabel}', sanitize(epLabel2))
@@ -842,6 +868,12 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 .replace('{episode}', sanitize(episodeToken2))
                 .replace('{episodeRange}', sanitize(episodeRangeToken2))
                 .replace('{tvdbId}', sanitize(tvdbIdToken2))
+              const nameWithoutExt2 = String(nameWithoutExtRaw2)
+                .replace(/\s*\(\s*\)\s*/g, '')
+                .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
+                .replace(/(^\s*-\s*)|(\s*-\s*$)/g, '')
+                .replace(/\s{2,}/g, ' ')
+                .trim();
               const finalFileName2 = (nameWithoutExt2 + ext2).trim();
               // use toResolved's directory but replace basename with rendered name
               const dir = path.dirname(toResolved);
