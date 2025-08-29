@@ -255,17 +255,86 @@ function metaLookup(title, apiKey, opts = {}) {
         try {
           const id = hit.id
           const mediaType = hit.media_type || (hit.name ? 'tv' : 'movie')
+          // If caller provided season & episode, prefer episode-level lookup with fallbacks for specials/decimals
           if (mediaType === 'tv' && opts && opts.season != null && opts.episode != null) {
             const epPath = `/3/tv/${id}/season/${encodeURIComponent(opts.season)}/episode/${encodeURIComponent(opts.episode)}?api_key=${encodeURIComponent(apiKey)}`
             const er = https.request({ hostname: baseHost, path: epPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (res) => {
               let eb = ''
               res.on('data', d => eb += d)
-              res.on('end', () => {
-                try {
-                  const ej = JSON.parse(eb || '{}')
-                  if (ej && (ej.name || ej.episode_number != null)) return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: hit, episode: ej })
-                } catch (e) { /* ignore */ }
-                return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit })
+              res.on('end', async () => {
+                let ej = null
+                try { ej = JSON.parse(eb || '{}') } catch (e) { ej = null }
+                // If episode lookup returned a useful name/number, return it
+                if (ej && ej.name) return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: hit, episode: ej })
+
+                // Only attempt season-0 (specials) lookup for true special candidates:
+                // - explicitly season 0, or
+                // - fractional/decimal episode numbers (e.g., 11.5)
+                const epStr = String(opts.episode || '')
+                const isSpecialCandidate = (Number(opts.season) === 0) || (epStr.indexOf('.') !== -1)
+                if (!isSpecialCandidate) {
+                  // Not a special candidate; return series-level hit without extra season0 work
+                  return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit })
+                }
+
+                // Fallback 1: try season 0 (specials) list and attempt to find a matching special
+                const season0Path = `/3/tv/${id}/season/0?api_key=${encodeURIComponent(apiKey)}`
+                const s0req = https.request({ hostname: baseHost, path: season0Path, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (sres) => {
+                  let sb = ''
+                  sres.on('data', d => sb += d)
+                  sres.on('end', () => {
+                    let s0 = null
+                    try { s0 = JSON.parse(sb || '{}') } catch (e) { s0 = null }
+                    const specials = s0 && s0.episodes ? s0.episodes : null
+                    if (specials && Array.isArray(specials) && specials.length > 0) {
+                      try {
+                        const reqEpStr = String(opts.episode || '')
+                        const reqNum = Number(reqEpStr)
+                        const floorNum = isNaN(reqNum) ? null : Math.floor(reqNum)
+                        // Try to match by exact episode_number (including integer fallback)
+                        let match = null
+                        if (!isNaN(reqNum)) {
+                          match = specials.find(e => Number(e.episode_number) === reqNum) || specials.find(e => Number(e.episode_number) === floorNum)
+                        }
+                        // Try matching by air_date if episode endpoint returned an air_date
+                        if (!match && ej && ej.air_date) match = specials.find(e => e.air_date === ej.air_date)
+                        if (match) return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }), episode: match })
+                      } catch (e) { /* ignore matching errors */ }
+                    }
+
+                    // Fallback 2: if the requested episode had a decimal (e.g., 11.5), try integer episode lookup (floor)
+                    try {
+                      const reqEpStr2 = String(opts.episode || '')
+                      const reqNum2 = Number(reqEpStr2)
+                      if (!isNaN(reqNum2) && String(reqEpStr2).indexOf('.') !== -1) {
+                        const intEp = Math.floor(reqNum2)
+                        const intPath = `/3/tv/${id}/season/${encodeURIComponent(opts.season)}/episode/${encodeURIComponent(intEp)}?api_key=${encodeURIComponent(apiKey)}`
+                        const ir = https.request({ hostname: baseHost, path: intPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (ires) => {
+                          let ib = ''
+                          ires.on('data', d => ib += d)
+                          ires.on('end', () => {
+                            try {
+                              const ij = JSON.parse(ib || '{}')
+                              if (ij && ij.name) return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: hit, episode: ij })
+                            } catch (e) {}
+                            // fall through to generic series-level response
+                            return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) })
+                          })
+                        })
+                        ir.on('error', () => cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) }))
+                        ir.on('timeout', () => { ir.destroy(); cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) }) })
+                        ir.end()
+                        return
+                      }
+                    } catch (e) { /* ignore */ }
+
+                    // Nothing matched: return series-level hit but include specials list for downstream heuristics
+                    return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) })
+                  })
+                })
+                s0req.on('error', () => cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }))
+                s0req.on('timeout', () => { s0req.destroy(); cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }) })
+                s0req.end()
               })
             })
             er.on('error', () => cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }))
