@@ -63,6 +63,8 @@ export default function App() {
   const [scanning, setScanning] = useState(false)
   const [scanLoaded, setScanLoaded] = useState(0)
   const [scanProgress, setScanProgress] = useState(0)
+  const [metaPhase, setMetaPhase] = useState(false)
+  const [metaProgress, setMetaProgress] = useState(0)
   const [theme, setTheme] = useLocalState('theme', 'dark')
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState({})
@@ -133,10 +135,12 @@ export default function App() {
     setScanMeta(meta.data)
     setTotal(meta.data.totalCount)
 
-    // Collect all pages before revealing any items to the UI
+  // Collect all pages before revealing any items to the UI
     setScanning(true)
-    setScanLoaded(0)
-    setScanProgress(0)
+  setScanLoaded(0)
+  setScanProgress(0)
+  setMetaPhase(false)
+  setMetaProgress(0)
     const collected = []
     let offset = 0
     while (offset < meta.data.totalCount) {
@@ -157,9 +161,40 @@ export default function App() {
     // After collecting all items, run the same server-side refresh the rescan uses so parsing is consistent
     try {
       pushToast && pushToast('Scan', 'Refreshing metadata (server-side) — this may take a while')
+      // enter metadata phase and reset metadata progress
+      setMetaPhase(true)
+      setMetaProgress(0)
       await refreshScan(r.data.scanId)
-      // Ensure client-side cache is populated for all paths
-      await refreshEnrichForPaths(collected.map(it => it.canonicalPath))
+      // Now refresh client-side enrich for all collected paths and report progress
+      const paths = collected.map(it => it.canonicalPath).filter(Boolean)
+      if (paths.length > 0) {
+        let done = 0
+        const batch = 6
+        for (let i = 0; i < paths.length; i += batch) {
+          const chunk = paths.slice(i, i + batch)
+          await Promise.all(chunk.map(async p => {
+            try {
+              const er = await axios.get(API('/enrich'), { params: { path: p } })
+              if (er.data && er.data.cached) {
+                const enriched = er.data.enrichment
+                setEnrichCache(prev => ({ ...prev, [p]: enriched }))
+                if (enriched && enriched.hidden) {
+                  setItems(prev => prev.filter(it => it.canonicalPath !== p))
+                } else {
+                  setItems(prev => {
+                    try {
+                      if (prev.find(x => x.canonicalPath === p)) return prev
+                      return [{ id: p, canonicalPath: p }, ...prev]
+                    } catch (e) { return prev }
+                  })
+                }
+              }
+            } catch (e) {}
+            done++
+            setMetaProgress(Math.round((done / paths.length) * 100))
+          }))
+        }
+      }
       pushToast && pushToast('Scan', 'Provider metadata refresh complete')
     } catch (e) {
       pushToast && pushToast('Scan', 'Provider refresh failed')
@@ -171,6 +206,7 @@ export default function App() {
       return !(e && (e.hidden === true || e.applied === true))
     })
     setItems(filtered)
+    setMetaPhase(false)
     setScanning(false)
     setScanProgress(100)
 
@@ -408,10 +444,14 @@ export default function App() {
               {scanMeta ? (
                 (scanning) ? (
                   <div style={{display:'flex',flexDirection:'column',gap:8}}>
-                    <div>Found {total} items. Scanning: {scanLoaded}/{total} ({scanProgress}%)</div>
-                    <div style={{height:12, width:'100%', background:'#222', borderRadius:6, overflow:'hidden'}}>
-                      <div style={{height:'100%', width: `${scanProgress}%`, background:'linear-gradient(90deg,#4ade80,#06b6d4)', transition:'width 300ms ease'}} />
+                    <div>Found {total} items. Scanning: {scanLoaded}/{total} ({metaPhase ? metaProgress : scanProgress}%)</div>
+                    <div style={{height:12, width:'100%'}}>
+                      <div className="progress-bar">
+                        <div className="fill" style={{ width: (metaPhase ? metaProgress : scanProgress) + '%' }} />
+                        <div className="shimmer" />
+                      </div>
                     </div>
+                    {metaPhase ? <div style={{fontSize:13, color:'var(--muted)'}}>Scan complete — moving onto metadata refresh</div> : null}
                   </div>
                 ) : (
                   <div>Found {total} items. Showing {items.length} loaded items.</div>
