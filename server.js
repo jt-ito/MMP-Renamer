@@ -299,6 +299,51 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // split series and episode title heuristically
   let seriesName = parsed.title || parsed.parsedName || base
   let episodeTitle = parsed.episodeTitle || ''
+
+  // helper: detect if a candidate looks like an episode token rather than a series title
+  function isEpisodeLike(s) {
+    if (!s) return false
+    const ss = String(s)
+    // common patterns: S01, S01E01, 1x02, E01, solitary numeric tokens when near season markers
+    if (/\bS\d{1,2}([EPp]\d{1,3})?\b/i.test(ss)) return true
+    if (/\b\d{1,2}x\d{1,3}\b/i.test(ss)) return true
+    if (/\bE\.?\d{1,3}\b/i.test(ss)) return true
+    // if the string contains words like 'episode' or is mostly numeric
+    if (/episode/i.test(ss)) return true
+    if (/^\d{1,3}$/.test(ss)) return true
+    return false
+  }
+
+  // helper: detect resolution/year/noise tokens in a candidate title
+  function isNoiseLike(s) {
+    if (!s) return false
+    const t = String(s).toLowerCase()
+    const noise = ['1080p','720p','2160p','4k','x264','x265','bluray','bdrip','webrip','web-dl','hdtv','dvdr','bdr','10bit','8bit','bit','bits']
+    if (/(19|20)\d{2}/.test(t)) return true
+    for (const n of noise) if (t.indexOf(n) !== -1) return true
+    return false
+  }
+
+  // If parsed title looks like an episode (e.g., filename only contains SxxEyy - Title), prefer a parent-folder as series title
+  if (isEpisodeLike(seriesName) || isNoiseLike(seriesName)) {
+    try {
+      const parent = path.dirname(canonicalPath)
+      const parts = parent.split(path.sep).filter(Boolean)
+      for (let i = parts.length - 1; i >= 0; i--) {
+        try {
+          const seg = parts[i]
+          if (!seg) continue
+          const pParsed = parseFilename(seg)
+          const cand = pParsed && pParsed.title ? String(pParsed.title).trim() : ''
+          if (!cand) continue
+          if (isEpisodeLike(cand) || isNoiseLike(cand)) continue
+          // prefer parent folder candidate
+          seriesName = cand
+          break
+        } catch (e) { /* ignore and continue up the path */ }
+      }
+    } catch (e) { /* ignore */ }
+  }
   if (normEpisode != null) {
     const eps = String(normEpisode)
     const epsRe = new RegExp('\\b0*' + eps + '\\b')
