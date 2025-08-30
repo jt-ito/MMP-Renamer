@@ -7,6 +7,19 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Defensive guard: some bundled/runtime code expects a global `args.site.enabledFeatures`.
+      // Ensure the object exists before any modules run to avoid "args.site.enabledFeatures is undefined" errors.
+      try {
+        if (typeof window !== 'undefined') {
+          window.args = window.args || {};
+          window.args.site = window.args.site || {};
+          if (typeof window.args.site.enabledFeatures === 'undefined') window.args.site.enabledFeatures = {};
+        }
+      } catch (e) {
+        // swallow — defensive only
+      }
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

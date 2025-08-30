@@ -1422,20 +1422,38 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
 // Unapprove last N applied renames: mark applied->false and unhide
 app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {
   try {
-    const count = parseInt((req.body && req.body.count) || '10', 10) || 10
-    // collect applied entries sorted by appliedAt desc
-    const applied = Object.keys(enrichCache).map(k => ({ k, v: enrichCache[k] })).filter(x => x.v && x.v.applied).sort((a,b) => (b.v.appliedAt || 0) - (a.v.appliedAt || 0))
-    const toUn = applied.slice(0, count)
+    const requestedPaths = (req.body && Array.isArray(req.body.paths)) ? req.body.paths : null
+    const count = (!requestedPaths) ? (parseInt((req.body && req.body.count) || '10', 10) || 10) : null
     const changed = []
-    for (const item of toUn) {
-      try {
-        enrichCache[item.k].applied = false
-        enrichCache[item.k].hidden = false
-        delete enrichCache[item.k].appliedAt
-        delete enrichCache[item.k].appliedTo
-        changed.push(item.k)
-      } catch (e) {}
+
+    if (requestedPaths && requestedPaths.length > 0) {
+      // Unapprove exactly the provided canonical paths
+      for (const p of requestedPaths) {
+        try {
+          if (enrichCache[p] && enrichCache[p].applied) {
+            enrichCache[p].applied = false
+            enrichCache[p].hidden = false
+            delete enrichCache[p].appliedAt
+            delete enrichCache[p].appliedTo
+            changed.push(p)
+          }
+        } catch (e) {}
+      }
+    } else {
+      // collect applied entries sorted by appliedAt desc and unapprove last N (existing behavior)
+      const applied = Object.keys(enrichCache).map(k => ({ k, v: enrichCache[k] })).filter(x => x.v && x.v.applied).sort((a,b) => (b.v.appliedAt || 0) - (a.v.appliedAt || 0))
+      const toUn = applied.slice(0, count)
+      for (const item of toUn) {
+        try {
+          enrichCache[item.k].applied = false
+          enrichCache[item.k].hidden = false
+          delete enrichCache[item.k].appliedAt
+          delete enrichCache[item.k].appliedTo
+          changed.push(item.k)
+        } catch (e) {}
+      }
     }
+
     writeJson(enrichStoreFile, enrichCache)
     appendLog(`UNAPPROVE count=${changed.length}`)
     res.json({ ok: true, unapproved: changed })
