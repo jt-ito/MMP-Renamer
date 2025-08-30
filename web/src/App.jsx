@@ -47,6 +47,24 @@ function useLocalState(key, initial) {
   return [s, setS]
 }
 
+// Helper: normalize server enrich responses to { parsed, provider, hidden, applied }
+function normalizeEnrichResponse(data) {
+  if (!data) return null
+  // Direct GET /api/enrich returns { cached, parsed, provider }
+  if (data.parsed || data.provider) {
+    return { parsed: data.parsed || null, provider: data.provider || null, hidden: data.hidden || false, applied: data.applied || false }
+  }
+  // POST /api/enrich historically returned { enrichment: {...} } or direct enrichment object
+  const e = data.enrichment || data
+  if (!e) return null
+  // If already normalized
+  if (e.parsed || e.provider) return { parsed: e.parsed || null, provider: e.provider || null, hidden: e.hidden || false, applied: e.applied || false }
+  // Otherwise build parsed/provider blocks from legacy enrichment shape
+  const parsed = (e.parsed) ? e.parsed : (e.parsedName || e.title ? { title: e.title || '', parsedName: e.parsedName || '', season: e.season, episode: e.episode, timestamp: e.timestamp } : null)
+  const provider = (e.provider) ? e.provider : ((e.episodeTitle || e.year || e.providerRenderedName || e.tvdb) ? { title: e.title || parsed && parsed.title || '', year: e.year || null, season: e.season, episode: e.episode, episodeTitle: e.episodeTitle || '', raw: e.provider || e.tvdb || null, renderedName: e.providerRenderedName || e.renderedName || null, matched: !!(e.title || e.episodeTitle) } : null)
+  return { parsed: parsed || null, provider: provider || null, hidden: e.hidden || false, applied: e.applied || false }
+}
+
 function Spinner(){
   return (
     <svg className="icon spinner" viewBox="0 0 50 50" width="18" height="18"><circle cx="25" cy="25" r="20" stroke="currentColor" strokeWidth="4" strokeOpacity="0.18" fill="none"/><path d="M45 25a20 20 0 0 1-20 20" stroke="currentColor" strokeWidth="4" strokeLinecap="round" fill="none"><animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25" dur="1s" repeatCount="indefinite"/></path></svg>
@@ -82,23 +100,7 @@ export default function App() {
   const scanOptionsRef = React.useRef({})
   const batchSize = 12
 
-  // Helper: normalize server enrich responses to { parsed, provider, hidden, applied }
-  function normalizeEnrichResponse(data) {
-    if (!data) return null
-    // Direct GET /api/enrich returns { cached, parsed, provider }
-    if (data.parsed || data.provider) {
-      return { parsed: data.parsed || null, provider: data.provider || null, hidden: data.hidden || false, applied: data.applied || false }
-    }
-    // POST /api/enrich historically returned { enrichment: {...} } or direct enrichment object
-    const e = data.enrichment || data
-    if (!e) return null
-    // If already normalized
-    if (e.parsed || e.provider) return { parsed: e.parsed || null, provider: e.provider || null, hidden: e.hidden || false, applied: e.applied || false }
-    // Otherwise build parsed/provider blocks from legacy enrichment shape
-    const parsed = (e.parsed) ? e.parsed : (e.parsedName || e.title ? { title: e.title || '', parsedName: e.parsedName || '', season: e.season, episode: e.episode, timestamp: e.timestamp } : null)
-    const provider = (e.provider) ? e.provider : ((e.episodeTitle || e.year || e.providerRenderedName || e.tvdb) ? { title: e.title || parsed && parsed.title || '', year: e.year || null, season: e.season, episode: e.episode, episodeTitle: e.episodeTitle || '', raw: e.provider || e.tvdb || null, renderedName: e.providerRenderedName || e.renderedName || null, matched: !!(e.title || e.episodeTitle) } : null)
-    return { parsed: parsed || null, provider: provider || null, hidden: e.hidden || false, applied: e.applied || false }
-  }
+  
 
   function pushToast(title, message){
     const id = Math.random().toString(36).slice(2,9)
