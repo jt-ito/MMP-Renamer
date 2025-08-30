@@ -1323,9 +1323,11 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 // If hardlinking fails (different device or unsupported), fallback to copying the file so original is preserved
                 try {
                   fs.copyFileSync(from, effectiveToResolved);
-                  resultsItem.status = 'copied_after_hardlink_fail';
+                  // Treat copy fallback as success (file preserved at destination).
+                  resultsItem.status = 'copied';
                   resultsItem.to = effectiveToResolved;
-                  appendLog(`HARDLINK_FAIL_FALLBACK_COPY from=${from} to=${effectiveToResolved} err=${linkErr.message}`);
+                  // Log original link error and that copy fallback succeeded so it's clear in logs
+                  appendLog(`HARDLINK_FALLBACK_COPY_OK from=${from} to=${effectiveToResolved} linkErr=${linkErr.message}`);
                 } catch (copyErr) {
                   // both hardlink and copy failed
                   appendLog(`HARDLINK_AND_COPY_FAIL from=${from} to=${effectiveToResolved} linkErr=${linkErr.message} copyErr=${copyErr.message}`);
