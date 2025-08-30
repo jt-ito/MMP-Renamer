@@ -1257,16 +1257,20 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                   // Season folder name (Season NN)
                   const seasonNum = prov.season != null ? String(prov.season) : '1';
                   const seasonFolder = `Season ${String(seasonNum).padStart(2,'0')}`;
-                  // Base name from provider.renderedName (remove any extension)
-                  const providerBase = String(prov.renderedName || prov.title || prov.name || '').trim().replace(/\.[^/.]+$/, '');
-                  function pad(n){ return String(n).padStart(2,'0') }
-                  let epLabel = '';
-                  if (prov.episodeRange) epLabel = prov.season != null ? `S${pad(prov.season)}E${prov.episodeRange}` : `E${prov.episodeRange}`
-                  else if (prov.episode != null) epLabel = prov.season != null ? `S${pad(prov.season)}E${pad(prov.episode)}` : `E${pad(prov.episode)}`
-                  const epTitle = prov.episodeTitle ? String(prov.episodeTitle).trim() : '';
-                  const filenameBase = sanitize(providerBase) + (epLabel ? ` - ${epLabel}` : '') + (epTitle ? ` - ${sanitize(epTitle)}` : '');
+                  // Use provider.renderedName as the exact final filename for series (avoid duplicate ep labels)
+                  const seriesRenderedRaw = String(prov.renderedName || prov.title || prov.name || '').trim();
+                  // Derive series folder by stripping the episode suffix beginning with ' - S' (e.g. " - S01E01")
+                  let seriesFolderBase = seriesRenderedRaw.replace(/\.[^/.]+$/, '');
+                  const sMatch = seriesFolderBase.search(/\s-\sS\d{1,2}E\d{1,3}/);
+                  if (sMatch !== -1) seriesFolderBase = seriesFolderBase.slice(0, sMatch).trim();
+                  // If seriesFolderBase is empty fallback to prov.title/year
+                  if (!seriesFolderBase) seriesFolderBase = String(prov.title || '').trim() + (prov.year ? ` (${prov.year})` : '');
+                  // ensure folder includes year when available
+                  if (prov.year && seriesFolderBase.indexOf(`(${prov.year})`) === -1) seriesFolderBase = seriesFolderBase + ` (${prov.year})`;
+                  const dir = path.join(baseOut, sanitize(seriesFolderBase), seasonFolder);
+                  // final filename should be provider.renderedName exactly (sanitized)
+                  const filenameBase = sanitize(seriesRenderedRaw);
                   finalFileName2 = (filenameBase + ext2).trim();
-                  const dir = path.join(baseOut, titleFolder, seasonFolder);
                   newToResolved = path.join(dir, finalFileName2);
                 } else {
                   // Movie layout: Title (Year)/Title (Year).ext
