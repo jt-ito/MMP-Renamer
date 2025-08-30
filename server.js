@@ -1250,7 +1250,7 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 const prov = enrichment.provider || {};
                 const provYear = prov.year || extractYear(prov, from) || '';
                 const titleFolder = sanitize(String(prov.title || prov.renderedName || path.basename(from, ext2)).trim() + (provYear ? ` (${provYear})` : ''));
-                const baseOut = configuredOut ? path.resolve(configuredOut) : path.dirname(toResolved);
+                const baseOut = configuredOut ? path.resolve(configuredOut) : path.dirname(path.resolve(from));
                 // Movie vs Series detection: presence of season/episode indicates series
                 const isSeries = (prov.season != null) || (prov.episode != null);
                 if (isSeries) {
@@ -1320,24 +1320,25 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               appendLog(`HARDLINK_SKIP_EXISTS to=${effectiveToResolved}`);
             }
 
-            // mark applied in enrich cache and persist
+              // mark applied in enrich cache and persist (use canonicalized keys)
             try {
-              enrichCache[from] = enrichCache[from] || {};
-              enrichCache[from].applied = true;
-              enrichCache[from].hidden = true;
-              enrichCache[from].appliedAt = Date.now();
-              enrichCache[from].appliedTo = effectiveToResolved || toResolved;
+              const fromKey = canonicalize(from);
+              enrichCache[fromKey] = enrichCache[fromKey] || {};
+              enrichCache[fromKey].applied = true;
+              enrichCache[fromKey].hidden = true;
+              enrichCache[fromKey].appliedAt = Date.now();
+              enrichCache[fromKey].appliedTo = effectiveToResolved || toResolved;
               const finalBasename = path.basename(effectiveToResolved || toResolved);
-              enrichCache[from].renderedName = finalBasename;
+              enrichCache[fromKey].renderedName = finalBasename;
               // metadataFilename: rendered filename without the extension
-              enrichCache[from].metadataFilename = finalBasename.replace(new RegExp(path.extname(finalBasename) + '$'), '')
+              enrichCache[fromKey].metadataFilename = finalBasename.replace(new RegExp(path.extname(finalBasename) + '$'), '')
               // also index the enrichment by the target path so lookups on the created file return metadata
               try {
                 const targetKey = canonicalize(effectiveToResolved || toResolved)
-                enrichCache[targetKey] = Object.assign({}, enrichCache[from])
+                enrichCache[targetKey] = Object.assign({}, enrichCache[fromKey])
                 // record mapping metadataFilename -> targetKey for quick lookup
                 try {
-                  const metaName = enrichCache[from].metadataFilename
+                  const metaName = enrichCache[fromKey].metadataFilename
                   if (metaName) renderedIndex[metaName] = targetKey
                 } catch (e) {}
               } catch (e) {}
