@@ -88,6 +88,8 @@ export default function App() {
   const [selected, setSelected] = useState({})
   const [searchQuery, setSearchQuery] = useState('')
   const [searching, setSearching] = useState(false)
+  const searchAbortRef = React.useRef(null)
+  const searchTimeoutRef = React.useRef(null)
   const [enrichCache, setEnrichCache] = useLocalState('enrichCache', {})
   const [logs, setLogs] = useState('')
   const [toasts, setToasts] = useState([])
@@ -250,14 +252,19 @@ export default function App() {
   }
 
   // server-side search — do not load all items into memory on client
-  async function searchScan(query, offset = 0, limit = 50) {
-    if (!scanId) return { items: [], offset: 0, limit, total: 0 }
+  async function searchScan(query, offset = 0, limit = 50, signal) {
+    if (!scanId) return { items: [], offset: 0, limit: 0, total: 0 }
     try {
       setSearching(true)
-      const r = await axios.get(API(`/scan/${scanId}/search`), { params: { q: query, offset, limit } })
+      // cancel previous request if present
+      if (searchAbortRef.current && typeof searchAbortRef.current.abort === 'function') try { searchAbortRef.current.abort() } catch (e) {}
+      // use AbortController for cancellation
+      const controller = new AbortController()
+      searchAbortRef.current = controller
+      const r = await axios.get(API(`/scan/${scanId}/search`), { params: { q: query, offset, limit }, signal: signal || controller.signal })
       setSearching(false)
       return r.data || { items: [], offset, limit, total: 0 }
-    } catch (e) { setSearching(false); return { items: [], offset: 0, limit, total: 0 } }
+    } catch (e) { if (axios.isCancel && axios.isCancel(e)) { /* cancelled */ } setSearching(false); return { items: [], offset: 0, limit, total: 0 } }
   }
 
   async function rescan() {
@@ -355,23 +362,45 @@ export default function App() {
   }
 
   // run a fresh search and replace visible items with results
+  // perform search immediately (used by buttons); live-search handled by debounce effect below
   async function doSearch(q) {
     setSearchQuery(q || '')
     if (!q) {
-      // clear search -> reset to fresh listing (first page)
       setItems([])
-      // trigger first page load via handleScrollNearEnd
       await handleScrollNearEnd()
       return
     }
     const r = await searchScan(q, 0, batchSize)
     setItems(r.items || [])
     setTotal(r.total || 0)
-    // pre-fetch enrich for these items
-    for (const it of r.items || []) {
-      if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
-    }
+    for (const it of r.items || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
   }
+
+  // Live search: debounce input and cancel previous inflight requests
+  React.useEffect(() => {
+    // clear any pending timeout
+    if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null }
+    // if empty query, clear and load normal listing
+    if (!searchQuery || searchQuery.length === 0) {
+      // reset items to first page
+      setItems([])
+      // small timeout to allow UI to update
+      searchTimeoutRef.current = setTimeout(() => { handleScrollNearEnd().catch(()=>{}) }, 150)
+      return () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current) }
+    }
+    // debounce live search (300ms)
+    searchTimeoutRef.current = setTimeout(async () => {
+      try {
+        // perform search with cancellation via searchScan
+        const r = await searchScan(searchQuery, 0, batchSize)
+        setItems(r.items || [])
+        setTotal(r.total || 0)
+        for (const it of r.items || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+      } catch (e) {}
+    }, 300)
+    return () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery])
 
   async function previewRename(selected, template) {
   // include configured output path from local storage (client preference), server will also accept its persisted setting
@@ -555,10 +584,11 @@ export default function App() {
 
               {/* only show the list after the full scan collection finished */}
               {!scanning && scanMeta ? (
-                <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
-                  previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
-                  selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
-                  providerKey={providerKey} />
+          <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
+            previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
+            selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
+            providerKey={providerKey}
+            searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching} />
               ) : null}
             </section>
             <aside className="side">
@@ -586,7 +616,7 @@ function LogsPanel({ logs, refresh, pushToast }) {
   )
 }
 
-function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '' }) {
+function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false }) {
   const Row = ({ index, style }) => {
   const it = items[index]
   const rawEnrichment = it ? enrichCache?.[it.canonicalPath] : null
