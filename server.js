@@ -1242,12 +1242,26 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 .replace(/(^\s*-\s*)|(\s*-\s*$)/g, '')
                 .replace(/\s{2,}/g, ' ')
                 .trim();
-              const finalFileName2 = (nameWithoutExt2 + ext2).trim();
-              // use toResolved's directory but replace basename with rendered name
-              const dir = path.dirname(toResolved);
-              const newToResolved = path.join(dir, finalFileName2);
+              let finalFileName2 = (nameWithoutExt2 + ext2).trim();
+              // If provider rendered name exists, prefer it exactly for both folder and filename
+              let newToResolved;
+              if (enrichment && enrichment.provider && enrichment.provider.renderedName) {
+                // use provider.renderedName as base (without extension) for both folder and file
+                const providerBase = String(enrichment.provider.renderedName).trim().replace(new RegExp(path.extname(enrichment.provider.renderedName) + '$'), '');
+                const safeBase = sanitize(providerBase) || sanitize(path.basename(from, ext2));
+                finalFileName2 = (safeBase + ext2).trim();
+                // place under configured output if available otherwise fallback to directory of toResolved
+                const baseOut = configuredOut ? path.resolve(configuredOut) : path.dirname(toResolved);
+                const dir = path.join(baseOut, safeBase);
+                newToResolved = path.join(dir, finalFileName2);
+              } else {
+                // default: use toResolved's directory but replace basename with rendered name
+                const dir = path.dirname(toResolved);
+                newToResolved = path.join(dir, finalFileName2);
+              }
               // ensure directory exists
-              if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+              const ensureDir = path.dirname(newToResolved);
+              if (!fs.existsSync(ensureDir)) fs.mkdirSync(ensureDir, { recursive: true });
               // assign for subsequent operations
               // prefer the rendered name if target path differs
               var effectiveToResolved = newToResolved;
