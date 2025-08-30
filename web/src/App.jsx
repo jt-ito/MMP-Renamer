@@ -6,6 +6,7 @@ import Settings from './Settings'
 import Login from './Login'
 import Register from './Register'
 import Users from './Users'
+import Notifications from './Notifications'
 
 function IconRefresh(){
   return (
@@ -121,7 +122,16 @@ export default function App() {
 
   function pushToast(title, message){
     const id = Math.random().toString(36).slice(2,9)
-    setToasts(t => [...t, { id, title, message }])
+    const ts = new Date().toISOString()
+    const entry = { id, title, message, ts }
+    setToasts(t => [...t, entry])
+    // persist into localStorage for notifications history
+    try {
+      const existing = JSON.parse(localStorage.getItem('notifications') || '[]')
+      existing.unshift(entry)
+      // keep recent 200 notifications to avoid unbounded growth
+      localStorage.setItem('notifications', JSON.stringify(existing.slice(0, 200)))
+    } catch (e) {}
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 6000)
   }
 
@@ -503,9 +513,21 @@ export default function App() {
   }, [])
 
   return (
-    <div className="app">
+  <div className={"app" + (selectMode ? ' select-mode-shrink' : '')}>
       <header>
         <h1 style={{cursor:'pointer'}} onClick={() => (window.location.hash = '#/')} title="Go to dashboard">MMP Renamer</h1>
+        {/* Header search: placed between title and header actions so it doesn't overlap buttons */}
+        <div className="header-search" style={{ marginLeft: 12, marginRight: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            className="form-input"
+            placeholder="Search files (server-side)"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            style={{ height: 36, padding: '6px 10px', borderRadius: 10, minWidth: 140, width: selectMode ? 200 : 320, maxWidth: '42vw', boxSizing: 'border-box' }}
+          />
+          <button className='btn-ghost' onClick={() => doSearch(searchQuery)} disabled={searching}>{searching ? <Spinner/> : 'Search'}</button>
+          <button className='btn-ghost' onClick={() => doSearch('')} title='Clear search'>Clear</button>
+        </div>
         {auth ? (
             <div className="header-actions">
             <button className={"btn-save" + (selectMode ? ' shifted' : '')} onClick={() => triggerScan(libraries[0])}><span>Scan</span></button>
@@ -537,6 +559,10 @@ export default function App() {
             <button className={"btn-ghost" + (!(lastLibraryId || (scanMeta && scanMeta.libraryId)) ? ' disabled' : '')} onClick={async () => { if (!(lastLibraryId || (scanMeta && scanMeta.libraryId))) return; pushToast && pushToast('Refresh','Server-side refresh started'); try { await refreshScan(scanMeta ? scanMeta.id : lastLibraryId); pushToast && pushToast('Refresh','Server-side refresh complete'); } catch (e) { pushToast && pushToast('Refresh','Refresh failed') } }} title="Refresh metadata server-side" style={{display:'flex',alignItems:'center',gap:8}} disabled={!(lastLibraryId || (scanMeta && scanMeta.libraryId))}><IconRefresh/> <span>Refresh metadata</span></button>
             <button className="btn-ghost" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}>Theme: {theme === 'dark' ? 'Dark' : 'Light'}</button>
             <button className="btn-ghost" onClick={() => (window.location.hash = route === '#/settings' ? '#/' : '#/settings')}>Settings</button>
+            <button className="btn-ghost" title="Notifications" onClick={() => (window.location.hash = '#/notifications')} style={{display:'flex',alignItems:'center',justifyContent:'center', width:40}}>
+              {/* bell icon */}
+              <svg className="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 10-12 0v3.159c0 .538-.214 1.055-.595 1.436L4 17h5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </button>
             {auth && auth.role === 'admin' && <button className="btn-ghost" onClick={() => (window.location.hash = '#/users')}>Users</button>}
             {auth && <button className="btn-ghost" onClick={async ()=>{ try { await axios.post(API('/logout')); setAuth(null); pushToast && pushToast('Auth','Logged out') } catch { pushToast && pushToast('Auth','Logout failed') } }}>Logout</button>}
           </div>
@@ -559,6 +585,10 @@ export default function App() {
           ) : route === '#/settings' ? (
             <section className="list">
               <Settings pushToast={pushToast} />
+            </section>
+          ) : route === '#/notifications' ? (
+            <section className="list">
+              <Notifications />
             </section>
           ) : (
           <>
@@ -673,9 +703,24 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 const plans = await previewRename([it])
                 pushToast && pushToast('Preview ready', 'Rename plan generated — applying now')
                 const res = await applyRename(plans)
-                pushToast && pushToast('Apply result', JSON.stringify(res))
-                // refresh enrichment for this item (server marks source hidden)
-                await refreshEnrichForPaths([it.canonicalPath])
+                // interpret server results (array of per-plan results)
+                try {
+                  const first = (Array.isArray(res) && res.length) ? res[0] : null
+                  const status = first && (first.status || first.result || '')
+                  if (status === 'hardlinked' || status === 'copied' || status === 'moved' || status === 'exists' || status === 'dryrun' || status === 'noop') {
+                    const kind = (status === 'copied') ? 'Copied (fallback)' : (status === 'hardlinked' ? 'Hardlinked' : (status === 'moved' ? 'Moved' : (status === 'exists' ? 'Exists' : (status === 'dryrun' ? 'Dry run' : 'No-op'))))
+                    pushToast && pushToast('Apply', `${kind}: ${first.to || first.path || ''}`)
+                  } else if (first && first.status === 'error') {
+                    pushToast && pushToast('Apply', `Failed: ${first.error || 'unknown error'}`)
+                  } else {
+                    // fallback display
+                    pushToast && pushToast('Apply result', JSON.stringify(res))
+                  }
+                } catch (e) {
+                  pushToast && pushToast('Apply result', JSON.stringify(res))
+                }
+                // refresh enrichment for this item (server marks source hidden) — do this best-effort in background
+                refreshEnrichForPaths([it.canonicalPath]).catch(()=>{})
               } catch (e) {
                 pushToast && pushToast('Apply', 'Apply failed')
               } finally {
@@ -703,11 +748,6 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
 
   return (
     <>
-      <div style={{display:'flex', gap:8, alignItems:'center', marginBottom:8}}>
-        <input placeholder="Search files (server-side)" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{flex:1, padding:8, borderRadius:6, border:'1px solid var(--bg-600)'}} />
-        <button className='btn-ghost' onClick={() => doSearch(searchQuery)} disabled={searching}>{searching ? <Spinner/> : 'Search'}</button>
-        <button className='btn-ghost' onClick={() => doSearch('')} title='Clear search'>Clear</button>
-      </div>
       <List height={600} itemCount={items.length} itemSize={80} width={'100%'} onItemsRendered={onItemsRendered}>
       {Row}
     </List>

@@ -27,6 +27,16 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .app header button:hover { background: rgba(255,255,255,0.02) }
 .app header button:active { transform: translateY(1px) }
 
+/* Header search box styling: match theme and shrink responsively */
+.header-search { display:flex; align-items:center; gap:8px }
+.header-search .form-input { height:36px; padding:6px 10px; border-radius:10px; border:1px solid var(--bg-600); background:var(--bg-700); color:var(--accent); min-width:140px }
+.header-search .btn-ghost { height:36px }
+.header-search .form-input:focus { outline: 2px solid rgba(96,165,250,0.12); outline-offset:2px }
+
+/* When select mode is active, the Scan button shifts left — allow the header search to shrink */
+.select-mode-shrink .header-search .form-input { width: 180px; max-width: 34vw }
+
+
 /* Ensure header icon-only buttons are visually centered with text buttons */
 .app header { line-height: 1 }
 .app header .header-actions { display:flex; align-items:center; gap:6px }
@@ -83,20 +93,17 @@ select.form-input:focus {
 .btn-save { background: var(--hunter-green); color: #fff; border: none; border-radius:12px; padding:10px 14px; box-shadow: 0 8px 20px rgba(17,24,17,0.25); cursor:pointer }
 .btn-save:disabled { opacity:0.6 }
 
-/* Shift Scan button left slightly when select mode is active to avoid overlapping absolute approve button */
-.btn-save.shifted { transform: translateX(-74px); transition: transform 220ms ease }
+/* When select mode is active, allow controls to flow and wrap instead of overlapping. */
+.btn-save.shifted { margin-right: 8px; transition: margin 220ms ease }
 
-/* Approve selected fade/slide transition */
-.approve-button { transition: opacity 220ms ease, transform 220ms ease; opacity: 0; transform: translateX(-6px); }
-.approve-button.visible { opacity: 1; transform: translateX(0); }
-.approve-button { pointer-events: none; }
-.approve-button.visible { pointer-events: auto; }
+/* Approve selected fades in and participates in layout so other buttons can wrap beneath it */
+.approve-button { transition: opacity 220ms ease, transform 220ms ease, max-height 220ms ease; opacity: 0; transform: translateY(-6px); max-height:0; overflow:hidden; display:inline-flex; align-items:center }
+.approve-button.visible { opacity: 1; transform: translateY(0); max-height:80px }
+.approve-button { pointer-events: none }
+.approve-button.visible { pointer-events: auto }
 .btn-save.disabled { opacity: 0.6; pointer-events: none }
 
-/* Position approve-button absolutely inside its wrapper to avoid reserving layout space when hidden */
-.select-approve-wrap { position: relative; display: inline-block }
-.approve-button { position: absolute; right: calc(100% + 8px); top: 50%; transform: translateY(-50%) translateX(-6px); }
-.approve-button.visible { transform: translateY(-50%) translateX(0); }
+.select-approve-wrap { position: static; display:inline-flex; align-items:center }
 
 /* Make all settings/page buttons slightly more rounded to match modern look */
 .btn-ghost, .btn-cta, button { border-radius:12px }
@@ -194,6 +201,10 @@ button:active { transform: translateY(1px) }
 
 	/* Make header buttons wrap and grow as needed on small screens */
 	.app header button { height:40px; padding:8px 10px }
+
+	/* Header search becomes full-width on small screens */
+	.header-search { width:100%; }
+	.header-search .form-input { width:100%; max-width:100%; }
 }
 
 @media (max-width: 480px) {
