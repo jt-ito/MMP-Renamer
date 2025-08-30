@@ -1246,14 +1246,35 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               // If provider rendered name exists, prefer it exactly for both folder and filename
               let newToResolved;
               if (enrichment && enrichment.provider && enrichment.provider.renderedName) {
-                // use provider.renderedName as base (without extension) for both folder and file
-                const providerBase = String(enrichment.provider.renderedName).trim().replace(new RegExp(path.extname(enrichment.provider.renderedName) + '$'), '');
-                const safeBase = sanitize(providerBase) || sanitize(path.basename(from, ext2));
-                finalFileName2 = (safeBase + ext2).trim();
-                // place under configured output if available otherwise fallback to directory of toResolved
+                // use provider tokens to construct the desired layout without hard-coding
+                const prov = enrichment.provider || {};
+                const provYear = prov.year || extractYear(prov, from) || '';
+                const titleFolder = sanitize(String(prov.title || prov.renderedName || path.basename(from, ext2)).trim() + (provYear ? ` (${provYear})` : ''));
                 const baseOut = configuredOut ? path.resolve(configuredOut) : path.dirname(toResolved);
-                const dir = path.join(baseOut, safeBase);
-                newToResolved = path.join(dir, finalFileName2);
+                // Movie vs Series detection: presence of season/episode indicates series
+                const isSeries = (prov.season != null) || (prov.episode != null);
+                if (isSeries) {
+                  // Season folder name (Season NN)
+                  const seasonNum = prov.season != null ? String(prov.season) : '1';
+                  const seasonFolder = `Season ${String(seasonNum).padStart(2,'0')}`;
+                  // Base name from provider.renderedName (remove any extension)
+                  const providerBase = String(prov.renderedName || prov.title || prov.name || '').trim().replace(/\.[^/.]+$/, '');
+                  function pad(n){ return String(n).padStart(2,'0') }
+                  let epLabel = '';
+                  if (prov.episodeRange) epLabel = prov.season != null ? `S${pad(prov.season)}E${prov.episodeRange}` : `E${prov.episodeRange}`
+                  else if (prov.episode != null) epLabel = prov.season != null ? `S${pad(prov.season)}E${pad(prov.episode)}` : `E${pad(prov.episode)}`
+                  const epTitle = prov.episodeTitle ? String(prov.episodeTitle).trim() : '';
+                  const filenameBase = sanitize(providerBase) + (epLabel ? ` - ${epLabel}` : '') + (epTitle ? ` - ${sanitize(epTitle)}` : '');
+                  finalFileName2 = (filenameBase + ext2).trim();
+                  const dir = path.join(baseOut, titleFolder, seasonFolder);
+                  newToResolved = path.join(dir, finalFileName2);
+                } else {
+                  // Movie layout: Title (Year)/Title (Year).ext
+                  const movieBase = sanitize(String(prov.title || prov.renderedName || path.basename(from, ext2)).trim() + (provYear ? ` (${provYear})` : ''));
+                  finalFileName2 = (movieBase + ext2).trim();
+                  const dir = path.join(baseOut, movieBase);
+                  newToResolved = path.join(dir, finalFileName2);
+                }
               } else {
                 // default: use toResolved's directory but replace basename with rendered name
                 const dir = path.dirname(toResolved);
