@@ -90,6 +90,13 @@ export default function App() {
   const [logs, setLogs] = useState('')
   const [toasts, setToasts] = useState([])
   const [loadingEnrich, setLoadingEnrich] = useState({})
+
+  // defensive setter wrapper: some runtime bundles or injection can cause the
+  // state setter to be unavailable in certain scopes; use this wrapper to
+  // avoid uncaught ReferenceError when event handlers run.
+  function safeSetLoadingEnrich(updater) {
+    try { setLoadingEnrich(updater) } catch (e) { /* swallow */ }
+  }
   const [auth, setAuth] = useState(null)
   const [authChecked, setAuthChecked] = useState(false)
   const [renameTemplate, setRenameTemplate] = useLocalState('rename_template', '{title} ({year}) - {epLabel} - {episodeTitle}')
@@ -263,7 +270,7 @@ export default function App() {
     if (!item) return
     const key = item.canonicalPath
     try {
-      if (force) setLoadingEnrich(l => ({ ...l, [key]: true }))
+  if (force) safeSetLoadingEnrich(l => ({ ...l, [key]: true }))
 
       // If not forcing and we already have a cache entry, return it
       if (!force && enrichCache && enrichCache[key]) return enrichCache[key]
@@ -305,7 +312,7 @@ export default function App() {
       setEnrichCache(prev => ({ ...prev, [key]: { error: err?.message || String(err) } }))
       return null
     } finally {
-      if (force) setLoadingEnrich(l => { const n = { ...l }; delete n[key]; return n })
+  if (force) safeSetLoadingEnrich(l => { const n = { ...l }; delete n[key]; return n })
     }
   }
 
@@ -368,10 +375,10 @@ export default function App() {
         // set per-item loading while refresh happens
         const loadingMap = {}
         for (const p of paths) loadingMap[p] = true
-        setLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
+  safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
         await refreshEnrichForPaths(paths)
         // clear loading flags
-        setLoadingEnrich(prev => { const n = { ...prev }; for (const p of paths) delete n[p]; return n })
+  safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of paths) delete n[p]; return n })
       } catch (e) {
         // best-effort
       }
@@ -587,7 +594,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
             <button title="Apply rename for this item" className="btn-save icon-btn" disabled={loading} onClick={async () => {
               if (!it) return
               try {
-                setLoadingEnrich(prev => ({ ...prev, [it.canonicalPath]: true }))
+                safeSetLoadingEnrich(prev => ({ ...prev, [it.canonicalPath]: true }))
                 // Do not pass a hardcoded template here so the user's configured template is used
                 const plans = await previewRename([it])
                 pushToast && pushToast('Preview ready', 'Rename plan generated — applying now')
@@ -598,7 +605,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               } catch (e) {
                 pushToast && pushToast('Apply', 'Apply failed')
               } finally {
-                setLoadingEnrich(prev => { const n = { ...prev }; delete n[it.canonicalPath]; return n })
+                safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[it.canonicalPath]; return n })
               }
             }}><IconApply/> <span>Apply</span></button>
           <button title="Rescan metadata for this item" className="btn-ghost" disabled={loading} onClick={async () => { if (!it) return; pushToast && pushToast('Rescan','Refreshing metadata...'); await enrichOne(it, true) }}>{loading ? <Spinner/> : <><IconRefresh/> <span>Rescan</span></>} </button>
