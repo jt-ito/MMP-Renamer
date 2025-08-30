@@ -97,6 +97,12 @@ export default function App() {
   function safeSetLoadingEnrich(updater) {
     try { setLoadingEnrich(updater) } catch (e) { /* swallow */ }
   }
+
+  // expose global alias for compatibility with any injected or legacy code
+  React.useEffect(() => {
+    try { if (typeof window !== 'undefined') window.safeSetLoadingEnrich = safeSetLoadingEnrich } catch (e) {}
+    return () => { try { if (typeof window !== 'undefined' && window.safeSetLoadingEnrich === safeSetLoadingEnrich) delete window.safeSetLoadingEnrich } catch (e) {} }
+  }, [])
   const [auth, setAuth] = useState(null)
   const [authChecked, setAuthChecked] = useState(false)
   const [renameTemplate, setRenameTemplate] = useLocalState('rename_template', '{title} ({year}) - {epLabel} - {episodeTitle}')
