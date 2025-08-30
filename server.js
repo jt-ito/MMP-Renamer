@@ -406,19 +406,19 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   let seriesName = parsed.title || parsed.parsedName || base
   let episodeTitle = parsed.episodeTitle || ''
 
-  // helper: detect if a candidate looks like an episode token rather than a series title
-  function isEpisodeLike(s) {
-    if (!s) return false
-    const ss = String(s)
-    // common patterns: S01, S01E01, 1x02, E01, solitary numeric tokens when near season markers
-    if (/\bS\d{1,2}([EPp]\d{1,3})?\b/i.test(ss)) return true
-    if (/\b\d{1,2}x\d{1,3}\b/i.test(ss)) return true
-    if (/\bE\.?\d{1,3}\b/i.test(ss)) return true
-    // if the string contains words like 'episode' or is mostly numeric
-    if (/episode/i.test(ss)) return true
-    if (/^\d{1,3}$/.test(ss)) return true
-    return false
-  }
+    // helper: detect if a candidate looks like an episode token rather than a series title
+    function isEpisodeLike(s) {
+      if (!s) return false
+      const ss = String(s)
+      // common patterns: S01, S01E01, 1x02, E01, solitary numeric tokens when near season markers
+      if (/\bS\d{1,2}([EPp]\d{1,3})?\b/i.test(ss)) return true
+      if (/\b\d{1,2}x\d{1,3}\b/i.test(ss)) return true
+      if (/\bE\.?\d{1,3}\b/i.test(ss)) return true
+      // if the string contains words like 'episode' or is mostly numeric
+      if (/episode/i.test(ss)) return true
+      if (/^\d{1,3}$/.test(ss)) return true
+      return false
+    }
 
   // helper: detect resolution/year/noise tokens in a candidate title
   function isNoiseLike(s) {
@@ -1095,11 +1095,17 @@ app.post('/api/rename/preview', (req, res) => {
     const tvdbIdToken = (meta && meta.tvdb && meta.tvdb.raw && (meta.tvdb.raw.id || meta.tvdb.raw.seriesId)) ? String(meta.tvdb.raw.id || meta.tvdb.raw.seriesId) : ''
 
   // Build title token from provider/parsed tokens and clean it for render.
-  const episodeTitleTokenFromMeta = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '';
+  const episodeTitleTokenFromMeta = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : ''
   const title = cleanTitleForRender(rawTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
 
-    // Render template with preferência to enrichment-provided tokens
-    const nameWithoutExtRaw = baseNameTemplate
+  // Render template with preferência to enrichment-provided tokens.
+  // If the provider returned a renderedName (TMDb), prefer that exact rendered string for preview.
+  let nameWithoutExtRaw;
+  if (meta && meta.provider && meta.provider.renderedName) {
+    // strip any extension the provider might include and use the provider-rendered name verbatim
+    nameWithoutExtRaw = String(meta.provider.renderedName).replace(/\.[^/.]+$/, '');
+  } else {
+    nameWithoutExtRaw = baseNameTemplate
       .replace('{title}', sanitize(title))
       .replace('{basename}', sanitize(path.basename(fromPath, ext)))
       .replace('{year}', year || '')
@@ -1109,6 +1115,7 @@ app.post('/api/rename/preview', (req, res) => {
       .replace('{episode}', sanitize(episodeToken))
       .replace('{episodeRange}', sanitize(episodeRangeToken))
       .replace('{tvdbId}', sanitize(tvdbIdToken));
+  }
     // Clean up common artifact patterns from empty tokens: stray parentheses, repeated separators
     const nameWithoutExt = String(nameWithoutExtRaw)
       .replace(/\s*\(\s*\)\s*/g, '') // remove empty ()
@@ -1193,8 +1200,13 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
         results.push({ itemId: p.itemId, status: 'noop' });
         continue;
       }
-      // If to is under an output directory configured on the server, prefer hardlink creation
-      const configuredOut = serverSettings.scan_output_path ? canonicalize(serverSettings.scan_output_path) : null;
+      // Prefer per-user configured output path, else server-wide setting
+      let configuredOut = null;
+      try {
+        const username = req.session && req.session.username;
+        if (username && users[username] && users[username].settings && users[username].settings.scan_output_path) configuredOut = canonicalize(users[username].settings.scan_output_path);
+        else if (serverSettings && serverSettings.scan_output_path) configuredOut = canonicalize(serverSettings.scan_output_path);
+      } catch (e) { configuredOut = serverSettings && serverSettings.scan_output_path ? canonicalize(serverSettings.scan_output_path) : null }
       const toResolved = path.resolve(to);
       const resultsItem = { itemId: p.itemId };
 
@@ -1250,7 +1262,14 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 const prov = enrichment.provider || {};
                 const provYear = prov.year || extractYear(prov, from) || '';
                 const titleFolder = sanitize(String(prov.title || prov.renderedName || path.basename(from, ext2)).trim() + (provYear ? ` (${provYear})` : ''));
-                const baseOut = configuredOut ? path.resolve(configuredOut) : path.dirname(path.resolve(from));
+                if (!configuredOut) {
+                  appendLog(`HARDLINK_WARN no configured output path for from=${from} provider=${prov.renderedName}`);
+                }
+                const baseOut = configuredOut ? path.resolve(configuredOut) : null;
+                if (!baseOut) {
+                  appendLog(`HARDLINK_FAIL_NO_OUTPUT from=${from} provider=${prov.renderedName || prov.title || ''}`);
+                  throw new Error('No configured output path (user or server). Set output path in settings before applying provider-driven hardlinks.');
+                }
                 // Movie vs Series detection: presence of season/episode indicates series
                 const isSeries = (prov.season != null) || (prov.episode != null);
                 if (isSeries) {
@@ -1332,10 +1351,17 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               enrichCache[fromKey].renderedName = finalBasename;
               // metadataFilename: rendered filename without the extension
               enrichCache[fromKey].metadataFilename = finalBasename.replace(new RegExp(path.extname(finalBasename) + '$'), '')
-              // also index the enrichment by the target path so lookups on the created file return metadata
+              // index target path as a lightweight mapping (do NOT copy applied/hidden flags)
               try {
                 const targetKey = canonicalize(effectiveToResolved || toResolved)
-                enrichCache[targetKey] = Object.assign({}, enrichCache[fromKey])
+                renderedIndex[targetKey] = {
+                  source: from,
+                  renderedName: finalBasename,
+                  appliedTo: effectiveToResolved || toResolved,
+                  metadataFilename: enrichCache[fromKey].metadataFilename,
+                  provider: enrichCache[fromKey].provider || null,
+                  parsed: enrichCache[fromKey].parsed || null
+                };
                 // record mapping metadataFilename -> targetKey for quick lookup
                 try {
                   const metaName = enrichCache[fromKey].metadataFilename

@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
+  "test-hardlink": "node ./scripts/test-hardlink.js",
     "dev": "concurrently \"node server.js\" \"cd web && npm run dev\"",
     "web:install": "cd web && npm install",
     "install:all": "npm install && cd web && npm install"
@@ -11,6 +12,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.18.2",
+  "minimist": "^1.2.8",
   "uuid": "^9.0.0",
   "bcryptjs": "^2.4.3",
   "cookie-session": "^2.0.0"

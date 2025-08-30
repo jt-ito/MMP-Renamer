@@ -1,0 +1,10 @@
+{
+  "source": "C:\\Users\\ito\\Desktop\\renamer\\tmp_test_src.mkv",
+  "target": "C:\\Users\\ito\\Desktop\\renamer\\out_test\\86 EIGHTY-SIX (2021)\\Season 01\\86 EIGHTY-SIX (2021) - S01E01 - Undertaker.mkv",
+  "method": "link",
+  "providerRendered": "86 EIGHTY-SIX (2021) - S01E01 - Undertaker",
+  "isSeries": true,
+  "season": "1",
+  "year": null,
+  "timestamp": 1756523456599
+}
