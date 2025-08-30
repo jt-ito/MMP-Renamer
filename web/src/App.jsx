@@ -86,6 +86,8 @@ export default function App() {
   const [theme, setTheme] = useLocalState('theme', 'dark')
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState({})
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searching, setSearching] = useState(false)
   const [enrichCache, setEnrichCache] = useLocalState('enrichCache', {})
   const [logs, setLogs] = useState('')
   const [toasts, setToasts] = useState([])
@@ -247,6 +249,17 @@ export default function App() {
   return r.data.scanId
   }
 
+  // server-side search — do not load all items into memory on client
+  async function searchScan(query, offset = 0, limit = 50) {
+    if (!scanId) return { items: [], offset: 0, limit, total: 0 }
+    try {
+      setSearching(true)
+      const r = await axios.get(API(`/scan/${scanId}/search`), { params: { q: query, offset, limit } })
+      setSearching(false)
+      return r.data || { items: [], offset, limit, total: 0 }
+    } catch (e) { setSearching(false); return { items: [], offset: 0, limit, total: 0 } }
+  }
+
   async function rescan() {
     const libId = lastLibraryId || (scanMeta && scanMeta.libraryId)
     if (!libId) {
@@ -326,12 +339,37 @@ export default function App() {
     if (!scanId) return
     const nextOffset = items.length
     if (nextOffset >= total) return
-    const r = await axios.get(API(`/scan/${scanId}/items?offset=${nextOffset}&limit=${batchSize}`))
-    setItems(prev => [...prev, ...r.data.items])
+    let r
+    if (searchQuery && searchQuery.length > 0) {
+      r = await searchScan(searchQuery, nextOffset, batchSize)
+      setItems(prev => [...prev, ...(r.items || [])])
+    } else {
+      r = await axios.get(API(`/scan/${scanId}/items?offset=${nextOffset}&limit=${batchSize}`))
+      setItems(prev => [...prev, ...r.data.items])
+    }
     const forceEnrich = scanOptionsRef.current && scanOptionsRef.current.forceEnrich === true
     for (const it of r.data.items) {
       if (forceEnrich) enrichOne && enrichOne(it, true)
       else if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+    }
+  }
+
+  // run a fresh search and replace visible items with results
+  async function doSearch(q) {
+    setSearchQuery(q || '')
+    if (!q) {
+      // clear search -> reset to fresh listing (first page)
+      setItems([])
+      // trigger first page load via handleScrollNearEnd
+      await handleScrollNearEnd()
+      return
+    }
+    const r = await searchScan(q, 0, batchSize)
+    setItems(r.items || [])
+    setTotal(r.total || 0)
+    // pre-fetch enrich for these items
+    for (const it of r.items || []) {
+      if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
     }
   }
 
@@ -615,6 +653,14 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               }
             }}><IconApply/> <span>Apply</span></button>
           <button title="Rescan metadata for this item" className="btn-ghost" disabled={loading} onClick={async () => { if (!it) return; pushToast && pushToast('Rescan','Refreshing metadata...'); await enrichOne(it, true) }}>{loading ? <Spinner/> : <><IconRefresh/> <span>Rescan</span></>} </button>
+          <button title="Hide this item" className="btn-ghost" disabled={loading} onClick={async () => {
+            if (!it) return
+            try {
+              await axios.post(API('/enrich/hide'), { path: it.canonicalPath })
+              pushToast && pushToast('Hide', 'Item hidden')
+              await refreshEnrichForPaths([it.canonicalPath])
+            } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
+          }}><IconCopy/> <span>Hide</span></button>
         </div>
       </div>
     )
@@ -626,8 +672,15 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   }
 
   return (
-    <List height={600} itemCount={items.length} itemSize={80} width={'100%'} onItemsRendered={onItemsRendered}>
+    <>
+      <div style={{display:'flex', gap:8, alignItems:'center', marginBottom:8}}>
+        <input placeholder="Search files (server-side)" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} style={{flex:1, padding:8, borderRadius:6, border:'1px solid var(--bg-600)'}} />
+        <button className='btn-ghost' onClick={() => doSearch(searchQuery)} disabled={searching}>{searching ? <Spinner/> : 'Search'}</button>
+        <button className='btn-ghost' onClick={() => doSearch('')} title='Clear search'>Clear</button>
+      </div>
+      <List height={600} itemCount={items.length} itemSize={80} width={'100%'} onItemsRendered={onItemsRendered}>
       {Row}
     </List>
+    </>
   )
 }
