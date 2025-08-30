@@ -516,8 +516,8 @@ export default function App() {
   <div className={"app" + (selectMode ? ' select-mode-shrink' : '')}>
       <header>
         <h1 style={{cursor:'pointer'}} onClick={() => (window.location.hash = '#/')} title="Go to dashboard">MMP Renamer</h1>
-        {/* Header search: placed between title and header actions so it doesn't overlap buttons */}
-        <div className="header-search" style={{ marginLeft: 12, marginRight: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+  {/* Header search: placed between title and header actions so it doesn't overlap buttons */}
+  <div className="header-search" style={{ marginLeft: 'var(--header-button-gap)', marginRight: 'var(--header-button-gap)', display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
           <input
             className="form-input"
             placeholder="Search files (server-side)"
@@ -559,9 +559,9 @@ export default function App() {
             <button className={"btn-ghost" + (!(lastLibraryId || (scanMeta && scanMeta.libraryId)) ? ' disabled' : '')} onClick={async () => { if (!(lastLibraryId || (scanMeta && scanMeta.libraryId))) return; pushToast && pushToast('Refresh','Server-side refresh started'); try { await refreshScan(scanMeta ? scanMeta.id : lastLibraryId); pushToast && pushToast('Refresh','Server-side refresh complete'); } catch (e) { pushToast && pushToast('Refresh','Refresh failed') } }} title="Refresh metadata server-side" style={{display:'flex',alignItems:'center',gap:8}} disabled={!(lastLibraryId || (scanMeta && scanMeta.libraryId))}><IconRefresh/> <span>Refresh metadata</span></button>
             <button className="btn-ghost" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}>Theme: {theme === 'dark' ? 'Dark' : 'Light'}</button>
             <button className="btn-ghost" onClick={() => (window.location.hash = route === '#/settings' ? '#/' : '#/settings')}>Settings</button>
-            <button className="btn-ghost" title="Notifications" onClick={() => (window.location.hash = '#/notifications')} style={{display:'flex',alignItems:'center',justifyContent:'center', width:40}}>
+            <button className="btn-ghost" title="Notifications" onClick={() => (window.location.hash = '#/notifications')} style={{display:'flex',alignItems:'center',justifyContent:'center'}}>
               {/* bell icon */}
-              <svg className="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 10-12 0v3.159c0 .538-.214 1.055-.595 1.436L4 17h5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              <svg className="icon" viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 10-12 0v3.159c0 .538-.214 1.055-.595 1.436L4 17h5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
             </button>
             {auth && auth.role === 'admin' && <button className="btn-ghost" onClick={() => (window.location.hash = '#/users')}>Users</button>}
             {auth && <button className="btn-ghost" onClick={async ()=>{ try { await axios.post(API('/logout')); setAuth(null); pushToast && pushToast('Auth','Logged out') } catch { pushToast && pushToast('Auth','Logout failed') } }}>Logout</button>}
