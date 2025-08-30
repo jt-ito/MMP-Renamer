@@ -824,8 +824,8 @@ app.get('/api/enrich', (req, res) => {
   try {
     const raw = enrichCache[key] || null;
     const normalized = normalizeEnrichEntry(raw);
-    if (normalized && (normalized.parsed || normalized.provider)) return res.json({ cached: true, parsed: normalized.parsed || null, provider: normalized.provider || null });
-    return res.json({ cached: false, parsed: null, provider: null });
+    if (normalized && (normalized.parsed || normalized.provider)) return res.json({ cached: true, enrichment: normalized });
+    return res.json({ cached: false, enrichment: null });
   } catch (e) { return res.status(500).json({ error: e.message }) }
 });
 

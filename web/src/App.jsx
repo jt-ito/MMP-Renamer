@@ -360,13 +360,25 @@ export default function App() {
 
   async function applyRename(plans, dryRun = false) {
     // send plans to server; server will consult its configured scan_output_path to decide hardlink behavior
-    const r = await axios.post(API('/rename/apply'), { plans, dryRun })
-    // After apply, refresh enrichment for each plan.fromPath so the UI reflects applied/hidden state immediately
     try {
-      const paths = (plans || []).map(p => p.fromPath).filter(Boolean)
-      await refreshEnrichForPaths(paths)
-    } catch (e) {}
-    return r.data.results
+      const r = await axios.post(API('/rename/apply'), { plans, dryRun })
+      // After apply, refresh enrichment for each plan.fromPath so the UI reflects applied/hidden state immediately
+      try {
+        const paths = (plans || []).map(p => p.fromPath).filter(Boolean)
+        // set per-item loading while refresh happens
+        const loadingMap = {}
+        for (const p of paths) loadingMap[p] = true
+        setLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
+        await refreshEnrichForPaths(paths)
+        // clear loading flags
+        setLoadingEnrich(prev => { const n = { ...prev }; for (const p of paths) delete n[p]; return n })
+      } catch (e) {
+        // best-effort
+      }
+      return r.data.results
+    } catch (err) {
+      throw err
+    }
   }
 
   async function refreshScan(scanId) {
@@ -574,11 +586,20 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   <div className="actions">
             <button title="Apply rename for this item" className="btn-save icon-btn" disabled={loading} onClick={async () => {
               if (!it) return
-              // Do not pass a hardcoded template here so the user's configured template is used
-              const plans = await previewRename([it])
-              pushToast && pushToast('Preview ready', 'Rename plan generated — applying now')
-              const res = await applyRename(plans)
-              pushToast && pushToast('Apply result', JSON.stringify(res))
+              try {
+                setLoadingEnrich(prev => ({ ...prev, [it.canonicalPath]: true }))
+                // Do not pass a hardcoded template here so the user's configured template is used
+                const plans = await previewRename([it])
+                pushToast && pushToast('Preview ready', 'Rename plan generated — applying now')
+                const res = await applyRename(plans)
+                pushToast && pushToast('Apply result', JSON.stringify(res))
+                // refresh enrichment for this item (server marks source hidden)
+                await refreshEnrichForPaths([it.canonicalPath])
+              } catch (e) {
+                pushToast && pushToast('Apply', 'Apply failed')
+              } finally {
+                setLoadingEnrich(prev => { const n = { ...prev }; delete n[it.canonicalPath]; return n })
+              }
             }}><IconApply/> <span>Apply</span></button>
           <button title="Rescan metadata for this item" className="btn-ghost" disabled={loading} onClick={async () => { if (!it) return; pushToast && pushToast('Rescan','Refreshing metadata...'); await enrichOne(it, true) }}>{loading ? <Spinner/> : <><IconRefresh/> <span>Rescan</span></>} </button>
         </div>
