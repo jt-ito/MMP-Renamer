@@ -818,6 +818,62 @@ app.post('/api/scan', async (req, res) => {
 app.get('/api/scan/:scanId', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
 app.get('/api/scan/:scanId/items', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); const offset = parseInt(req.query.offset || '0', 10); const limit = Math.min(parseInt(req.query.limit || '50', 10), 500); const slice = s.items.slice(offset, offset + limit); res.json({ items: slice, offset, limit, total: s.totalCount }); });
 
+// Search items within a scan without returning all items (server-side filter)
+app.get('/api/scan/:scanId/search', (req, res) => {
+  try {
+    const s = scans[req.params.scanId];
+    if (!s) return res.status(404).json({ error: 'scan not found' });
+    const q = (req.query.q || req.query.query || '').trim();
+    const offset = parseInt(req.query.offset || '0', 10) || 0;
+    const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 500);
+    if (!q) return res.json({ items: [], offset, limit, total: 0 });
+    const needle = String(q).toLowerCase();
+    // Filter on canonicalPath and basename to support filename searches
+    // First pass: exact substring matches
+    let matched = (s.items || []).filter(it => {
+      try {
+        const p = String(it.canonicalPath || '').toLowerCase();
+        const b = (it.canonicalPath || '').split(/[\\/]/).pop().toLowerCase();
+        return p.indexOf(needle) !== -1 || b.indexOf(needle) !== -1;
+      } catch (e) { return false }
+    });
+
+    // If no exact matches, perform fuzzy scoring on basenames and include close matches
+    if (matched.length === 0) {
+      // levenshtein distance helper
+      function levenshtein(a, b) {
+        if (!a || !b) return Math.max(a ? a.length : 0, b ? b.length : 0)
+        const al = a.length, bl = b.length
+        const dp = Array.from({ length: al + 1 }, (_, i) => Array(bl + 1).fill(0))
+        for (let i = 0; i <= al; i++) dp[i][0] = i
+        for (let j = 0; j <= bl; j++) dp[0][j] = j
+        for (let i = 1; i <= al; i++) {
+          for (let j = 1; j <= bl; j++) {
+            const cost = a[i-1] === b[j-1] ? 0 : 1
+            dp[i][j] = Math.min(dp[i-1][j] + 1, dp[i][j-1] + 1, dp[i-1][j-1] + cost)
+          }
+        }
+        return dp[al][bl]
+      }
+      const scored = []
+      for (const it of (s.items || [])) {
+        try {
+          const b = (it.canonicalPath || '').split(/[\\/]/).pop().toLowerCase();
+          const dist = levenshtein(needle, b)
+          // normalize distance by length; allow matches with normalized distance < 0.4
+          const norm = dist / Math.max(needle.length, b.length, 1)
+          if (norm <= 0.4) scored.push({ it, score: norm })
+        } catch (e) {}
+      }
+      scored.sort((a,b) => a.score - b.score)
+      matched = scored.map(s => s.it)
+    }
+    const total = matched.length;
+    const slice = matched.slice(offset, offset + limit);
+    return res.json({ items: slice, offset, limit, total });
+  } catch (e) { return res.status(500).json({ error: e.message }) }
+})
+
 app.get('/api/enrich', (req, res) => {
   const { path: p } = req.query;
   const key = canonicalize(p || '');
@@ -976,6 +1032,20 @@ app.post('/api/enrich', async (req, res) => {
     res.json({ enrichment: enrichCache[key] });
   } catch (err) { appendLog(`ENRICH_FAIL path=${key} err=${err.message}`); res.status(500).json({ error: err.message }); }
 });
+
+// Hide a source item (mark hidden=true on the source canonical key)
+app.post('/api/enrich/hide', requireAuth, async (req, res) => {
+  try {
+    const p = req.body && req.body.path ? req.body.path : null
+    if (!p) return res.status(400).json({ error: 'path required' })
+    const key = canonicalize(p)
+    enrichCache[key] = enrichCache[key] || {}
+    enrichCache[key].hidden = true
+    writeJson(enrichStoreFile, enrichCache)
+    appendLog(`HIDE path=${p}`)
+    return res.json({ ok: true, path: key })
+  } catch (e) { return res.status(500).json({ error: e.message }) }
+})
 
 // Force-refresh metadata for all items in a completed scan (server-side enrichment)
 app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
