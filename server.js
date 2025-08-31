@@ -764,8 +764,11 @@ app.post('/api/scan', async (req, res) => {
           const key = canonicalize(it.canonicalPath);
           // skip if we already have authoritative provider data cached
           const existing = enrichCache[key] || null;
-          // skip only if provider match is present and has a renderedName (complete)
-          if (existing && existing.provider && existing.provider.matched && existing.provider.renderedName) continue;
+          // Consider a cached provider "complete" only when it has a renderedName
+          // and, when it represents an episode (season/episode present), also has an episodeTitle.
+          const prov = existing && existing.provider ? existing.provider : null;
+          const providerComplete = prov && prov.matched && prov.renderedName && (prov.episode == null || (prov.episodeTitle && String(prov.episodeTitle).trim()));
+          if (providerComplete) continue;
           const data = await externalEnrich(key, tvdbKey, { username: req.session && req.session.username });
           if (!data) continue;
           // compute provider-rendered name using effective template
@@ -952,7 +955,15 @@ app.post('/api/enrich', async (req, res) => {
     // (i.e. provider.matched and provider.renderedName present). If cached provider
     // data exists but lacks a renderedName (or is otherwise incomplete), allow an
     // external lookup so rescans/background refreshes can populate missing fields.
-    if (!force && enrichCache[key] && enrichCache[key].provider && enrichCache[key].provider.matched && enrichCache[key].provider.renderedName) {
+    // prefer existing enrichment when present and not forcing
+    // Only short-circuit to cached provider if it appears to be a complete provider hit
+    // (i.e. provider.matched and provider.renderedName present). Additionally, when the
+    // provider indicates an episode (season/episode present), require provider.episodeTitle
+    // to be present as well so rescans will attempt to fetch missing episode metadata.
+    const existingEarly = enrichCache[key] || null;
+    const provEarly = existingEarly && existingEarly.provider ? existingEarly.provider : null;
+    const providerCompleteEarly = provEarly && provEarly.matched && provEarly.renderedName && (provEarly.episode == null || (provEarly.episodeTitle && String(provEarly.episodeTitle).trim()));
+    if (!force && providerCompleteEarly) {
       return res.json({ enrichment: enrichCache[key] });
     }
     // Resolve an effective provider key early so we can decide whether to short-circuit to parsed-only
@@ -1074,8 +1085,11 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
       // If we already have a provider match from TMDb, skip external API hit and keep cached values
       const existing = enrichCache[key] || null
       let data = null
-      // If cached provider is already authoritative and fully-rendered, reuse it
-      if (existing && existing.provider && existing.provider.matched && existing.provider.renderedName && existing.provider.provider === 'tmdb') {
+      // Treat cached provider as authoritative only when it's fully rendered (renderedName present)
+      // and, for episode items, an episodeTitle is present. Otherwise perform an external lookup.
+      const provEx = existing && existing.provider ? existing.provider : null;
+      const providerCompleteEx = provEx && provEx.matched && provEx.renderedName && (provEx.episode == null || (provEx.episodeTitle && String(provEx.episodeTitle).trim()));
+      if (providerCompleteEx && (!provEx.provider || String(provEx.provider).toLowerCase() === 'tmdb')) {
         data = existing
       } else {
         data = await externalEnrich(key, tvdbKey, { username });
