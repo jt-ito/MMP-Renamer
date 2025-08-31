@@ -884,7 +884,17 @@ app.get('/api/enrich', (req, res) => {
   try {
     const raw = enrichCache[key] || null;
     const normalized = normalizeEnrichEntry(raw);
-    if (normalized && (normalized.parsed || normalized.provider)) return res.json({ cached: true, enrichment: normalized });
+    // If a provider block exists but is incomplete (e.g. missing renderedName or
+    // missing episodeTitle for episode entries), treat it as not-cached so clients
+    // will request an external lookup instead of assuming metadata is final.
+    if (normalized) {
+      const prov = normalized.provider || null;
+      const providerComplete = prov && prov.matched && prov.renderedName && (prov.episode == null || (prov.episodeTitle && String(prov.episodeTitle).trim()));
+      if (prov && !providerComplete) {
+        return res.json({ cached: false, enrichment: normalized });
+      }
+      if (normalized.parsed || normalized.provider) return res.json({ cached: true, enrichment: normalized });
+    }
     return res.json({ cached: false, enrichment: null });
   } catch (e) { return res.status(500).json({ error: e.message }) }
 });

@@ -456,17 +456,25 @@ export default function App() {
         while (Date.now() - start < maxMs) {
           try {
             const er = await axios.get(API('/enrich'), { params: { path } })
+            // If server reports cached=true, use the normalized data and stop polling.
             if (er.data && er.data.cached) {
               const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
               try { setEnrichCache(prev => ({ ...prev, [path]: norm })) } catch (e) {}
               return
+            }
+            // If server reports cached=false but returned an enrichment object (incomplete provider),
+            // trigger a forced POST /api/enrich so the server will start an external lookup in background.
+            if (er.data && er.data.enrichment) {
+              try {
+                await axios.post(API('/enrich'), { path, tmdb_api_key: providerKey || undefined, force: true })
+              } catch (e) { /* ignore forced start errors */ }
             }
           } catch (e) {}
           // small delay before retry
           await new Promise(s => setTimeout(s, 400))
         }
         // ensure at least one attempt to load client-side cache entry
-        try { enrichOne && enrichOne({ canonicalPath: path }) } catch (e) {}
+        try { enrichOne && enrichOne({ canonicalPath: path }, true) } catch (e) {}
       }
 
       await Promise.all(results.map(it => pollEnrich(it.canonicalPath)))
