@@ -21,7 +21,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 	button { transition: background-color 160ms ease, color 160ms ease, transform 120ms ease, box-shadow 160ms ease }
 	.theme-fade { transition: background-color 240ms ease, color 240ms ease }
 }
-.app header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; background: var(--bg-800); border-bottom:1px solid var(--bg-600); --header-button-gap:12px; flex-wrap:nowrap }
+.app header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; background: var(--bg-800); border-bottom:1px solid var(--bg-600); --header-button-gap:8px; flex-wrap:nowrap }
 .app header h1 { margin:0; font-size:1.1rem; letter-spacing:0.4px }
 .app header button { background: transparent; color: var(--accent); border: 1px solid var(--bg-600); padding:6px 10px; border-radius:8px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; height:36px; box-sizing:border-box }
 .app header button:hover { background: rgba(255,255,255,0.02) }
