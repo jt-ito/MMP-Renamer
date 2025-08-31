@@ -96,6 +96,10 @@ export default function App() {
   const [toasts, setToasts] = useState([])
   const [loadingEnrich, setLoadingEnrich] = useState({})
 
+  // computed: whether a bulk enrich/metadata refresh is in-flight
+  const enrichPendingCount = Object.keys(loadingEnrich || {}).length
+  const globalEnrichPending = metaPhase || enrichPendingCount > 0
+
   // defensive setter wrapper: some runtime bundles or injection can cause the
   // state setter to be unavailable in certain scopes; use this wrapper to
   // avoid uncaught ReferenceError when event handlers run.
@@ -570,6 +574,14 @@ export default function App() {
           <button className='btn-ghost btn-search' onClick={() => doSearch(searchQuery)} disabled={searching}>{searching ? <Spinner/> : 'Search'}</button>
           <button className='btn-ghost btn-clear' onClick={() => doSearch('')} title='Clear search'>Clear</button>
         </div>
+        {/* Global bulk-enrich indicator (shown when many enrich operations are running) */}
+        {globalEnrichPending ? (
+          <div className="bulk-enrich" title="Bulk metadata refresh in progress">
+            <Spinner />
+            <span className="bulk-enrich-label">{metaPhase ? `Refreshing metadata ${metaProgress}%` : `Updating ${enrichPendingCount} item${enrichPendingCount === 1 ? '' : 's'}`}</span>
+          </div>
+        ) : null}
+
         {auth ? (
             <div className="header-actions">
             <button className={"btn-save" + (selectMode ? ' shifted' : '')} onClick={() => triggerScan(libraries[0])}><span>Scan</span></button>

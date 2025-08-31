@@ -44,6 +44,11 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .app header .header-actions .icon-only { transform: translateY(3px); display:inline-flex; align-items:center; justify-content:center }
 .app header .header-actions .icon-only .icon { display:block; margin:0 }
 
+/* Global bulk-enrich indicator shown in header when many enrich operations are running */
+.bulk-enrich { display:inline-flex; align-items:center; gap:8px; margin-right: calc(var(--header-button-gap)); color: var(--muted); font-size:13px }
+.bulk-enrich .bulk-enrich-label { opacity:0.9 }
+.bulk-enrich .icon.spinner { width:18px; height:18px }
+
 .select-approve-wrap { display:flex; align-items:center; gap: var(--header-button-gap) }
 
 .btn-cta { background: var(--accent-cta); color: #021014; border: none; box-shadow: 0 6px 18px rgba(16,24,40,0.08) }
