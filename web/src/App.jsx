@@ -421,7 +421,9 @@ export default function App() {
                 if (!it || !it.canonicalPath) return
                 if (enrichCache && enrichCache[it.canonicalPath]) return
                 const er = await axios.get(API('/enrich'), { params: { path: it.canonicalPath } })
-                if (er.data && er.data.cached) {
+                // Accept server-provided enrichment even when cached=false so we honor
+                // applied/hidden flags and any partial provider tokens for display.
+                if (er.data && (er.data.cached || er.data.enrichment)) {
                   const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
                   setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
                   if (norm && norm.hidden) {
@@ -453,18 +455,18 @@ export default function App() {
       const pollEnrich = async (path) => {
         const maxMs = 5000
         const start = Date.now()
-        while (Date.now() - start < maxMs) {
+            while (Date.now() - start < maxMs) {
           try {
             const er = await axios.get(API('/enrich'), { params: { path } })
-            // If server reports cached=true, use the normalized data and stop polling.
-            if (er.data && er.data.cached) {
+            // If server reports cached=true or returned an enrichment object (possibly incomplete),
+            // use the returned enrichment for UI rendering. If the provider is incomplete, also
+            // POST a forced enrich to start an external lookup.
+            if (er.data && (er.data.cached || er.data.enrichment)) {
               const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
               try { setEnrichCache(prev => ({ ...prev, [path]: norm })) } catch (e) {}
-              return
-            }
-            // If server reports cached=false but returned an enrichment object (incomplete provider),
-            // trigger a forced POST /api/enrich so the server will start an external lookup in background.
-            if (er.data && er.data.enrichment) {
+              // If the server explicitly marked the cache as complete, stop polling now.
+              if (er.data.cached) return
+              // Otherwise, initiate a forced enrich to populate missing provider fields.
               try {
                 await axios.post(API('/enrich'), { path, tmdb_api_key: providerKey || undefined, force: true })
               } catch (e) { /* ignore forced start errors */ }
