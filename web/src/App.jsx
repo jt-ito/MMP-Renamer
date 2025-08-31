@@ -99,6 +99,27 @@ export default function App() {
   // computed: whether a bulk enrich/metadata refresh is in-flight
   const enrichPendingCount = Object.keys(loadingEnrich || {}).length
   const globalEnrichPending = metaPhase || enrichPendingCount > 0
+  // debounce hiding the global indicator to avoid flicker
+  const [visibleGlobalEnrichPending, setVisibleGlobalEnrichPending] = useState(globalEnrichPending)
+  const hideDebounceRef = React.useRef(null)
+
+  React.useEffect(() => {
+    // if pending, show immediately and cancel any pending hide timeout
+    if (globalEnrichPending) {
+      if (hideDebounceRef.current) { clearTimeout(hideDebounceRef.current); hideDebounceRef.current = null }
+      setVisibleGlobalEnrichPending(true)
+      return
+    }
+    // if not pending, schedule hide after 300ms to avoid flicker
+    if (!globalEnrichPending) {
+      if (hideDebounceRef.current) clearTimeout(hideDebounceRef.current)
+      hideDebounceRef.current = setTimeout(() => {
+        setVisibleGlobalEnrichPending(false)
+        hideDebounceRef.current = null
+      }, 300)
+    }
+    return () => { if (hideDebounceRef.current) { clearTimeout(hideDebounceRef.current); hideDebounceRef.current = null } }
+  }, [globalEnrichPending])
 
   // defensive setter wrapper: some runtime bundles or injection can cause the
   // state setter to be unavailable in certain scopes; use this wrapper to
@@ -575,7 +596,7 @@ export default function App() {
           <button className='btn-ghost btn-clear' onClick={() => doSearch('')} title='Clear search'>Clear</button>
         </div>
         {/* Global bulk-enrich indicator (shown when many enrich operations are running) */}
-        {globalEnrichPending ? (
+  {visibleGlobalEnrichPending ? (
           <div className="bulk-enrich" title="Bulk metadata refresh in progress">
             <Spinner />
             <span className="bulk-enrich-label">{metaPhase ? `Refreshing metadata ${metaProgress}%` : `Updating ${enrichPendingCount} item${enrichPendingCount === 1 ? '' : 's'}`}</span>
