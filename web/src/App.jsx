@@ -375,15 +375,58 @@ export default function App() {
   // perform search immediately (used by buttons); live-search handled by debounce effect below
   async function doSearch(q) {
     setSearchQuery(q || '')
+    // clear: restore normal listing (first page)
     if (!q) {
-      setItems([])
-      await handleScrollNearEnd()
-      return
+      try {
+        setItems([])
+        setSearching(false)
+        // fetch first page of items from server-side scan listing
+        if (scanId) {
+          const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: 0, limit: batchSize } })
+          const page = r.data.items || []
+          setItems(page)
+          setTotal((scanMeta && scanMeta.totalCount) || page.length || 0)
+          // warm up enrich for visible items
+          for (const it of page) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+          return
+        }
+      } catch (e) {
+        // fallback to default paging
+        setItems([])
+        await handleScrollNearEnd()
+        return
+      }
     }
-    const r = await searchScan(q, 0, batchSize)
-    setItems(r.items || [])
-    setTotal(r.total || 0)
-    for (const it of r.items || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+
+    // explicit Search button: perform server-side search and ensure each result is enriched
+    try {
+      setSearching(true)
+      const r = await searchScan(q, 0, batchSize)
+      const results = r.items || []
+      setItems(results)
+      setTotal(r.total || 0)
+      // For each matched item, poll server /enrich until cached (or timeout) so UI shows full metadata
+      const pollEnrich = async (path) => {
+        const maxMs = 5000
+        const start = Date.now()
+        while (Date.now() - start < maxMs) {
+          try {
+            const er = await axios.get(API('/enrich'), { params: { path } })
+            if (er.data && er.data.cached) {
+              const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
+              try { setEnrichCache(prev => ({ ...prev, [path]: norm })) } catch (e) {}
+              return
+            }
+          } catch (e) {}
+          // small delay before retry
+          await new Promise(s => setTimeout(s, 400))
+        }
+        // ensure at least one attempt to load client-side cache entry
+        try { enrichOne && enrichOne({ canonicalPath: path }) } catch (e) {}
+      }
+
+      await Promise.all(results.map(it => pollEnrich(it.canonicalPath)))
+    } finally { setSearching(false) }
   }
 
   // Live search: debounce input and cancel previous inflight requests
