@@ -9,7 +9,7 @@ export default function Notifications() {
     <div style={{padding:12}}>
       <h2>Notifications</h2>
       {notes.length === 0 ? <div style={{color:'var(--muted)'}}>No notifications</div> : (
-        <div style={{display:'flex',flexDirection:'column',gap:8}}>
+      <div style={{display:'flex',flexDirection:'column'}}>
           {notes.map(n => (
             <div key={n.id} style={{background:'var(--bg-700)', padding:10, borderRadius:8, border:'1px solid var(--bg-600)'}}>
               <div style={{fontWeight:700}}>{n.title} <span style={{fontSize:12, color:'var(--muted)', marginLeft:8}}>{new Date(n.ts).toLocaleString()}</span></div>

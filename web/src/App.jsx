@@ -553,13 +553,13 @@ export default function App() {
               }}
               title="Approve selected"
               >Approve selected</button>
-              <button className={"btn-ghost" + (selectMode ? ' active' : '')} onClick={() => { setSelectMode(s => { if (s) setSelected({}); return !s }) }} title={selectMode ? 'Exit select mode' : 'Select items'} style={{display:'flex',alignItems:'center',gap:8}}>Select</button>
+              <button className={"btn-ghost" + (selectMode ? ' active' : '')} onClick={() => { setSelectMode(s => { if (s) setSelected({}); return !s }) }} title={selectMode ? 'Exit select mode' : 'Select items'}>Select</button>
             </div>
-            <button className={"btn-ghost" + (!(lastLibraryId || (scanMeta && scanMeta.libraryId)) ? ' disabled' : '')} onClick={rescan} title={!(lastLibraryId || (scanMeta && scanMeta.libraryId)) ? 'No previous scan' : 'Rescan last library'} style={{display:'flex',alignItems:'center',gap:8}} disabled={!(lastLibraryId || (scanMeta && scanMeta.libraryId))}><IconRefresh/> <span>Rescan</span></button>
-            <button className={"btn-ghost" + (!(lastLibraryId || (scanMeta && scanMeta.libraryId)) ? ' disabled' : '')} onClick={async () => { if (!(lastLibraryId || (scanMeta && scanMeta.libraryId))) return; pushToast && pushToast('Refresh','Server-side refresh started'); try { await refreshScan(scanMeta ? scanMeta.id : lastLibraryId); pushToast && pushToast('Refresh','Server-side refresh complete'); } catch (e) { pushToast && pushToast('Refresh','Refresh failed') } }} title="Refresh metadata server-side" style={{display:'flex',alignItems:'center',gap:8}} disabled={!(lastLibraryId || (scanMeta && scanMeta.libraryId))}><IconRefresh/> <span>Refresh metadata</span></button>
+            <button className={"btn-ghost" + (!(lastLibraryId || (scanMeta && scanMeta.libraryId)) ? ' disabled' : '')} onClick={rescan} title={!(lastLibraryId || (scanMeta && scanMeta.libraryId)) ? 'No previous scan' : 'Rescan last library'} disabled={!(lastLibraryId || (scanMeta && scanMeta.libraryId))}><IconRefresh/> <span>Rescan</span></button>
+            <button className={"btn-ghost" + (!(lastLibraryId || (scanMeta && scanMeta.libraryId)) ? ' disabled' : '')} onClick={async () => { if (!(lastLibraryId || (scanMeta && scanMeta.libraryId))) return; pushToast && pushToast('Refresh','Server-side refresh started'); try { await refreshScan(scanMeta ? scanMeta.id : lastLibraryId); pushToast && pushToast('Refresh','Server-side refresh complete'); } catch (e) { pushToast && pushToast('Refresh','Refresh failed') } }} title="Refresh metadata server-side" disabled={!(lastLibraryId || (scanMeta && scanMeta.libraryId))}><IconRefresh/> <span>Refresh metadata</span></button>
             <button className="btn-ghost" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}>Theme: {theme === 'dark' ? 'Dark' : 'Light'}</button>
             <button className="btn-ghost" onClick={() => (window.location.hash = route === '#/settings' ? '#/' : '#/settings')}>Settings</button>
-            <button className="btn-ghost" title="Notifications" onClick={() => (window.location.hash = '#/notifications')} style={{display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <button className="btn-ghost" title="Notifications" onClick={() => (window.location.hash = '#/notifications')}>
               {/* bell icon */}
               <svg className="icon" viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 10-12 0v3.159c0 .538-.214 1.055-.595 1.436L4 17h5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
             </button>
@@ -595,7 +595,7 @@ export default function App() {
             <section className="list">
               {scanMeta ? (
                 (scanning) ? (
-                  <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                  <div style={{display:'flex',flexDirection:'column'}}>
                     <div>Found {total} items. Scanning: {scanLoaded}/{total} ({metaPhase ? metaProgress : scanProgress}%)</div>
                     <div style={{height:12, width:'100%'}}>
                       <div className="progress-bar">
@@ -638,7 +638,7 @@ function LogsPanel({ logs, refresh, pushToast }) {
     <div className="logs">
       <h3>Logs</h3>
       <pre>{logs}</pre>
-      <div style={{display:'flex',gap:8,marginTop:8, alignItems:'center'}}>
+  <div style={{display:'flex',marginTop:8, alignItems:'center'}}>
         <button className="btn-ghost icon-only" onClick={refresh} title="Refresh logs"><IconRefresh/></button>
         <button className="btn-ghost icon-only" onClick={() => { navigator.clipboard?.writeText(logs); pushToast && pushToast('Logs', 'Copied to clipboard') }} title="Copy logs"><IconCopy/></button>
       </div>
