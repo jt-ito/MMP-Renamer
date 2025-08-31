@@ -257,36 +257,36 @@ function metaLookup(title, apiKey, opts = {}) {
       const useTv = (opts && (opts.season != null || opts.episode != null))
       const baseHost = 'api.themoviedb.org'
       const tryOne = (i) => {
-        if (i >= variants.length) return cb(null)
-        const q = encodeURIComponent(variants[i])
-        const searchPath = useTv ? `/3/search/tv?api_key=${encodeURIComponent(apiKey)}&query=${q}` : `/3/search/multi?api_key=${encodeURIComponent(apiKey)}&query=${q}`
-        const req = https.request({ hostname: baseHost, path: searchPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (res) => {
-          let sb = ''
-          res.on('data', d => sb += d)
-          res.on('end', () => {
-            try {
-              const j = JSON.parse(sb || '{}')
-              const hits = j && j.results ? j.results : []
-              appendLog(`META_TMDB_ATTEMPT q=${variants[i]} results=${hits.length} type=${useTv ? 'tv' : 'multi'}`)
-              if (hits && hits.length > 0) {
-                if (opts && opts.year) {
-                  const y = String(opts.year)
-                  const match = hits.find(h => {
-                    const fy = h.first_air_date || h.release_date || h.firstAirDate
-                    if (!fy) return false
-                    try { return String(new Date(fy).getFullYear()) === y } catch (e) { return false }
-                  })
-                  if (match) return fetchTmdbDetails(match, cb)
+          if (i >= variants.length) return cb(null);
+          const q = encodeURIComponent(variants[i]);
+          const searchPath = useTv ? `/3/search/tv?api_key=${encodeURIComponent(apiKey)}&query=${q}` : `/3/search/multi?api_key=${encodeURIComponent(apiKey)}&query=${q}`;
+          const req = https.request({ hostname: baseHost, path: searchPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (res) => {
+            let sb = '';
+            res.on('data', d => sb += d);
+            res.on('end', () => {
+              try {
+                const j = JSON.parse(sb || '{}');
+                const hits = j && j.results ? j.results : [];
+                appendLog(`META_TMDB_ATTEMPT q=${variants[i]} results=${hits.length} type=${useTv ? 'tv' : 'multi'}`);
+                if (hits && hits.length > 0) {
+                  if (opts && opts.year) {
+                    const y = String(opts.year);
+                    const match = hits.find(h => {
+                      const fy = h.first_air_date || h.release_date || h.firstAirDate;
+                      if (!fy) return false;
+                      try { return String(new Date(fy).getFullYear()) === y; } catch (e) { return false; }
+                    });
+                    if (match) return fetchTmdbDetails(match, cb);
+                  }
+                  return fetchTmdbDetails(hits[0], cb);
                 }
-                return fetchTmdbDetails(hits[0], cb)
-              }
-            } catch (e) { /* ignore */ }
-            setImmediate(() => tryOne(i + 1))
-          })
-        })
-        req.on('error', () => setImmediate(() => tryOne(i + 1)))
-        req.on('timeout', () => { req.destroy(); setImmediate(() => tryOne(i + 1)) })
-        req.end()
+              } catch (e) { /* ignore */ }
+              setImmediate(() => tryOne(i + 1));
+            });
+          });
+          req.on('error', () => setImmediate(() => tryOne(i + 1)));
+          req.on('timeout', () => { req.destroy(); setImmediate(() => tryOne(i + 1)); });
+          req.end();
       }
       function fetchTmdbDetails(hit, cb) {
         try {
@@ -366,7 +366,38 @@ function metaLookup(title, apiKey, opts = {}) {
                     } catch (e) { /* ignore */ }
 
                     // Nothing matched: return series-level hit but include specials list for downstream heuristics
-                    return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) })
+                        // attach per-season air date when available before returning
+                        try {
+                          const seasonNum = opts && (opts.season != null) ? opts.season : null
+                          if (seasonNum != null) {
+                            const seasonPath = `/3/tv/${id}/season/${encodeURIComponent(seasonNum)}?api_key=${encodeURIComponent(apiKey)}`
+                            const sreq = https.request({ hostname: baseHost, path: seasonPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (sres) => {
+                              let sb2 = ''
+                              sres.on('data', d => sb2 += d)
+                              sres.on('end', () => {
+                                try {
+                                  const sj = JSON.parse(sb2 || '{}')
+                                  // TMDb season object may include an air_date or episodes[].air_date — pick earliest
+                                  let seasonAir = sj.air_date || null
+                                  try {
+                                    if (!seasonAir && sj.episodes && Array.isArray(sj.episodes) && sj.episodes.length) {
+                                      const dates = sj.episodes.map(e => e && e.air_date).filter(Boolean)
+                                      if (dates.length) seasonAir = dates.sort()[0]
+                                    }
+                                  } catch (e) {}
+                                  const rawWithSeason = Object.assign({}, hit, { specials })
+                                  if (seasonAir) rawWithSeason.seasonAirDate = seasonAir
+                                  return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: rawWithSeason })
+                                } catch (e) { return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) }) }
+                              })
+                            })
+                            sreq.on('error', () => cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) }))
+                            sreq.on('timeout', () => { sreq.destroy(); cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) }) })
+                            sreq.end()
+                            return
+                          }
+                        } catch (e) { /* fallthrough */ }
+                        return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) })
                   })
                 })
                 s0req.on('error', () => cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }))
@@ -379,6 +410,36 @@ function metaLookup(title, apiKey, opts = {}) {
             er.end()
             return
           }
+          // If caller requested season (but not episode), try to attach season air date for accurate season year
+          try {
+            if (mediaType === 'tv' && opts && (opts.season != null) && apiKey) {
+              const seasonNum2 = opts.season
+              const seasonPath2 = `/3/tv/${id}/season/${encodeURIComponent(seasonNum2)}?api_key=${encodeURIComponent(apiKey)}`
+              const sreq2 = https.request({ hostname: baseHost, path: seasonPath2, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (sres2) => {
+                let sb3 = ''
+                sres2.on('data', d => sb3 += d)
+                sres2.on('end', () => {
+                  try {
+                    const sj2 = JSON.parse(sb3 || '{}')
+                    let seasonAir2 = sj2.air_date || null
+                    try {
+                      if (!seasonAir2 && sj2.episodes && Array.isArray(sj2.episodes) && sj2.episodes.length) {
+                        const dates2 = sj2.episodes.map(e => e && e.air_date).filter(Boolean)
+                        if (dates2.length) seasonAir2 = dates2.sort()[0]
+                      }
+                    } catch (e) {}
+                    const rawWithSeason2 = Object.assign({}, hit)
+                    if (seasonAir2) rawWithSeason2.seasonAirDate = seasonAir2
+                    return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: rawWithSeason2 })
+                  } catch (e) { return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }) }
+                })
+              })
+              sreq2.on('error', () => cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }))
+              sreq2.on('timeout', () => { sreq2.destroy(); cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }) })
+              sreq2.end()
+              return
+            }
+          } catch (e) { /* ignore */ }
           return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit })
         } catch (e) { return cb(null) }
       }
@@ -386,10 +447,73 @@ function metaLookup(title, apiKey, opts = {}) {
     }
 
     const variants = makeVariants(title)
-    // TMDb-only: try variants against TMDb and return first match
+    // TMDb: try variants against TMDb and return first match; if TMDb fails, try Kitsu as a fallback
     tryTmdbVariants(variants, (tRes) => {
       if (tRes) return resolve({ name: tRes.name, raw: Object.assign({}, tRes.raw, { id: tRes.id, type: tRes.type || tRes.mediaType || 'tv', source: 'tmdb' }), episode: tRes.episode || null })
-      return resolve(null)
+
+      // Kitsu fallback
+      function tryKitsuVariants(variantsK, cbK) {
+        const baseHostK = 'kitsu.io'
+        const tryOneK = (iK) => {
+          if (iK >= variantsK.length) return cbK(null);
+          const qk = encodeURIComponent(variantsK[iK]);
+          const searchPathK = `/api/edge/anime?filter[text]=${qk}`;
+          const reqK = https.request({ hostname: baseHostK, path: searchPathK, method: 'GET', headers: { 'Accept': 'application/vnd.api+json' }, timeout: 5000 }, (resK) => {
+            let sbk = '';
+            resK.on('data', d => sbk += d);
+            resK.on('end', () => {
+              try {
+                const jk = JSON.parse(sbk || '{}');
+                const hitsK = jk && jk.data ? jk.data : [];
+                appendLog(`META_KITSU_ATTEMPT q=${variantsK[iK]} results=${hitsK.length}`);
+                if (hitsK && hitsK.length > 0) {
+                  const hit = hitsK[0];
+                  const id = hit.id;
+                  const attrs = hit.attributes || {};
+                  const animeTitle = attrs.canonicalTitle || (attrs.titles && (attrs.titles.en || attrs.titles.en_jp)) || attrs.slug || variantsK[iK];
+                  // if episode requested, attempt episode lookup via episodes endpoint
+                  if (opts && opts.episode != null) {
+                    const epNum = String(opts.episode);
+                    const epPath = `/api/edge/episodes?filter[anime]=${encodeURIComponent(id)}&filter[number]=${encodeURIComponent(epNum)}`;
+                    const epReq = https.request({ hostname: baseHostK, path: epPath, method: 'GET', headers: { 'Accept': 'application/vnd.api+json' }, timeout: 5000 }, (epRes) => {
+                      let ebk = '';
+                      epRes.on('data', d => ebk += d);
+                      epRes.on('end', () => {
+                        try {
+                          const ejk = JSON.parse(ebk || '{}');
+                          const epHits = ejk && ejk.data ? ejk.data : [];
+                          if (epHits && epHits.length > 0) {
+                            const ep = epHits[0];
+                            const epAttrs = ep.attributes || {};
+                            return cbK({ provider: 'kitsu', id, type: 'tv', name: animeTitle, raw: Object.assign({}, hit, { episodes: epHits }), episode: { number: epAttrs.number || epAttrs.absoluteNumber || opts.episode, title: epAttrs.canonicalTitle || (epAttrs.titles && (epAttrs.titles.en || epAttrs.titles.en_jp)) || '' } });
+                          }
+                        } catch (e) {}
+                        // no episode match found, return series-level hit
+                        return cbK({ provider: 'kitsu', id, type: 'tv', name: animeTitle, raw: hit, episode: null });
+                      });
+                    });
+                    epReq.on('error', () => { return cbK({ provider: 'kitsu', id, type: 'tv', name: animeTitle, raw: hit, episode: null }); });
+                    epReq.on('timeout', () => { epReq.destroy(); return cbK({ provider: 'kitsu', id, type: 'tv', name: animeTitle, raw: hit, episode: null }); });
+                    epReq.end();
+                    return;
+                  }
+                  return cbK({ provider: 'kitsu', id, type: 'tv', name: animeTitle, raw: hit, episode: null });
+                }
+              } catch (e) { /* ignore */ }
+              setImmediate(() => tryOneK(iK + 1));
+            });
+          });
+          reqK.on('error', () => setImmediate(() => tryOneK(iK + 1)));
+          reqK.on('timeout', () => { reqK.destroy(); setImmediate(() => tryOneK(iK + 1)); });
+          reqK.end();
+        }
+        tryOneK(0)
+      }
+
+      tryKitsuVariants(variants, (kRes) => {
+        if (kRes) return resolve({ name: kRes.name, raw: Object.assign({}, kRes.raw, { id: kRes.id, type: kRes.type || 'tv', source: 'kitsu' }), episode: kRes.episode || null })
+        return resolve(null)
+      })
     })
   })
 }
@@ -525,14 +649,19 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
             if (epTitle) guess.episodeTitle = String(epTitle).trim()
           }
 
-          // Provider block - TMDb only
-          guess.provider = { matched: true, provider: 'tmdb', id: raw.id || null, raw: raw }
+          // Provider block - set provider name based on raw.source (tmdb or kitsu)
+          const providerName = (raw && raw.source) ? String(raw.source).toLowerCase() : 'tmdb'
+          guess.provider = { matched: true, provider: providerName, id: raw.id || null, raw: raw }
 
-          // Back-compat: populate tvdb object with TMDb identifiers/raw
-          guess.tvdb = { matched: true, id: raw.id || null, raw: raw }
+          // Back-compat: populate tvdb object only when provider is TMDb (avoid mislabeling other providers)
+          if (providerName === 'tmdb') {
+            guess.tvdb = { matched: true, id: raw.id || null, raw: raw }
+          } else {
+            guess.tvdb = { matched: false }
+          }
 
-          // Year extraction from common TMDb date fields
-          const dateStr = raw.first_air_date || raw.release_date || raw.firstAirDate || (raw.attributes && (raw.attributes.startDate || raw.attributes.releaseDate))
+          // Year extraction from common TMDb date fields (prefer per-season air date when present)
+          const dateStr = raw.seasonAirDate || raw.first_air_date || raw.release_date || raw.firstAirDate || (raw.attributes && (raw.attributes.startDate || raw.attributes.releaseDate))
           if (dateStr) {
             const y = new Date(String(dateStr)).getFullYear()
             if (!isNaN(y)) guess.year = String(y)
@@ -793,15 +922,17 @@ app.post('/api/scan', async (req, res) => {
               .replace('{episode}', data.episode != null ? String(data.episode) : '')
               .replace('{episodeRange}', data.episodeRange || '')
               .replace('{tvdbId}', (data.tvdb && data.tvdb.raw && (data.tvdb.raw.id || data.tvdb.raw.seriesId)) ? String(data.tvdb.raw.id || data.tvdb.raw.seriesId) : '')
-            const providerRendered = String(nameWithoutExtRaw)
+            let providerRendered = String(nameWithoutExtRaw)
               .replace(/\s*\(\s*\)\s*/g, '')
               .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
               .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
               .replace(/\s{2,}/g, ' ')
               .trim();
+            // ...existing code...
             // write into enrich cache: add provider block and keep parsed block intact
             try {
               const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title }
+              try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
               enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
             } catch (e) {
               enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, data, { providerRenderedName: providerRendered, sourceId: 'provider', cachedAt: Date.now() }));
@@ -1018,26 +1149,29 @@ app.post('/api/enrich', async (req, res) => {
       let epLabel = '';
       if (data.episodeRange) epLabel = data.season != null ? `S${pad(data.season)}E${data.episodeRange}` : `E${data.episodeRange}`
       else if (data.episode != null) epLabel = data.season != null ? `S${pad(data.season)}E${pad(data.episode)}` : `E${pad(data.episode)}`
-      const titleToken = cleanTitleForRender(rawTitle, epLabel, data.episodeTitle || '');
+  // determine fallback episodeTitle: prefer parsedCache, otherwise guess from filename
+  const titleToken = cleanTitleForRender(rawTitle, epLabel, data.episodeTitle || '');
       const nameWithoutExtRaw = String(baseNameTemplate)
         .replace('{title}', sanitize(titleToken))
         .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
         .replace('{year}', yearToken || '')
         .replace('{epLabel}', sanitize(epLabel))
-        .replace('{episodeTitle}', sanitize(data.episodeTitle || ''))
+  .replace('{episodeTitle}', sanitize(data.episodeTitle || ''))
         .replace('{season}', data.season != null ? String(data.season) : '')
         .replace('{episode}', data.episode != null ? String(data.episode) : '')
         .replace('{episodeRange}', data.episodeRange || '')
         .replace('{tvdbId}', (data.tvdb && data.tvdb.raw && (data.tvdb.raw.id || data.tvdb.raw.seriesId)) ? String(data.tvdb.raw.id || data.tvdb.raw.seriesId) : '')
-      const providerRendered = String(nameWithoutExtRaw)
+      let providerRendered = String(nameWithoutExtRaw)
         .replace(/\s*\(\s*\)\s*/g, '')
         .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
         .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
         .replace(/\s{2,}/g, ' ')
         .trim();
+  // ...existing code...
       // attach normalized provider block
-      const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
-      enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+  const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
+  try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
+  enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
     } catch (e) {
       enrichCache[key] = { ...data, cachedAt: Date.now() };
     }
@@ -1126,13 +1260,15 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
             .replace('{episode}', data.episode != null ? String(data.episode) : '')
             .replace('{episodeRange}', data.episodeRange || '')
             .replace('{tvdbId}', (data.tvdb && data.tvdb.raw && (data.tvdb.raw.id || data.tvdb.raw.seriesId)) ? String(data.tvdb.raw.id || data.tvdb.raw.seriesId) : '')
-          const providerRendered = String(nameWithoutExtRaw)
+          let providerRendered = String(nameWithoutExtRaw)
             .replace(/\s*\(\s*\)\s*/g, '')
             .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
             .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
             .replace(/\s{2,}/g, ' ')
             .trim();
+          // ...existing code...
           const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
+          try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
           enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
         } else {
           enrichCache[key] = { ...data, cachedAt: Date.now() };
@@ -1268,6 +1404,24 @@ function cleanTitleForRender(t, epLabel, epTitle) {
   } catch (e) { /* best-effort */ }
   return s || String(t).trim();
 }
+
+// Optional: log when provider returned season/episode but no episodeTitle (helps debug TMDb)
+function logMissingEpisodeTitleIfNeeded(key, providerBlock) {
+  try {
+    if (!providerBlock) return;
+    const hasEp = (providerBlock.episode != null);
+    const hasSeason = (providerBlock.season != null);
+    const hasTitle = providerBlock.episodeTitle && String(providerBlock.episodeTitle).trim();
+    const enabled = Boolean(process.env.LOG_MISSING_EPISODE_TITLE) || (serverSettings && serverSettings.log_missing_episode_title);
+    if (enabled && hasEp && (hasSeason || true) && !hasTitle) {
+      try {
+        appendLog(`MISSING_EP_TITLE path=${key} providerTitle=${providerBlock.title || ''} season=${providerBlock.season || ''} episode=${providerBlock.episode || ''}`)
+      } catch (e) {}
+    }
+  } catch (e) { /* best-effort */ }
+}
+
+// ...existing code...
 
 function extractYear(meta, fromPath) {
   if (!meta) meta = {};

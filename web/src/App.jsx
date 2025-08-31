@@ -143,6 +143,57 @@ export default function App() {
   const scanOptionsRef = React.useRef({})
   const batchSize = 12
 
+  // Helper: consider an enrichment entry hidden for UI purposes if hidden or applied
+  function isHiddenOrApplied(enriched) {
+    return enriched && (enriched.hidden === true || enriched.applied === true)
+  }
+
+  // Merge arrays of items (objects with canonicalPath) into a deduped list.
+  // If prepend=true, newItems are placed before prev; otherwise appended after prev.
+  function mergeItemsUnique(prev = [], newItems = [], prepend = false) {
+    try {
+      const seen = new Set()
+      const out = []
+      if (prepend) {
+        for (const it of (newItems || [])) {
+          if (!it || !it.canonicalPath) continue
+          if (seen.has(it.canonicalPath)) continue
+          // skip items that are hidden/applied in client cache
+          const e = enrichCache && enrichCache[it.canonicalPath]
+          if (isHiddenOrApplied(e)) continue
+          seen.add(it.canonicalPath)
+          out.push(it)
+        }
+        for (const it of (prev || [])) {
+          if (!it || !it.canonicalPath) continue
+          if (seen.has(it.canonicalPath)) continue
+          const e = enrichCache && enrichCache[it.canonicalPath]
+          if (isHiddenOrApplied(e)) continue
+          seen.add(it.canonicalPath)
+          out.push(it)
+        }
+      } else {
+        for (const it of (prev || [])) {
+          if (!it || !it.canonicalPath) continue
+          if (seen.has(it.canonicalPath)) continue
+          const e = enrichCache && enrichCache[it.canonicalPath]
+          if (isHiddenOrApplied(e)) continue
+          seen.add(it.canonicalPath)
+          out.push(it)
+        }
+        for (const it of (newItems || [])) {
+          if (!it || !it.canonicalPath) continue
+          if (seen.has(it.canonicalPath)) continue
+          const e = enrichCache && enrichCache[it.canonicalPath]
+          if (isHiddenOrApplied(e)) continue
+          seen.add(it.canonicalPath)
+          out.push(it)
+        }
+      }
+      return out
+    } catch (e) { return prev || [] }
+  }
+
   
 
   function pushToast(title, message){
@@ -250,15 +301,11 @@ export default function App() {
           if (er.data && er.data.cached) {
                 const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
                 setEnrichCache(prev => ({ ...prev, [p]: enriched }))
-                if (enriched && enriched.hidden) {
+                if (enriched && (enriched.hidden || enriched.applied)) {
                   setItems(prev => prev.filter(it => it.canonicalPath !== p))
                 } else {
-                  setItems(prev => {
-                    try {
-                      if (prev.find(x => x.canonicalPath === p)) return prev
-                      return [{ id: p, canonicalPath: p }, ...prev]
-                    } catch (e) { return prev }
-                  })
+                  // prepend in deduped fashion and skip any hidden/applied
+                  setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
                 }
               }
             } catch (e) {}
@@ -384,10 +431,10 @@ export default function App() {
     let r
     if (searchQuery && searchQuery.length > 0) {
       r = await searchScan(searchQuery, nextOffset, batchSize)
-      setItems(prev => [...prev, ...(r.items || [])])
+      setItems(prev => mergeItemsUnique(prev, r.items || [], false))
     } else {
       r = await axios.get(API(`/scan/${scanId}/items?offset=${nextOffset}&limit=${batchSize}`))
-      setItems(prev => [...prev, ...r.data.items])
+      setItems(prev => mergeItemsUnique(prev, r.data.items || [], false))
     }
     const forceEnrich = scanOptionsRef.current && scanOptionsRef.current.forceEnrich === true
     for (const it of r.data.items) {
@@ -408,7 +455,7 @@ export default function App() {
         // fetch first page of items from server-side scan listing
         if (scanId) {
           const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: 0, limit: batchSize } })
-          const page = r.data.items || []
+          const page = (r.data.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
           setItems(page)
           setTotal((scanMeta && scanMeta.totalCount) || page.length || 0)
           // Warm-up client cache only by GETting any server-cached enrichment.
@@ -426,8 +473,8 @@ export default function App() {
                 if (er.data && (er.data.cached || er.data.enrichment)) {
                   const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
                   setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
-                  if (norm && norm.hidden) {
-                    // remove hidden/applied items from visible list
+                  if (norm && (norm.hidden || norm.applied)) {
+                    // remove hidden or applied items from visible list
                     setItems(prev => prev.filter(x => x.canonicalPath !== it.canonicalPath))
                   }
                 }
@@ -448,8 +495,8 @@ export default function App() {
     try {
       setSearching(true)
       const r = await searchScan(q, 0, batchSize)
-      const results = r.items || []
-      setItems(results)
+  const results = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+  setItems(results)
       setTotal(r.total || 0)
       // For each matched item, poll server /enrich until cached (or timeout) so UI shows full metadata
       const pollEnrich = async (path) => {
@@ -499,10 +546,11 @@ export default function App() {
     searchTimeoutRef.current = setTimeout(async () => {
       try {
         // perform search with cancellation via searchScan
-        const r = await searchScan(searchQuery, 0, batchSize)
-        setItems(r.items || [])
-        setTotal(r.total || 0)
-        for (const it of r.items || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+  const r = await searchScan(searchQuery, 0, batchSize)
+  const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+  setItems(filtered)
+  setTotal(r.total || 0)
+  for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
       } catch (e) {}
     }, 300)
     return () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current) }
@@ -527,18 +575,11 @@ export default function App() {
           const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
           setEnrichCache(prev => ({ ...prev, [p]: enriched }))
           // if the item is now hidden/applied remove it from visible items
-          if (enriched && enriched.hidden) {
+          if (enriched && (enriched.hidden || enriched.applied)) {
             setItems(prev => prev.filter(it => it.canonicalPath !== p))
           } else {
-            // item is unhidden (unapproved) -> ensure it's visible in the list
-            setItems(prev => {
-              try {
-                // if already present, leave as-is
-                if (prev.find(x => x.canonicalPath === p)) return prev
-                // otherwise, prepend to the list for visibility
-                return [{ id: p, canonicalPath: p }, ...prev]
-              } catch (e) { return prev }
-            })
+            // item is unhidden (unapproved) -> ensure it's visible in the list (deduped)
+            setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
           }
         }
       } catch (e) {}
