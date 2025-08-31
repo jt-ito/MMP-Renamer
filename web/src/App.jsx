@@ -531,7 +531,7 @@ export default function App() {
             <div className="header-actions">
             <button className={"btn-save" + (selectMode ? ' shifted' : '')} onClick={() => triggerScan(libraries[0])}><span>Scan</span></button>
             {/* Select + Approve wrapper: Approve is absolutely positioned so it doesn't reserve space when hidden */}
-            <div className="select-approve-wrap" style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+            <div className="select-approve-wrap">
               <button
                 className={"btn-save approve-button" + ((selectMode && Object.keys(selected).length) ? ' visible' : '')}
                 aria-hidden={!(selectMode && Object.keys(selected).length)}

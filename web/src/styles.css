@@ -99,11 +99,11 @@ select.form-input:focus {
 .btn-save.shifted { margin-right: 8px; transition: margin 220ms ease }
 
 /* Approve selected fades in and participates in layout so other buttons can wrap beneath it */
-.approve-button { transition: opacity 220ms ease, transform 220ms ease, max-height 220ms ease; opacity: 0; transform: translateY(-6px); max-height:0; overflow:hidden; display: none; align-items:center }
-.approve-button.visible { display: inline-flex; opacity: 1; transform: translateY(0); max-height:80px; pointer-events: auto }
+.approve-button { transition: opacity 220ms ease, transform 220ms ease, max-height 220ms ease; opacity: 0; transform: translateY(-6px); max-height:0; overflow:hidden; display: none !important; align-items:center; pointer-events: none; width: 0; padding: 0; margin: 0; border: 0 }
+.approve-button.visible { display: inline-flex !important; opacity: 1; transform: translateY(0); max-height:80px; pointer-events: auto; width: auto; padding: 10px 14px }
 .btn-save.disabled { opacity: 0.6; pointer-events: none }
 
-.select-approve-wrap { position: static; display:inline-flex; align-items:center }
+.select-approve-wrap { position: static; display:inline-flex; align-items:center; min-width: 0 }
 
 /* Allow header to wrap and controls to flow only when select mode is active so the approve button can appear
 	without reserving width in the normal state. In select mode the search shrinks and controls may wrap. */
