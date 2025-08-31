@@ -411,8 +411,27 @@ export default function App() {
           const page = r.data.items || []
           setItems(page)
           setTotal((scanMeta && scanMeta.totalCount) || page.length || 0)
-          // warm up enrich for visible items
-          for (const it of page) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+          // Warm-up client cache only by GETting any server-cached enrichment.
+          // Do NOT call enrichOne or POST to /enrich here — that can trigger
+          // server-side provider refresh which may unintentionally unhide
+          // already-approved items. Only hydrate from server cache if present.
+          try {
+            await Promise.all((page || []).map(async it => {
+              try {
+                if (!it || !it.canonicalPath) return
+                if (enrichCache && enrichCache[it.canonicalPath]) return
+                const er = await axios.get(API('/enrich'), { params: { path: it.canonicalPath } })
+                if (er.data && er.data.cached) {
+                  const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
+                  setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
+                  if (norm && norm.hidden) {
+                    // remove hidden/applied items from visible list
+                    setItems(prev => prev.filter(x => x.canonicalPath !== it.canonicalPath))
+                  }
+                }
+              } catch (e) { /* ignore per-item failures */ }
+            }))
+          } catch (e) { /* ignore overall warm-up failures */ }
           return
         }
       } catch (e) {
