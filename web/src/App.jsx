@@ -524,8 +524,8 @@ export default function App() {
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
           />
-          <button className='btn-ghost' onClick={() => doSearch(searchQuery)} disabled={searching}>{searching ? <Spinner/> : 'Search'}</button>
-          <button className='btn-ghost' onClick={() => doSearch('')} title='Clear search'>Clear</button>
+          <button className='btn-ghost btn-search' onClick={() => doSearch(searchQuery)} disabled={searching}>{searching ? <Spinner/> : 'Search'}</button>
+          <button className='btn-ghost btn-clear' onClick={() => doSearch('')} title='Clear search'>Clear</button>
         </div>
         {auth ? (
             <div className="header-actions">

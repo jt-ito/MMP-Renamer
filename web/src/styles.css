@@ -11,6 +11,7 @@
  	--accent-cta-2: #60A5FA; /* blue accent (kept for variety) */
 	--hunter-green: #355E3B; /* hunter green for Save actions */
  	--radius: 10px;
+	--danger-dark: #8B1E1E; /* dark modern red for clear button */
 }
 
 body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 0; background: var(--bg-900); color: var(--accent); -webkit-font-smoothing:antialiased }
@@ -48,6 +49,14 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .btn-cta { background: var(--accent-cta); color: #021014; border: none; box-shadow: 0 6px 18px rgba(16,24,40,0.08) }
 .btn-ghost { background: transparent; border: 1px solid var(--bg-600); color: var(--accent); display:inline-flex; align-items:center; justify-content:center }
 .btn-ghost:hover { background: rgba(255,255,255,0.02) }
+
+/* Search button uses hunter-green to match Settings save action */
+.btn-search { background: var(--hunter-green); color: #fff; border: none }
+.btn-search:hover { filter: brightness(0.95) }
+
+/* Clear button uses a dark red tone */
+.btn-clear { background: var(--danger-dark); color: #fff; border: none }
+.btn-clear:hover { filter: brightness(0.95) }
 
 /* Form and page centering utilities */
 .centered-page { display:flex; align-items:center; justify-content:center; min-height: calc(100vh - 120px); padding:20px }
