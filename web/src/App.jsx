@@ -695,26 +695,29 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
           </div>
         </div>
   <div className="actions">
-            <button title="Apply rename for this item" className="btn-save icon-btn" disabled={loading} onClick={async () => {
+      <button title="Apply rename for this item" className="btn-save icon-btn" disabled={loading} onClick={async () => {
               if (!it) return
               try {
                 safeSetLoadingEnrich(prev => ({ ...prev, [it.canonicalPath]: true }))
                 // Do not pass a hardcoded template here so the user's configured template is used
                 const plans = await previewRename([it])
                 pushToast && pushToast('Preview ready', 'Rename plan generated — applying now')
-                const res = await applyRename(plans)
+        let successShown = false
+        const res = await applyRename(plans)
                 // interpret server results (array of per-plan results)
                 try {
                   const first = (Array.isArray(res) && res.length) ? res[0] : null
                   const status = first && (first.status || first.result || '')
                   if (status === 'hardlinked' || status === 'copied' || status === 'moved' || status === 'exists' || status === 'dryrun' || status === 'noop') {
                     const kind = (status === 'copied') ? 'Copied (fallback)' : (status === 'hardlinked' ? 'Hardlinked' : (status === 'moved' ? 'Moved' : (status === 'exists' ? 'Exists' : (status === 'dryrun' ? 'Dry run' : 'No-op'))))
-                    pushToast && pushToast('Apply', `${kind}: ${first.to || first.path || ''}`)
+          pushToast && pushToast('Apply', `${kind}: ${first.to || first.path || ''}`)
+          successShown = true
                   } else if (first && first.status === 'error') {
                     pushToast && pushToast('Apply', `Failed: ${first.error || 'unknown error'}`)
                   } else {
                     // fallback display
                     pushToast && pushToast('Apply result', JSON.stringify(res))
+          successShown = true
                   }
                 } catch (e) {
                   pushToast && pushToast('Apply result', JSON.stringify(res))
@@ -722,7 +725,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 // refresh enrichment for this item (server marks source hidden) — do this best-effort in background
                 refreshEnrichForPaths([it.canonicalPath]).catch(()=>{})
               } catch (e) {
-                pushToast && pushToast('Apply', 'Apply failed')
+        // Only show failure toast if we did not already show a success message
+        try { if (!successShown) pushToast && pushToast('Apply', `Apply failed: ${e && e.message ? e.message : String(e)}`) } catch (ee) { /* swallow */ }
               } finally {
                 safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[it.canonicalPath]; return n })
               }
