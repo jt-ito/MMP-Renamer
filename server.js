@@ -764,7 +764,8 @@ app.post('/api/scan', async (req, res) => {
           const key = canonicalize(it.canonicalPath);
           // skip if we already have authoritative provider data cached
           const existing = enrichCache[key] || null;
-          if (existing && existing.provider && existing.provider.matched) continue;
+          // skip only if provider match is present and has a renderedName (complete)
+          if (existing && existing.provider && existing.provider.matched && existing.provider.renderedName) continue;
           const data = await externalEnrich(key, tvdbKey, { username: req.session && req.session.username });
           if (!data) continue;
           // compute provider-rendered name using effective template
@@ -947,7 +948,11 @@ app.post('/api/enrich', async (req, res) => {
   appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'}`);
   try {
     // prefer existing enrichment when present and not forcing
-    if (!force && enrichCache[key] && enrichCache[key].provider && enrichCache[key].provider.matched) {
+    // Only short-circuit to cached provider if it appears to be a complete provider hit
+    // (i.e. provider.matched and provider.renderedName present). If cached provider
+    // data exists but lacks a renderedName (or is otherwise incomplete), allow an
+    // external lookup so rescans/background refreshes can populate missing fields.
+    if (!force && enrichCache[key] && enrichCache[key].provider && enrichCache[key].provider.matched && enrichCache[key].provider.renderedName) {
       return res.json({ enrichment: enrichCache[key] });
     }
     // Resolve an effective provider key early so we can decide whether to short-circuit to parsed-only
@@ -1069,7 +1074,8 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
       // If we already have a provider match from TMDb, skip external API hit and keep cached values
       const existing = enrichCache[key] || null
       let data = null
-      if (existing && existing.provider && existing.provider.matched && existing.provider.provider === 'tmdb') {
+      // If cached provider is already authoritative and fully-rendered, reuse it
+      if (existing && existing.provider && existing.provider.matched && existing.provider.renderedName && existing.provider.provider === 'tmdb') {
         data = existing
       } else {
         data = await externalEnrich(key, tvdbKey, { username });
