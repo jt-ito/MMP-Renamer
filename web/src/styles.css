@@ -28,7 +28,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .app header button:active { transform: translateY(1px) }
 
 /* Header search box styling: match theme and shrink responsively */
-.header-search { display:flex; align-items:center; gap: var(--header-button-gap); flex: 2 1 auto; margin-left: var(--header-button-gap); margin-right: 0; min-width:220px }
+.header-search { display:flex; align-items:center; gap: var(--header-button-gap); flex: 2 1 auto; margin-left: var(--header-button-gap); margin-right: var(--header-button-gap); min-width:220px }
 .header-search .form-input { height:36px; padding:6px 10px; border-radius:10px; border:1px solid var(--bg-600); background:var(--bg-700); color:var(--accent); min-width:220px; box-sizing:border-box; flex: 1 1 auto; width: auto }
 .header-search .btn-ghost { height:36px }
 .header-search .form-input:focus { outline: 2px solid rgba(96,165,250,0.12); outline-offset:2px }
@@ -104,6 +104,11 @@ select.form-input:focus {
 .btn-save.disabled { opacity: 0.6; pointer-events: none }
 
 .select-approve-wrap { position: static; display:inline-flex; align-items:center }
+
+/* Allow header to wrap and controls to flow only when select mode is active so the approve button can appear
+	without reserving width in the normal state. In select mode the search shrinks and controls may wrap. */
+.app.select-mode-shrink header { flex-wrap: wrap; align-items: center }
+.app.select-mode-shrink .header-search .form-input { width: 160px; max-width: 40vw }
 
 /* Make all settings/page buttons slightly more rounded to match modern look */
 .btn-ghost, .btn-cta, button { border-radius:12px }
