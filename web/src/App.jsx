@@ -533,8 +533,8 @@ export default function App() {
             {/* Select + Approve wrapper: Approve is absolutely positioned so it doesn't reserve space when hidden */}
             <div className="select-approve-wrap" style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
               <button
-                className={"btn-save approve-button" + (selectMode ? (Object.keys(selected).length ? ' visible' : ' disabled visible') : '')}
-                aria-hidden={!selectMode}
+                className={"btn-save approve-button" + ((selectMode && Object.keys(selected).length) ? ' visible' : '')}
+                aria-hidden={!(selectMode && Object.keys(selected).length)}
                 onClick={async () => {
                 try {
                   const selectedPaths = Object.keys(selected).filter(Boolean)
