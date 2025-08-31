@@ -517,13 +517,12 @@ export default function App() {
       <header>
         <h1 style={{cursor:'pointer'}} onClick={() => (window.location.hash = '#/')} title="Go to dashboard">MMP Renamer</h1>
   {/* Header search: placed between title and header actions so it doesn't overlap buttons */}
-  <div className="header-search" style={{ marginLeft: 'var(--header-button-gap)', marginRight: 'var(--header-button-gap)', display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+  <div className="header-search">
           <input
             className="form-input"
             placeholder="Search files (server-side)"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            style={{ height: 36, padding: '6px 10px', borderRadius: 10, minWidth: 140, width: selectMode ? 200 : 320, maxWidth: '42vw', boxSizing: 'border-box' }}
           />
           <button className='btn-ghost' onClick={() => doSearch(searchQuery)} disabled={searching}>{searching ? <Spinner/> : 'Search'}</button>
           <button className='btn-ghost' onClick={() => doSearch('')} title='Clear search'>Clear</button>

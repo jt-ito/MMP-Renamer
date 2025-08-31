@@ -21,16 +21,16 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 	button { transition: background-color 160ms ease, color 160ms ease, transform 120ms ease, box-shadow 160ms ease }
 	.theme-fade { transition: background-color 240ms ease, color 240ms ease }
 }
-.app header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; background: var(--bg-800); border-bottom:1px solid var(--bg-600); --header-button-gap:12px }
+.app header { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; background: var(--bg-800); border-bottom:1px solid var(--bg-600); --header-button-gap:12px; flex-wrap:nowrap }
 .app header h1 { margin:0; font-size:1.1rem; letter-spacing:0.4px }
 .app header button { background: transparent; color: var(--accent); border: 1px solid var(--bg-600); padding:6px 10px; border-radius:8px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; height:36px; box-sizing:border-box }
 .app header button:hover { background: rgba(255,255,255,0.02) }
 .app header button:active { transform: translateY(1px) }
 
 /* Header search box styling: match theme and shrink responsively */
-.header-search { display:flex; align-items:center; gap:8px; flex:1 }
-.header-search .form-input { height:36px; padding:6px 10px; border-radius:10px; border:1px solid var(--bg-600); background:var(--bg-700); color:var(--accent); min-width:140px; width:100%; max-width:100% }
-.header-search .btn-ghost { height:36px; margin-left: var(--header-button-gap) }
+.header-search { display:flex; align-items:center; gap:8px; flex: 1 1 auto; margin-left: var(--header-button-gap); margin-right: var(--header-button-gap); min-width:140px }
+.header-search .form-input { height:36px; padding:6px 10px; border-radius:10px; border:1px solid var(--bg-600); background:var(--bg-700); color:var(--accent); min-width:140px; box-sizing:border-box; flex: 1 1 auto; width: auto }
+.header-search .btn-ghost { height:36px }
 .header-search .form-input:focus { outline: 2px solid rgba(96,165,250,0.12); outline-offset:2px }
 
 /* When select mode is active, the Scan button shifts left — allow the header search to shrink */
@@ -39,9 +39,12 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 
 /* Ensure header icon-only buttons are visually centered with text buttons */
 .app header { line-height: 1 }
-.app header .header-actions { display:flex; align-items:center; gap:6px }
+.app header .header-actions { display:flex; align-items:center }
+.app header .header-actions > * + * { margin-left: var(--header-button-gap) }
 .app header .header-actions .icon-only { transform: translateY(3px); display:inline-flex; align-items:center; justify-content:center }
 .app header .header-actions .icon-only .icon { display:block; margin:0 }
+
+.select-approve-wrap > * + * { margin-left: var(--header-button-gap) }
 
 .btn-cta { background: var(--accent-cta); color: #021014; border: none; box-shadow: 0 6px 18px rgba(16,24,40,0.08) }
 .btn-ghost { background: transparent; border: 1px solid var(--bg-600); color: var(--accent); display:inline-flex; align-items:center; justify-content:center }
@@ -97,10 +100,8 @@ select.form-input:focus {
 .btn-save.shifted { margin-right: 8px; transition: margin 220ms ease }
 
 /* Approve selected fades in and participates in layout so other buttons can wrap beneath it */
-.approve-button { transition: opacity 220ms ease, transform 220ms ease, max-height 220ms ease; opacity: 0; transform: translateY(-6px); max-height:0; overflow:hidden; display:inline-flex; align-items:center }
-.approve-button.visible { opacity: 1; transform: translateY(0); max-height:80px }
-.approve-button { pointer-events: none }
-.approve-button.visible { pointer-events: auto }
+.approve-button { transition: opacity 220ms ease, transform 220ms ease, max-height 220ms ease; opacity: 0; transform: translateY(-6px); max-height:0; overflow:hidden; display: none; align-items:center }
+.approve-button.visible { display: inline-flex; opacity: 1; transform: translateY(0); max-height:80px; pointer-events: auto }
 .btn-save.disabled { opacity: 0.6; pointer-events: none }
 
 .select-approve-wrap { position: static; display:inline-flex; align-items:center }
