@@ -449,8 +449,8 @@ export default function App() {
         // ignore and continue to POST
       }
 
-      // POST to /enrich to generate/update enrichment (force bypasses cache check)
-  const w = await axios.post(API('/enrich'), { path: key, tmdb_api_key: providerKey || undefined })
+    // POST to /enrich to generate/update enrichment (force bypasses cache check)
+  const w = await axios.post(API('/enrich'), { path: key, tmdb_api_key: providerKey || undefined, force: force || undefined })
       if (w.data) {
         const norm = normalizeEnrichResponse(w.data.enrichment || w.data)
         if (norm) setEnrichCache(prev => ({ ...prev, [key]: norm }))
