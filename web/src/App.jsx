@@ -151,6 +151,31 @@ export default function App() {
     return enriched && (enriched.hidden === true || enriched.applied === true)
   }
 
+  // Verify cached enrich entries actually exist on disk/server. If server reports missing
+  // for a cached path, remove it from local cache and visible items to avoid showing stale rows.
+  async function verifyCachePaths(paths = null) {
+    try {
+      const keys = paths && Array.isArray(paths) && paths.length ? paths : Object.keys(enrichCache || {})
+      if (!keys || !keys.length) return
+      const batch = 8
+      for (let i = 0; i < keys.length; i += batch) {
+        const chunk = keys.slice(i, i + batch)
+        const res = await Promise.all(chunk.map(p => axios.get(API('/enrich'), { params: { path: p } }).catch(e => ({ data: null }))))
+        for (let j = 0; j < chunk.length; j++) {
+          const p = chunk[j]
+          const r = res[j]
+          try {
+            if (r && r.data && r.data.missing) {
+              // remove stale cache entry and remove from visible items
+              setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
+              setItems(prev => prev.filter(it => it.canonicalPath !== p))
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (e) { /* best-effort */ }
+  }
+
   // Merge arrays of items (objects with canonicalPath) into a deduped list.
   // If prepend=true, newItems are placed before prev; otherwise appended after prev.
   function mergeItemsUnique(prev = [], newItems = [], prepend = false) {
@@ -221,6 +246,9 @@ export default function App() {
   }
 
   useEffect(() => { axios.get(API('/libraries')).then(r => setLibraries(r.data)).catch(()=>{}) }, [])
+
+  // On mount, verify cached paths to remove any stale entries from previous runs
+  useEffect(() => { verifyCachePaths().catch(()=>{}) }, [])
 
   // check auth status on load (prevents deep-link bypass)
   useEffect(() => {
@@ -386,6 +414,8 @@ export default function App() {
           pushToast && pushToast('Rescan', 'Provider refresh failed')
         }
       }
+  // After rescan and optional refresh, verify cache entries exist and purge missing
+  try { await verifyCachePaths(); } catch (e) {}
     } catch (e) {
       pushToast && pushToast('Rescan', 'Rescan failed')
     }
