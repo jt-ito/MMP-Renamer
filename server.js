@@ -1468,7 +1468,7 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
         // Determine if this plan explicitly requested a hardlink (preview sets actions: [{op:'hardlink'}])
         const requestedHardlink = (p.actions && Array.isArray(p.actions) && p.actions[0] && p.actions[0].op === 'hardlink') || false
         const targetUnderConfiguredOut = configuredOut && toResolved.startsWith(path.resolve(configuredOut))
-        if (requestedHardlink || targetUnderConfiguredOut) {
+  if (requestedHardlink || targetUnderConfiguredOut) {
           // create directories and attempt to create a hard link; do NOT move the original file
           try {
             // Re-render filename from enrichment and template if available to ensure TMDb-based names are used
@@ -1567,26 +1567,47 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               // fallback to original toResolved
               var effectiveToResolved = toResolved;
             }
+            // helper: ensure source and destination live on the same filesystem/device
+            function nearestExistingParent(dir) {
+              let cur = dir;
+              try {
+                while (cur && !fs.existsSync(cur)) {
+                  const parent = path.dirname(cur);
+                  if (!parent || parent === cur) break;
+                  cur = parent;
+                }
+              } catch (e) { cur = null }
+              return cur && fs.existsSync(cur) ? cur : null;
+            }
+            function assertSameDevice(srcPath, destPath) {
+              try {
+                const srcStat = fs.statSync(srcPath);
+                const destParent = nearestExistingParent(path.dirname(destPath));
+                if (!destParent) return true; // cannot determine, allow attempt
+                const destStat = fs.statSync(destParent);
+                if (typeof srcStat.dev !== 'undefined' && typeof destStat.dev !== 'undefined') {
+                  return srcStat.dev === destStat.dev;
+                }
+                return true;
+              } catch (e) { return true }
+            }
+
             if (!fs.existsSync(effectiveToResolved)) {
+              // fail early if cross-device (hardlinks won't work across mounts)
+              if (!assertSameDevice(from, effectiveToResolved)) {
+                appendLog(`HARDLINK_CROSS_DEVICE from=${from} to=${effectiveToResolved}`);
+                const err = new Error('Cross-device link not supported: source and target are on different filesystems');
+                throw err;
+              }
               try {
                 fs.linkSync(from, effectiveToResolved);
                 resultsItem.status = 'hardlinked';
                 resultsItem.to = effectiveToResolved;
                 appendLog(`HARDLINK_OK from=${from} to=${effectiveToResolved}`);
               } catch (linkErr) {
-                // If hardlinking fails (different device or unsupported), fallback to copying the file so original is preserved
-                try {
-                  fs.copyFileSync(from, effectiveToResolved);
-                  // Treat copy fallback as success (file preserved at destination).
-                  resultsItem.status = 'copied';
-                  resultsItem.to = effectiveToResolved;
-                  // Log original link error and that copy fallback succeeded so it's clear in logs
-                  appendLog(`HARDLINK_FALLBACK_COPY_OK from=${from} to=${effectiveToResolved} linkErr=${linkErr.message}`);
-                } catch (copyErr) {
-                  // both hardlink and copy failed
-                  appendLog(`HARDLINK_AND_COPY_FAIL from=${from} to=${effectiveToResolved} linkErr=${linkErr.message} copyErr=${copyErr.message}`);
-                  throw copyErr
-                }
+                // Do NOT fallback to copy. Hardlink must succeed or the operation fails.
+                appendLog(`HARDLINK_FAIL from=${from} to=${effectiveToResolved} linkErr=${linkErr && linkErr.message ? linkErr.message : String(linkErr)}`);
+                throw linkErr;
               }
             } else {
               // target already exists
@@ -1637,21 +1658,40 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
             const toDir2 = path.dirname(to);
             if (!fs.existsSync(toDir2)) fs.mkdirSync(toDir2, { recursive: true });
             if (!fs.existsSync(to)) {
+              // fail early if cross-device (hardlinks won't work across mounts)
+              function nearestExistingParent2(dir) {
+                let cur = dir;
+                try {
+                  while (cur && !fs.existsSync(cur)) {
+                    const parent = path.dirname(cur);
+                    if (!parent || parent === cur) break;
+                    cur = parent;
+                  }
+                } catch (e) { cur = null }
+                return cur && fs.existsSync(cur) ? cur : null;
+              }
+              try {
+                const srcStat2 = fs.statSync(from);
+                const destParent2 = nearestExistingParent2(path.dirname(to));
+                if (destParent2) {
+                  const destStat2 = fs.statSync(destParent2);
+                  if (typeof srcStat2.dev !== 'undefined' && typeof destStat2.dev !== 'undefined' && srcStat2.dev !== destStat2.dev) {
+                    appendLog(`HARDLINK_CROSS_DEVICE from=${from} to=${to}`);
+                    throw new Error('Cross-device link not supported: source and target are on different filesystems');
+                  }
+                }
+              } catch (e) {
+                // if we couldn't stat, proceed and let linkSync surface the error
+              }
               try {
                 fs.linkSync(from, to);
                 resultsItem.status = 'hardlinked';
                 resultsItem.to = to;
                 appendLog(`HARDLINK_OK from=${from} to=${to}`);
               } catch (linkErr2) {
-                try {
-                  fs.copyFileSync(from, to);
-                  resultsItem.status = 'copied';
-                  resultsItem.to = to;
-                  appendLog(`HARDLINK_FALLBACK_COPY_OK from=${from} to=${to} linkErr=${linkErr2.message}`);
-                } catch (copyErr2) {
-                  appendLog(`HARDLINK_AND_COPY_FAIL from=${from} to=${to} linkErr=${linkErr2.message} copyErr=${copyErr2.message}`);
-                  throw copyErr2
-                }
+                // Do NOT fallback to copy. Hardlink must succeed or the operation fails.
+                appendLog(`HARDLINK_FAIL from=${from} to=${to} linkErr=${linkErr2 && linkErr2.message ? linkErr2.message : String(linkErr2)}`);
+                throw linkErr2;
               }
             } else {
               resultsItem.status = 'exists';
