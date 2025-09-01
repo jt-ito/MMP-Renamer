@@ -1632,34 +1632,67 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
             throw err
           }
         } else {
-          // default behavior: move/rename the original file
-          const toDir2 = path.dirname(to);
-          if (!fs.existsSync(toDir2)) fs.mkdirSync(toDir2, { recursive: true });
-          fs.renameSync(from, to);
-          resultsItem.status = 'moved';
-          resultsItem.to = to;
-          appendLog(`RENAME_OK from=${from} to=${to}`);
+          // default behavior: preserve original file; attempt to hardlink into target, fallback to copy
           try {
-            enrichCache[from] = enrichCache[from] || {};
-            enrichCache[from].applied = true;
-            enrichCache[from].hidden = true;
-            enrichCache[from].appliedAt = Date.now();
-            enrichCache[from].appliedTo = to;
-            const movedBasename = path.basename(to);
-            enrichCache[from].renderedName = movedBasename;
-            enrichCache[from].metadataFilename = movedBasename.replace(new RegExp(path.extname(movedBasename) + '$'), '')
-            // index by destination as well so metadata lookups by the new filename work
-            try {
-              const targetKey2 = canonicalize(to)
-              enrichCache[targetKey2] = Object.assign({}, enrichCache[from])
+            const toDir2 = path.dirname(to);
+            if (!fs.existsSync(toDir2)) fs.mkdirSync(toDir2, { recursive: true });
+            if (!fs.existsSync(to)) {
               try {
-                const metaName2 = enrichCache[from].metadataFilename
-                if (metaName2) renderedIndex[metaName2] = targetKey2
+                fs.linkSync(from, to);
+                resultsItem.status = 'hardlinked';
+                resultsItem.to = to;
+                appendLog(`HARDLINK_OK from=${from} to=${to}`);
+              } catch (linkErr2) {
+                try {
+                  fs.copyFileSync(from, to);
+                  resultsItem.status = 'copied';
+                  resultsItem.to = to;
+                  appendLog(`HARDLINK_FALLBACK_COPY_OK from=${from} to=${to} linkErr=${linkErr2.message}`);
+                } catch (copyErr2) {
+                  appendLog(`HARDLINK_AND_COPY_FAIL from=${from} to=${to} linkErr=${linkErr2.message} copyErr=${copyErr2.message}`);
+                  throw copyErr2
+                }
+              }
+            } else {
+              resultsItem.status = 'exists';
+              resultsItem.to = to;
+              appendLog(`HARDLINK_SKIP_EXISTS to=${to}`);
+            }
+
+            // mark applied in enrich cache and persist (use canonicalized keys)
+            try {
+              const fromKey = canonicalize(from);
+              enrichCache[fromKey] = enrichCache[fromKey] || {};
+              enrichCache[fromKey].applied = true;
+              enrichCache[fromKey].hidden = true;
+              enrichCache[fromKey].appliedAt = Date.now();
+              enrichCache[fromKey].appliedTo = to;
+              const finalBasename = path.basename(to);
+              enrichCache[fromKey].renderedName = finalBasename;
+              enrichCache[fromKey].metadataFilename = finalBasename.replace(new RegExp(path.extname(finalBasename) + '$'), '')
+              // index target path as a lightweight mapping (do NOT copy applied/hidden flags)
+              try {
+                const targetKey = canonicalize(to)
+                renderedIndex[targetKey] = {
+                  source: from,
+                  renderedName: finalBasename,
+                  appliedTo: to,
+                  metadataFilename: enrichCache[fromKey].metadataFilename,
+                  provider: enrichCache[fromKey].provider || null,
+                  parsed: enrichCache[fromKey].parsed || null
+                };
+                // record mapping metadataFilename -> targetKey for quick lookup
+                try {
+                  const metaName = enrichCache[fromKey].metadataFilename
+                  if (metaName) renderedIndex[metaName] = targetKey
+                } catch (e) {}
               } catch (e) {}
-            } catch (e) {}
-            writeJson(enrichStoreFile, enrichCache);
-            try { writeJson(renderedIndexFile, renderedIndex) } catch (e) {}
-          } catch (e) { appendLog(`RENAME_MARK_FAIL from=${from} err=${e.message}`) }
+              writeJson(enrichStoreFile, enrichCache);
+              try { writeJson(renderedIndexFile, renderedIndex) } catch (e) {}
+            } catch (e) { appendLog(`HARDLINK_MARK_FAIL from=${from} err=${e.message}`) }
+          } catch (err) {
+            throw err
+          }
         }
       } else {
         resultsItem.status = 'dryrun';
