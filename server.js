@@ -1262,6 +1262,46 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
   } catch (e) { return res.status(500).json({ error: e.message }) }
 })
 
+// Admin-only: Sweep enrich cache and remove entries whose source files no longer exist.
+// This performs an atomic purge of stale cache entries and cleans up renderedIndex mappings
+// that reference the removed source paths. Returns a summary of removals.
+app.post('/api/enrich/sweep', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const removed = [];
+    const keys = Object.keys(enrichCache || {});
+    for (const k of keys) {
+      try {
+        if (!k) continue;
+        // if the file no longer exists on disk, remove from cache
+        if (!fs.existsSync(k)) {
+          removed.push(k);
+          delete enrichCache[k];
+        }
+      } catch (e) { /* ignore per-key errors */ }
+    }
+    // Clean up renderedIndex entries that reference removed sources
+    try {
+      const rKeys = Object.keys(renderedIndex || {});
+      for (const rk of rKeys) {
+        try {
+          const entry = renderedIndex[rk];
+          if (entry && entry.source && removed.indexOf(entry.source) !== -1) {
+            delete renderedIndex[rk];
+          }
+        } catch (e) {}
+      }
+    } catch (e) {}
+
+    // persist changes
+    try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
+    try { writeJson(renderedIndexFile, renderedIndex) } catch (e) {}
+    appendLog(`ENRICH_SWEEP removed=${removed.length}`);
+    return res.json({ ok: true, removedCount: removed.length, removed });
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
+
 // Force-refresh metadata for all items in a completed scan (server-side enrichment)
 app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
   const s = scans[req.params.scanId];
