@@ -1060,6 +1060,14 @@ app.get('/api/enrich', (req, res) => {
   const { path: p } = req.query;
   const key = canonicalize(p || '');
   try {
+    // If the underlying file no longer exists on disk, do not return cached enrichment
+    try {
+      if (key && !fs.existsSync(key)) {
+        // Log and inform client that path is missing so UI can drop stale entries
+        appendLog(`ENRICH_MISSING path=${key}`);
+        return res.json({ cached: false, enrichment: null, missing: true });
+      }
+    } catch (e) { /* ignore fs errors and continue */ }
     const raw = enrichCache[key] || null;
     const normalized = normalizeEnrichEntry(raw);
     // If a provider block exists but is incomplete (e.g. missing renderedName or

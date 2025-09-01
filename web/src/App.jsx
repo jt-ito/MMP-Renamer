@@ -307,14 +307,20 @@ export default function App() {
           await Promise.all(chunk.map(async p => {
             try {
               const er = await axios.get(API('/enrich'), { params: { path: p } })
-                if (er.data && (er.data.cached || er.data.enrichment)) {
-                  const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
-                  setEnrichCache(prev => ({ ...prev, [p]: enriched }))
-                  if (enriched && (enriched.hidden || enriched.applied)) {
+                if (er.data) {
+                  if (er.data.missing) {
+                    // underlying file missing: remove any local cache and ensure UI does not show it
+                    setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
                     setItems(prev => prev.filter(it => it.canonicalPath !== p))
-                  } else {
-                    // prepend in deduped fashion and skip any hidden/applied
-                    setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+                  } else if (er.data.cached || er.data.enrichment) {
+                    const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
+                    setEnrichCache(prev => ({ ...prev, [p]: enriched }))
+                    if (enriched && (enriched.hidden || enriched.applied)) {
+                      setItems(prev => prev.filter(it => it.canonicalPath !== p))
+                    } else {
+                      // prepend in deduped fashion and skip any hidden/applied
+                      setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+                    }
                   }
                 }
             } catch (e) {}
@@ -397,11 +403,18 @@ export default function App() {
       // First try to GET cached enrichment from server
       try {
         const r = await axios.get(API('/enrich'), { params: { path: key } })
-      if (r.data && (r.data.cached || r.data.enrichment) && !force) {
-        const norm = normalizeEnrichResponse(r.data.enrichment || r.data)
-        setEnrichCache(prev => ({ ...prev, [key]: norm }))
-        return norm
+      if (r.data) {
+        if (r.data.missing) {
+          // underlying file missing
+          setEnrichCache(prev => { const n = { ...prev }; delete n[key]; return n })
+          return null
         }
+        if ((r.data.cached || r.data.enrichment) && !force) {
+          const norm = normalizeEnrichResponse(r.data.enrichment || r.data)
+          setEnrichCache(prev => ({ ...prev, [key]: norm }))
+          return norm
+        }
+      }
       } catch (e) {
         // ignore and continue to POST
       }
@@ -593,15 +606,20 @@ export default function App() {
     for (const p of paths) {
       try {
         const er = await axios.get(API('/enrich'), { params: { path: p } })
-        if (er.data && (er.data.cached || er.data.enrichment)) {
-          const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
-          setEnrichCache(prev => ({ ...prev, [p]: enriched }))
-          // if the item is now hidden/applied remove it from visible items
-          if (enriched && (enriched.hidden || enriched.applied)) {
+        if (er.data) {
+          if (er.data.missing) {
+            setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
             setItems(prev => prev.filter(it => it.canonicalPath !== p))
-          } else {
-            // item is unhidden (unapproved) -> ensure it's visible in the list (deduped)
-            setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+          } else if (er.data.cached || er.data.enrichment) {
+            const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
+            setEnrichCache(prev => ({ ...prev, [p]: enriched }))
+            // if the item is now hidden/applied remove it from visible items
+            if (enriched && (enriched.hidden || enriched.applied)) {
+              setItems(prev => prev.filter(it => it.canonicalPath !== p))
+            } else {
+              // item is unhidden (unapproved) -> ensure it's visible in the list (deduped)
+              setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+            }
           }
         }
       } catch (e) {}
@@ -641,9 +659,13 @@ export default function App() {
          for (const res of r.data.results) {
            try {
              const er = await axios.get(API('/enrich'), { params: { path: res.path } })
-             if (er.data && (er.data.cached || er.data.enrichment)) {
-               const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
-               setEnrichCache(prev => ({ ...prev, [res.path]: norm }))
+             if (er.data) {
+               if (er.data.missing) {
+                 setEnrichCache(prev => { const n = { ...prev }; delete n[res.path]; return n })
+               } else if (er.data.cached || er.data.enrichment) {
+                 const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
+                 setEnrichCache(prev => ({ ...prev, [res.path]: norm }))
+               }
              }
            } catch (e) {}
          }
