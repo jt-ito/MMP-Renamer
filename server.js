@@ -919,6 +919,8 @@ app.post('/api/scan', async (req, res) => {
   scans[scanId] = artifact;
   writeJson(scanStoreFile, scans);
   appendLog(`SCAN_COMPLETE id=${scanId} total=${items.length}`);
+  // Auto-sweep stale enrich cache entries after a scan completes
+  try { const removed = sweepEnrichCache(); if (removed && removed.length) appendLog(`AUTOSWEEP_AFTER_SCAN removed=${removed.length}`); } catch (e) {}
   res.json({ scanId, totalCount: items.length });
 
   // Kick off a background enrichment pass for the first N items (non-blocking).
@@ -1380,6 +1382,8 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
   }
   writeJson(enrichStoreFile, enrichCache);
   appendLog(`REFRESH_SCAN_COMPLETE scan=${req.params.scanId} items=${results.length}`);
+  // Auto-sweep stale enrich cache entries after a refresh completes
+  try { const removed2 = sweepEnrichCache(); if (removed2 && removed2.length) appendLog(`AUTOSWEEP_AFTER_REFRESH removed=${removed2.length}`); } catch (e) {}
   res.json({ ok: true, results });
 });
 
@@ -1514,6 +1518,40 @@ function logMissingEpisodeTitleIfNeeded(key, providerBlock) {
       } catch (e) {}
     }
   } catch (e) { /* best-effort */ }
+}
+
+// Sweep helper: remove enrichCache entries whose source files no longer exist, clean renderedIndex
+function sweepEnrichCache() {
+  const removed = [];
+  try {
+    const keys = Object.keys(enrichCache || {});
+    for (const k of keys) {
+      try {
+        if (!k) continue;
+        if (!fs.existsSync(k)) {
+          removed.push(k);
+          delete enrichCache[k];
+        }
+      } catch (e) { /* ignore per-key */ }
+    }
+    // Clean up renderedIndex entries that reference removed sources
+    try {
+      const rKeys = Object.keys(renderedIndex || {});
+      for (const rk of rKeys) {
+        try {
+          const entry = renderedIndex[rk];
+          if (entry && entry.source && removed.indexOf(entry.source) !== -1) {
+            delete renderedIndex[rk];
+          }
+        } catch (e) {}
+      }
+    } catch (e) {}
+    // persist
+    try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
+    try { writeJson(renderedIndexFile, renderedIndex) } catch (e) {}
+    if (removed.length) appendLog(`ENRICH_SWEEP_AUTO removed=${removed.length}`);
+  } catch (e) { appendLog('ENRICH_SWEEP_ERR ' + (e && e.message ? e.message : String(e))) }
+  return removed;
 }
 
 // ...existing code...
