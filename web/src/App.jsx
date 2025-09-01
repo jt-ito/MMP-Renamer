@@ -298,16 +298,16 @@ export default function App() {
           await Promise.all(chunk.map(async p => {
             try {
               const er = await axios.get(API('/enrich'), { params: { path: p } })
-          if (er.data && er.data.cached) {
-                const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
-                setEnrichCache(prev => ({ ...prev, [p]: enriched }))
-                if (enriched && (enriched.hidden || enriched.applied)) {
-                  setItems(prev => prev.filter(it => it.canonicalPath !== p))
-                } else {
-                  // prepend in deduped fashion and skip any hidden/applied
-                  setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+                if (er.data && (er.data.cached || er.data.enrichment)) {
+                  const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
+                  setEnrichCache(prev => ({ ...prev, [p]: enriched }))
+                  if (enriched && (enriched.hidden || enriched.applied)) {
+                    setItems(prev => prev.filter(it => it.canonicalPath !== p))
+                  } else {
+                    // prepend in deduped fashion and skip any hidden/applied
+                    setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+                  }
                 }
-              }
             } catch (e) {}
             done++
             setMetaProgress(Math.round((done / paths.length) * 100))
@@ -386,7 +386,7 @@ export default function App() {
       // First try to GET cached enrichment from server
       try {
         const r = await axios.get(API('/enrich'), { params: { path: key } })
-      if (r.data && r.data.cached && !force) {
+      if (r.data && (r.data.cached || r.data.enrichment) && !force) {
         const norm = normalizeEnrichResponse(r.data.enrichment || r.data)
         setEnrichCache(prev => ({ ...prev, [key]: norm }))
         return norm
@@ -571,7 +571,7 @@ export default function App() {
     for (const p of paths) {
       try {
         const er = await axios.get(API('/enrich'), { params: { path: p } })
-        if (er.data && er.data.cached) {
+        if (er.data && (er.data.cached || er.data.enrichment)) {
           const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
           setEnrichCache(prev => ({ ...prev, [p]: enriched }))
           // if the item is now hidden/applied remove it from visible items
@@ -619,7 +619,7 @@ export default function App() {
          for (const res of r.data.results) {
            try {
              const er = await axios.get(API('/enrich'), { params: { path: res.path } })
-             if (er.data && er.data.cached) {
+             if (er.data && (er.data.cached || er.data.enrichment)) {
                const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
                setEnrichCache(prev => ({ ...prev, [res.path]: norm }))
              }
