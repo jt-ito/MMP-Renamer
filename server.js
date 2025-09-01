@@ -301,8 +301,55 @@ function metaLookup(title, apiKey, opts = {}) {
               res.on('end', async () => {
                 let ej = null
                 try { ej = JSON.parse(eb || '{}') } catch (e) { ej = null }
-                // If episode lookup returned a useful name/number, return it
-                if (ej && ej.name) return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: hit, episode: ej })
+                // If episode lookup returned a useful name/number, decide whether to accept it.
+                if (ej && ej.name) {
+                  try {
+                    // If caller provided a parsed episode title (from filename) and the requested
+                    // episode was a fractional/decimal (e.g., "11.5"), compare similarity between
+                    // the TMDb episode name and the parsed title. If they are not similar enough,
+                    // do not accept this episode result here and fall through to specials/season0 logic.
+                    const parsedEpTitle = opts && opts.parsedEpisodeTitle ? String(opts.parsedEpisodeTitle || '').trim() : '';
+                    const epRequestedStr = String(opts.episode || '');
+                    const isDecimal = epRequestedStr.indexOf('.') !== -1;
+                    function normalizeForCompare(s) { try { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim(); } catch (e) { return String(s || '').toLowerCase(); } }
+                    function levenshtein(a,b) {
+                      if (!a || !b) return Math.max(a ? a.length : 0, b ? b.length : 0)
+                      const al = a.length, bl = b.length
+                      const dp = Array.from({ length: al + 1 }, (_, i) => Array(bl + 1).fill(0))
+                      for (let i = 0; i <= al; i++) dp[i][0] = i
+                      for (let j = 0; j <= bl; j++) dp[0][j] = j
+                      for (let i = 1; i <= al; i++) {
+                        for (let j = 1; j <= bl; j++) {
+                          const cost = a[i-1] === b[j-1] ? 0 : 1
+                          dp[i][j] = Math.min(dp[i-1][j] + 1, dp[i][j-1] + 1, dp[i-1][j-1] + cost)
+                        }
+                      }
+                      return dp[al][bl]
+                    }
+                    function similarEnough(a,b) {
+                      const na = normalizeForCompare(a)
+                      const nb = normalizeForCompare(b)
+                      if (!na || !nb) return false
+                      if (na === nb) return true
+                      if (na.indexOf(nb) !== -1 || nb.indexOf(na) !== -1) return true
+                      const dist = levenshtein(na, nb)
+                      const norm = dist / Math.max(na.length, nb.length, 1)
+                      return norm <= 0.4
+                    }
+                    if (isDecimal && parsedEpTitle) {
+                      const tmdbEpName = ej.name || ej.title || '';
+                      if (!similarEnough(tmdbEpName, parsedEpTitle)) {
+                        // treat as not matched and continue to season0 / specials fallback logic
+                      } else {
+                        return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: hit, episode: ej })
+                      }
+                    } else {
+                      return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: hit, episode: ej })
+                    }
+                  } catch (e) {
+                    return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: hit, episode: ej })
+                  }
+                }
 
                 // Only attempt season-0 (specials) lookup for true special candidates:
                 // - explicitly season 0, or
@@ -634,7 +681,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   preferredProvider = 'tmdb'
   if (tmdbKey || preferredProvider) {
     try {
-      const res = await metaLookup(seriesName, tmdbKey, { year: parsed.year, season: normSeason, episode: normEpisode, preferredProvider })
+  const res = await metaLookup(seriesName, tmdbKey, { year: parsed.year, season: normSeason, episode: normEpisode, preferredProvider, parsedEpisodeTitle: episodeTitle })
       if (res && res.name) {
         // Map TMDb response into our guess structure explicitly
         try {
