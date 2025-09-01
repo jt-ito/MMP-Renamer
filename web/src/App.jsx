@@ -79,6 +79,9 @@ export default function App() {
   const [lastLibraryId, setLastLibraryId] = useLocalState('lastLibraryId', '')
   const [items, setItems] = useState([])
   const [total, setTotal] = useState(0)
+  // track canonical paths for the currently-loaded scan so we don't reveal cached paths
+  // that aren't present in the current scan results
+  const [currentScanPaths, setCurrentScanPaths] = useState(new Set())
   const [scanning, setScanning] = useState(false)
   const [scanLoaded, setScanLoaded] = useState(0)
   const [scanProgress, setScanProgress] = useState(0)
@@ -158,6 +161,8 @@ export default function App() {
         for (const it of (newItems || [])) {
           if (!it || !it.canonicalPath) continue
           if (seen.has(it.canonicalPath)) continue
+          // if we have an active scan, only reveal items that exist in that scan
+          if (currentScanPaths && currentScanPaths.size > 0 && !currentScanPaths.has(it.canonicalPath)) continue
           // skip items that are hidden/applied in client cache
           const e = enrichCache && enrichCache[it.canonicalPath]
           if (isHiddenOrApplied(e)) continue
@@ -167,6 +172,8 @@ export default function App() {
         for (const it of (prev || [])) {
           if (!it || !it.canonicalPath) continue
           if (seen.has(it.canonicalPath)) continue
+          // ensure prev items are also part of the active scan if present
+          if (currentScanPaths && currentScanPaths.size > 0 && !currentScanPaths.has(it.canonicalPath)) continue
           const e = enrichCache && enrichCache[it.canonicalPath]
           if (isHiddenOrApplied(e)) continue
           seen.add(it.canonicalPath)
@@ -176,6 +183,7 @@ export default function App() {
         for (const it of (prev || [])) {
           if (!it || !it.canonicalPath) continue
           if (seen.has(it.canonicalPath)) continue
+          if (currentScanPaths && currentScanPaths.size > 0 && !currentScanPaths.has(it.canonicalPath)) continue
           const e = enrichCache && enrichCache[it.canonicalPath]
           if (isHiddenOrApplied(e)) continue
           seen.add(it.canonicalPath)
@@ -184,6 +192,7 @@ export default function App() {
         for (const it of (newItems || [])) {
           if (!it || !it.canonicalPath) continue
           if (seen.has(it.canonicalPath)) continue
+          if (currentScanPaths && currentScanPaths.size > 0 && !currentScanPaths.has(it.canonicalPath)) continue
           const e = enrichCache && enrichCache[it.canonicalPath]
           if (isHiddenOrApplied(e)) continue
           seen.add(it.canonicalPath)
@@ -325,6 +334,8 @@ export default function App() {
       return !(e && (e.hidden === true || e.applied === true))
     })
     setItems(filtered)
+    // record current scan canonical paths so cached enrichments not present in the scan are ignored
+    try { setCurrentScanPaths(new Set((collected || []).map(i => i.canonicalPath).filter(Boolean))) } catch (e) {}
     setMetaPhase(false)
     setScanning(false)
     setScanProgress(100)
@@ -435,6 +446,14 @@ export default function App() {
     } else {
       r = await axios.get(API(`/scan/${scanId}/items?offset=${nextOffset}&limit=${batchSize}`))
       setItems(prev => mergeItemsUnique(prev, r.data.items || [], false))
+      // update current scan paths with new page
+      try {
+        setCurrentScanPaths(prev => {
+          const s = new Set(prev || [])
+          for (const it of (r.data.items || [])) if (it && it.canonicalPath) s.add(it.canonicalPath)
+          return s
+        })
+      } catch (e) {}
     }
     const forceEnrich = scanOptionsRef.current && scanOptionsRef.current.forceEnrich === true
     for (const it of r.data.items) {
@@ -453,11 +472,12 @@ export default function App() {
         setItems([])
         setSearching(false)
         // fetch first page of items from server-side scan listing
-        if (scanId) {
+  if (scanId) {
           const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: 0, limit: batchSize } })
           const page = (r.data.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
           setItems(page)
           setTotal((scanMeta && scanMeta.totalCount) || page.length || 0)
+          try { setCurrentScanPaths(new Set((r.data.items || []).map(i => i.canonicalPath).filter(Boolean))) } catch (e) {}
           // Warm-up client cache only by GETting any server-cached enrichment.
           // Do NOT call enrichOne or POST to /enrich here — that can trigger
           // server-side provider refresh which may unintentionally unhide
@@ -490,6 +510,8 @@ export default function App() {
         return
       }
     }
+    // if clearing search and there is no active scan, clear tracked scan paths
+    if (!scanId) setCurrentScanPaths(new Set())
 
     // explicit Search button: perform server-side search and ensure each result is enriched
     try {
