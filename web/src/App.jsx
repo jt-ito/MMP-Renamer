@@ -395,29 +395,21 @@ export default function App() {
   }
 
   async function rescan() {
-    const libId = lastLibraryId || (scanMeta && scanMeta.libraryId)
-    if (!libId) {
-      pushToast && pushToast('Rescan', 'No previous scan to rescan — perform a Scan first')
+    // Rescan should not re-walk the library. Instead, refresh metadata for items
+    // in the current scan by calling the server-side refresh endpoint which will
+    // hit the external provider for each item.
+    const sid = scanId || (scanMeta && scanMeta.id)
+    if (!sid) {
+      pushToast && pushToast('Rescan', 'No existing scan to refresh — perform a Scan first')
       return
     }
-    // trigger scan for the persisted library id
     try {
-      const sid = await triggerScan({ id: libId }, { forceEnrich: true })
-      // If user has provided a TMDb API key, request server-side refresh to populate TMDb metadata
-  const shouldRefresh = Boolean(providerKey)
-      if (shouldRefresh) {
-        pushToast && pushToast('Rescan', 'Preferred provider configured — refreshing metadata from provider')
-        try {
-          await refreshScan(sid)
-          pushToast && pushToast('Rescan', 'Provider metadata refresh complete')
-        } catch (e) {
-          pushToast && pushToast('Rescan', 'Provider refresh failed')
-        }
-      }
-  // After rescan and optional refresh, verify cache entries exist and purge missing
-  try { await verifyCachePaths(); } catch (e) {}
+      pushToast && pushToast('Rescan', 'Refreshing metadata for current scan (will call provider for each item)')
+      await refreshScan(sid)
+      pushToast && pushToast('Rescan', 'Provider metadata refresh complete')
+      try { await verifyCachePaths(); } catch (e) {}
     } catch (e) {
-      pushToast && pushToast('Rescan', 'Rescan failed')
+      pushToast && pushToast('Rescan', 'Rescan (refresh) failed')
     }
   }
 
