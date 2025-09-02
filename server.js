@@ -450,6 +450,25 @@ function metaLookup(title, apiKey, opts = {}) {
                         }
                         // Try matching by air_date if episode endpoint returned an air_date
                         if (!match && ej && ej.air_date) match = specials.find(e => e.air_date === ej.air_date)
+                        // If we still don't have a match, and the caller provided a parsed episode
+                        // title (from the filename), try matching specials by name similarity.
+                        // This helps for decimal/fractional episodes (e.g. 11.5) where TMDb
+                        // places the special in season 0 and numeric lookup fails.
+                        if (!match && opts && opts.parsedEpisodeTitle) {
+                          try {
+                            const parsedTitleLocal = String(opts.parsedEpisodeTitle || '').trim();
+                            if (parsedTitleLocal) {
+                              const sByName = specials.find(e => {
+                                try {
+                                  const candidateName = String(e.name || e.title || (e.attributes && (e.attributes.canonicalTitle || e.attributes.title)) || '').trim();
+                                  if (!candidateName) return false
+                                  return similarEnough(candidateName, parsedTitleLocal)
+                                } catch (e) { return false }
+                              })
+                              if (sByName) match = sByName
+                            }
+                          } catch (e) { /* ignore name-matching errors */ }
+                        }
                         if (match) return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }), episode: match })
                       } catch (e) { /* ignore matching errors */ }
                     }
@@ -890,7 +909,16 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   } else {
     seriesLookupTitle = seriesName
   }
-  const res = await metaLookup(seriesLookupTitle, tmdbKey, { year: parsed.year, season: normSeason, episode: normEpisode, preferredProvider, parsedEpisodeTitle: episodeTitle, parentCandidate: parentCandidate, parentPath })
+  // For specials, do not pass season/episode to the provider lookup so we can
+  // perform name-based matching against TMDb's season-0 specials list. However
+  // keep the parsed episode/season locally so the UI and hardlink names still
+  // reflect the filename-derived numbers.
+  const metaOpts = { year: parsed.year, preferredProvider, parsedEpisodeTitle: episodeTitle, parentCandidate: parentCandidate, parentPath };
+  if (!isSpecialCandidate) {
+    metaOpts.season = normSeason;
+    metaOpts.episode = normEpisode;
+  }
+  const res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts)
       if (res && res.name) {
         // Map TMDb response into our guess structure explicitly
         try {
