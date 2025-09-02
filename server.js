@@ -1477,7 +1477,7 @@ app.post('/api/rename/preview', (req, res) => {
       .replace(/\s{2,}/g, ' ') // collapse multiple spaces
       .trim();
     const fileName = (nameWithoutExt + ext).trim();
-  // If an output path is configured, plan a symlink under that path preserving a Jellyfin-friendly layout
+    // If an output path is configured, plan a hardlink under that path preserving a Jellyfin-friendly layout
     let toPath;
     if (effectiveOutput) {
       // folder: <output>/<Show Title (Year)>/Season NN
@@ -1492,7 +1492,7 @@ app.post('/api/rename/preview', (req, res) => {
     } else {
       toPath = path.join(path.dirname(fromPath), fileName).replace(/\\/g, '/');
     }
-  const action = effectiveOutput ? 'symlink' : (fromPath === toPath ? 'noop' : 'move');
+    const action = effectiveOutput ? 'hardlink' : (fromPath === toPath ? 'noop' : 'move');
   return { itemId: it.id, fromPath, toPath, actions: [{ op: action }], templateUsed: baseNameTemplate };
   });
   res.json({ plans });
@@ -1620,15 +1620,15 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
       const resultsItem = { itemId: p.itemId };
 
       if (!dryRun) {
-        // Determine if this plan explicitly requested a symlink (preview sets actions: [{op:'symlink'}])
-        const requestedSymlink = (p.actions && Array.isArray(p.actions) && p.actions[0] && p.actions[0].op === 'symlink') || false
+        // Determine if this plan explicitly requested a hardlink (preview sets actions: [{op:'hardlink'}])
+        const requestedHardlink = (p.actions && Array.isArray(p.actions) && p.actions[0] && p.actions[0].op === 'hardlink') || false
         const targetUnderConfiguredOut = configuredOut && toResolved.startsWith(path.resolve(configuredOut))
-  // If the plan explicitly requested a symlink, require a configured output path; never create symlink into the input folder
-  if (requestedSymlink && !configuredOut) {
-    appendLog(`SYMLINK_FAIL_NO_OUTPUT from=${from} requestedSymlink=true`);
-    throw new Error('Symlink requested but no configured output path found. Set scan_output_path in settings.');
+  // If the plan explicitly requested a hardlink, require a configured output path; never hardlink into the input folder
+  if (requestedHardlink && !configuredOut) {
+    appendLog(`HARDLINK_FAIL_NO_OUTPUT from=${from} requestedHardlink=true`);
+    throw new Error('Hardlink requested but no configured output path found. Set scan_output_path in settings.');
   }
-  if (requestedSymlink || targetUnderConfiguredOut) {
+  if (requestedHardlink || targetUnderConfiguredOut) {
           // create directories and attempt to create a hard link; do NOT move the original file
           try {
             // Re-render filename from enrichment and template if available to ensure TMDb-based names are used
@@ -1677,17 +1677,17 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 const provYear = prov.year || extractYear(prov, from) || '';
                 const titleFolder = sanitize(String(prov.title || prov.renderedName || path.basename(from, ext2)).trim() + (provYear ? ` (${provYear})` : ''));
                 if (!configuredOut) {
-                  appendLog(`SYMLINK_WARN no configured output path for from=${from} provider=${prov.renderedName}`);
+                  appendLog(`HARDLINK_WARN no configured output path for from=${from} provider=${prov.renderedName}`);
                 }
                 // resolve final base output in order: explicit per-plan outputPath -> per-user configured -> server setting
                 const planOut = (p && p.outputPath) ? p.outputPath : null;
                 const resolvedConfigured = planOut || configuredOut || serverSettings && serverSettings.scan_output_path ? (planOut || configuredOut || serverSettings.scan_output_path) : null;
                 const baseOut = resolvedConfigured ? path.resolve(resolvedConfigured) : null;
                 // Diagnostic: log resolved output path and targets to aid debugging when links end up under input
-                try { appendLog(`SYMLINK_CONFIG from=${from} configuredOut=${configuredOut || ''} planOut=${planOut || ''} baseOut=${baseOut || ''} toResolved=${toResolved || ''}`); } catch (e) {}
+                try { appendLog(`HARDLINK_CONFIG from=${from} configuredOut=${configuredOut || ''} planOut=${planOut || ''} baseOut=${baseOut || ''} toResolved=${toResolved || ''}`); } catch (e) {}
                 if (!baseOut) {
-                  appendLog(`SYMLINK_FAIL_NO_OUTPUT from=${from} provider=${prov.renderedName || prov.title || ''}`);
-                  throw new Error('No configured output path (user, plan, or server) — cannot symlink without an output path. Set scan_output_path in settings.');
+                  appendLog(`HARDLINK_FAIL_NO_OUTPUT from=${from} provider=${prov.renderedName || prov.title || ''}`);
+                  throw new Error('No configured output path (user, plan, or server) — cannot hardlink without an output path. Set scan_output_path in settings.');
                 }
                 // Movie vs Series detection: presence of season/episode indicates series
                 const isSeries = (prov.season != null) || (prov.episode != null);
@@ -1717,21 +1717,6 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               // assign for subsequent operations
               // prefer the rendered name if target path differs
               var effectiveToResolved = newToResolved;
-              // helper to create symlink preferring a relative target when possible
-              function createSymlinkPreferRelative(srcPath, linkPath) {
-                try {
-                  const rel = path.relative(path.dirname(linkPath), srcPath);
-                  // If relative path is shorter and doesn't ascend outside root too strangely, try it first
-                  try {
-                    fs.symlinkSync(rel, linkPath, 'file');
-                    appendLog(`SYMLINK_TARGET_USED link=${linkPath} target=${rel}`);
-                    return;
-                  } catch (e) {
-                    // fallback to absolute
-                  }
-                  try { fs.symlinkSync(srcPath, linkPath, 'file'); appendLog(`SYMLINK_TARGET_USED link=${linkPath} target=${srcPath}`); return; } catch (e2) { throw e2 }
-                } catch (e) { throw e }
-              }
             } catch (renderErr) {
               // fallback to original toResolved
               var effectiveToResolved = toResolved;
@@ -1761,31 +1746,39 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               } catch (e) { return true }
             }
 
-              // Defensive: never create provider-driven symlinks inside the configured input path
+            // Defensive: never create provider-driven hardlinks inside the configured input path
             try {
               if (configuredInput) {
                 const inpResolved = path.resolve(configuredInput);
                 if (String(effectiveToResolved || '').startsWith(inpResolved)) {
-                  appendLog(`SYMLINK_REFUSE_INPUT from=${from} to=${effectiveToResolved} configuredInput=${inpResolved}`);
-                  throw new Error('Refusing to create symlink inside configured input path');
+                  appendLog(`HARDLINK_REFUSE_INPUT from=${from} to=${effectiveToResolved} configuredInput=${inpResolved}`);
+                  throw new Error('Refusing to create hardlink inside configured input path');
                 }
               }
             } catch (e) { throw e }
-              if (!fs.existsSync(effectiveToResolved)) {
+
+            if (!fs.existsSync(effectiveToResolved)) {
+              // fail early if cross-device (hardlinks won't work across mounts)
+              if (!assertSameDevice(from, effectiveToResolved)) {
+                appendLog(`HARDLINK_CROSS_DEVICE from=${from} to=${effectiveToResolved}`);
+                const err = new Error('Cross-device link not supported: source and target are on different filesystems');
+                throw err;
+              }
               try {
-                createSymlinkPreferRelative(from, effectiveToResolved)
-                resultsItem.status = 'symlinked';
+                fs.linkSync(from, effectiveToResolved);
+                resultsItem.status = 'hardlinked';
                 resultsItem.to = effectiveToResolved;
-                appendLog(`SYMLINK_OK from=${from} to=${effectiveToResolved}`);
+                appendLog(`HARDLINK_OK from=${from} to=${effectiveToResolved}`);
               } catch (linkErr) {
-                appendLog(`SYMLINK_FAIL from=${from} to=${effectiveToResolved} linkErr=${linkErr && linkErr.message ? linkErr.message : String(linkErr)}`);
+                // Do NOT fallback to copy. Hardlink must succeed or the operation fails.
+                appendLog(`HARDLINK_FAIL from=${from} to=${effectiveToResolved} linkErr=${linkErr && linkErr.message ? linkErr.message : String(linkErr)}`);
                 throw linkErr;
               }
             } else {
               // target already exists
               resultsItem.status = 'exists';
               resultsItem.to = effectiveToResolved;
-              appendLog(`SYMLINK_SKIP_EXISTS to=${effectiveToResolved}`);
+              appendLog(`HARDLINK_SKIP_EXISTS to=${effectiveToResolved}`);
             }
 
               // mark applied in enrich cache and persist (use canonicalized keys)
@@ -1819,18 +1812,18 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               } catch (e) {}
               writeJson(enrichStoreFile, enrichCache);
               try { writeJson(renderedIndexFile, renderedIndex) } catch (e) {}
-            } catch (e) { appendLog(`SYMLINK_MARK_FAIL from=${from} err=${e.message}`) }
+            } catch (e) { appendLog(`HARDLINK_MARK_FAIL from=${from} err=${e.message}`) }
           } catch (err) {
             // bubble up to outer error handler
             throw err
           }
         } else {
-          // default behavior: preserve original file; attempt to symlink into target
+          // default behavior: preserve original file; attempt to hardlink into target, fallback to copy
           try {
             const toDir2 = path.dirname(to);
             if (!fs.existsSync(toDir2)) fs.mkdirSync(toDir2, { recursive: true });
             if (!fs.existsSync(to)) {
-              // fail early if cross-device (hardlinks won't work across mounts) — diagnostic only
+              // fail early if cross-device (hardlinks won't work across mounts)
               function nearestExistingParent2(dir) {
                 let cur = dir;
                 try {
@@ -1848,45 +1841,38 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 if (destParent2) {
                   const destStat2 = fs.statSync(destParent2);
                   if (typeof srcStat2.dev !== 'undefined' && typeof destStat2.dev !== 'undefined' && srcStat2.dev !== destStat2.dev) {
-                    appendLog(`SYMLINK_CROSS_DEVICE from=${from} to=${to}`);
-                    // Symlinks can cross devices but the filesystem/stat info indicated different devs; still allow symlink attempt
+                    appendLog(`HARDLINK_CROSS_DEVICE from=${from} to=${to}`);
+                    throw new Error('Cross-device link not supported: source and target are on different filesystems');
                   }
                 }
               } catch (e) {
                 // if we couldn't stat, proceed and let linkSync surface the error
               }
-              // Defensive: refuse symlink into configured input root
+              // Defensive: refuse hardlink into configured input root
               try {
                 if (configuredInput) {
                   const inpResolved2 = path.resolve(configuredInput);
                   const toResolved2 = path.resolve(to);
                   if (String(toResolved2).startsWith(inpResolved2)) {
-                    appendLog(`SYMLINK_REFUSE_INPUT from=${from} to=${toResolved2} configuredInput=${inpResolved2}`);
-                    throw new Error('Refusing to create symlink inside configured input path');
+                    appendLog(`HARDLINK_REFUSE_INPUT from=${from} to=${toResolved2} configuredInput=${inpResolved2}`);
+                    throw new Error('Refusing to create hardlink inside configured input path');
                   }
                 }
               } catch (e) { throw e }
               try {
-                // create using helper that prefers relative targets
-                function createSymlinkPreferRelative(srcPath, linkPath) {
-                  try {
-                    const rel = path.relative(path.dirname(linkPath), srcPath);
-                    try { fs.symlinkSync(rel, linkPath, 'file'); appendLog(`SYMLINK_TARGET_USED link=${linkPath} target=${rel}`); return; } catch (e) {}
-                    try { fs.symlinkSync(srcPath, linkPath, 'file'); appendLog(`SYMLINK_TARGET_USED link=${linkPath} target=${srcPath}`); return; } catch (e2) { throw e2 }
-                  } catch (e) { throw e }
-                }
-                createSymlinkPreferRelative(from, to)
-                resultsItem.status = 'symlinked';
+                fs.linkSync(from, to);
+                resultsItem.status = 'hardlinked';
                 resultsItem.to = to;
-                appendLog(`SYMLINK_OK from=${from} to=${to}`);
+                appendLog(`HARDLINK_OK from=${from} to=${to}`);
               } catch (linkErr2) {
-                appendLog(`SYMLINK_FAIL from=${from} to=${to} linkErr=${linkErr2 && linkErr2.message ? linkErr2.message : String(linkErr2)}`);
+                // Do NOT fallback to copy. Hardlink must succeed or the operation fails.
+                appendLog(`HARDLINK_FAIL from=${from} to=${to} linkErr=${linkErr2 && linkErr2.message ? linkErr2.message : String(linkErr2)}`);
                 throw linkErr2;
               }
             } else {
               resultsItem.status = 'exists';
               resultsItem.to = to;
-              appendLog(`SYMLINK_SKIP_EXISTS to=${to}`);
+              appendLog(`HARDLINK_SKIP_EXISTS to=${to}`);
             }
 
             // mark applied in enrich cache and persist (use canonicalized keys)
@@ -1919,7 +1905,7 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               } catch (e) {}
               writeJson(enrichStoreFile, enrichCache);
               try { writeJson(renderedIndexFile, renderedIndex) } catch (e) {}
-            } catch (e) { appendLog(`SYMLINK_MARK_FAIL from=${from} err=${e.message}`) }
+            } catch (e) { appendLog(`HARDLINK_MARK_FAIL from=${from} err=${e.message}`) }
           } catch (err) {
             throw err
           }

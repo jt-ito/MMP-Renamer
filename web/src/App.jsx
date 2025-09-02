@@ -657,7 +657,7 @@ export default function App() {
   }
 
   async function applyRename(plans, dryRun = false) {
-  // send plans to server; server will consult its configured scan_output_path to decide symlink behavior
+    // send plans to server; server will consult its configured scan_output_path to decide hardlink behavior
     try {
       const r = await axios.post(API('/rename/apply'), { plans, dryRun })
       // After apply, refresh enrichment for each plan.fromPath so the UI reflects applied/hidden state immediately
@@ -927,8 +927,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 try {
                   const first = (Array.isArray(res) && res.length) ? res[0] : null
                   const status = first && (first.status || first.result || '')
-                  if (status === 'symlinked' || status === 'copied' || status === 'moved' || status === 'exists' || status === 'dryrun' || status === 'noop') {
-                    const kind = (status === 'copied') ? 'Copied (fallback)' : (status === 'symlinked' ? 'Symlinked' : (status === 'moved' ? 'Moved' : (status === 'exists' ? 'Exists' : (status === 'dryrun' ? 'Dry run' : 'No-op'))))
+                  if (status === 'hardlinked' || status === 'copied' || status === 'moved' || status === 'exists' || status === 'dryrun' || status === 'noop') {
+                    const kind = (status === 'copied') ? 'Copied (fallback)' : (status === 'hardlinked' ? 'Hardlinked' : (status === 'moved' ? 'Moved' : (status === 'exists' ? 'Exists' : (status === 'dryrun' ? 'Dry run' : 'No-op'))))
           pushToast && pushToast('Apply', `${kind}: ${first.to || first.path || ''}`)
           successShown = true
                   } else if (first && first.status === 'error') {

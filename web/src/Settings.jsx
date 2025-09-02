@@ -173,10 +173,10 @@ export default function Settings({ pushToast }){
         </div>
 
         <div>
-          <label style={{fontSize:13, color:'var(--muted)'}}>Output path (symlinks)</label>
+          <label style={{fontSize:13, color:'var(--muted)'}}>Output path (hardlinks)</label>
           <input value={outputPath} onChange={e=>{ setOutputPath(e.target.value); setOutputExists(null); setDirty(true) }} onBlur={async () => setOutputExists((await checkPath(outputPath)).exists)} placeholder="e.g. D:\\JellyfinMedia\\TV" style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)', marginTop:6}} />
           <div style={{fontSize:12, color: outputExists === false ? '#ffb4b4' : 'var(--muted)', marginTop:6}}>
-            {outputExists === false ? 'Output path does not exist — symlink operations will fail until this is fixed.' : 'When a rename/symlink operation is applied the tool will create symlinks under this output path using a naming scheme compatible with Jellyfin. Example layout: '}<code>Show Title (Year)/Season 01/Show Title (Year) - S01E01 - Episode Title.ext</code>.
+            {outputExists === false ? 'Output path does not exist — hardlink operations will fail until this is fixed.' : 'When a rename/hardlink operation is applied the tool will create hardlinks under this output path using a naming scheme compatible with Jellyfin. Example layout: '}<code>Show Title (Year)/Season 01/Show Title (Year) - S01E01 - Episode Title.ext</code>.
           </div>
         </div>
 

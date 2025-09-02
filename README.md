@@ -2,7 +2,7 @@
 
 A small, local-first media renamer: a Node/Express backend with a Vite+React frontend that
 scans a local library, parses filenames, enriches metadata (TMDb when configured), and provides
-a safe preview / approve workflow that creates symlinks to files in a Jellyfin-friendly layout.
+a safe preview / approve workflow that hardlinks files into a Jellyfin-friendly layout.
 
 Important: the `data/` directory contains runtime state and secrets. Do not commit it.
 
@@ -10,8 +10,8 @@ Important: the `data/` directory contains runtime state and secrets. Do not comm
 
 - Full library scanning and per-path enrichment with server-side caching (persisted to `data/`).
 - TMDb enrichment when you provide an API key (settings page).
-- Preview renames and apply non-destructively by creating symlinks under the configured output path
-  (symlinks are used to allow cross-device targets).
+- Preview renames and apply non-destructively by creating hardlinks under the configured output path
+  (falls back to copying if hardlinking across devices fails).
 - Applied renames are recorded (applied, hidden, appliedAt, appliedTo, renderedName, metadataFilename)
   and can be unapproved.
 - Virtualized list rendering (react-window) for smooth large-library browsing.
@@ -79,7 +79,7 @@ services:
       - SESSION_COOKIE_SECURE=${MR_SESSION_COOKIE_SECURE} # optional: override secure cookie setting. Usefull when running on localhost (anything without https)
     volumes:
       - ${MR_DATA_PATH}:/usr/src/app/data   # persistent runtime data (users, enrich.json, rendered-index.json)
-  - ${JF_MEDIA_PATH}:/media:rw  # optional: media library for symlinks
+      - ${JF_MEDIA_PATH}:/media:rw  # optional: media library for hardlinking
       - ${MR_INPUT_PATH}:/input:rw   # optional: input folder to scan
     restart: unless-stopped
 ```
@@ -96,7 +96,7 @@ services:
 ## What's changed in this fork
 
 - TMDb enrichment is used when a TMDb API key is configured (old Kitsu provider removed).
-- Preview/apply now prefers creating symlinks under the configured output path and does not
+- Preview/apply now prefers creating hardlinks under the configured output path and does not
   mutate the original files.
 - Applied renames are persisted with metadata and can be unapproved from the UI.
 - Default rename template: `{title} ({year}) - {epLabel} - {episodeTitle}`.

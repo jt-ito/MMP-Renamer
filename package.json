@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-  "test-symlink": "node ./scripts/test-hardlink.js",
+  "test-hardlink": "node ./scripts/test-hardlink.js",
     "dev": "concurrently \"node server.js\" \"cd web && npm run dev\"",
     "web:install": "cd web && npm install",
     "install:all": "npm install && cd web && npm install"
