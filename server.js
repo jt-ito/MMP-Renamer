@@ -1601,6 +1601,11 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
         // Determine if this plan explicitly requested a hardlink (preview sets actions: [{op:'hardlink'}])
         const requestedHardlink = (p.actions && Array.isArray(p.actions) && p.actions[0] && p.actions[0].op === 'hardlink') || false
         const targetUnderConfiguredOut = configuredOut && toResolved.startsWith(path.resolve(configuredOut))
+  // If the plan explicitly requested a hardlink, require a configured output path; never hardlink into the input folder
+  if (requestedHardlink && !configuredOut) {
+    appendLog(`HARDLINK_FAIL_NO_OUTPUT from=${from} requestedHardlink=true`);
+    throw new Error('Hardlink requested but no configured output path found. Set scan_output_path in settings.');
+  }
   if (requestedHardlink || targetUnderConfiguredOut) {
           // create directories and attempt to create a hard link; do NOT move the original file
           try {
@@ -1653,6 +1658,8 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                   appendLog(`HARDLINK_WARN no configured output path for from=${from} provider=${prov.renderedName}`);
                 }
                 const baseOut = configuredOut ? path.resolve(configuredOut) : null;
+                // Diagnostic: log resolved output path and targets to aid debugging when links end up under input
+                try { appendLog(`HARDLINK_CONFIG from=${from} configuredOut=${configuredOut || ''} baseOut=${baseOut || ''} toResolved=${toResolved || ''}`); } catch (e) {}
                 if (!baseOut) {
                   appendLog(`HARDLINK_FAIL_NO_OUTPUT from=${from} provider=${prov.renderedName || prov.title || ''}`);
                   throw new Error('No configured output path (user or server). Set output path in settings before applying provider-driven hardlinks.');
