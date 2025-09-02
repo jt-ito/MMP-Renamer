@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/test-hardlink.js
+// scripts/test-symlink.js (legacy name retained)
 // Usage (PowerShell):
 //  node .\scripts\test-hardlink.js --from "C:\path\to\source.mkv" --prov "86 EIGHTY-SIX (2021) - S01E01 - Undertaker" --isSeries true --season 1 --year 2021 --out "C:\mnt\sda1\Choows"
 // Minimal: node scripts/test-hardlink.js --from "./S01E01-Undertaker.mkv" --prov "86 EIGHTY-SIX (2021) - S01E01 - Undertaker" --isSeries true --season 1 --out "./out"
