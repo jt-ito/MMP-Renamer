@@ -707,8 +707,19 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
             guess.tvdb = { matched: false }
           }
 
-          // Year extraction from common TMDb date fields (prefer per-season air date when present)
-          const dateStr = raw.seasonAirDate || raw.first_air_date || raw.release_date || raw.firstAirDate || (raw.attributes && (raw.attributes.startDate || raw.attributes.releaseDate))
+          // Year extraction: prefer episode air date (if episode lookup was performed),
+          // then season-level air date (seasonAirDate attached earlier), then series-level
+          // first_air_date/release_date. This ensures {year} reflects the specific season
+          // (or episode) rather than the series' initial air year.
+          let dateStr = null
+          try {
+            if (res && res.episode) {
+              dateStr = res.episode.air_date || res.episode.airDate || (res.episode.attributes && (res.episode.attributes.air_date || res.episode.attributes.airDate)) || null
+            }
+          } catch (e) { /* ignore */ }
+          if (!dateStr) {
+            dateStr = raw.seasonAirDate || raw.first_air_date || raw.release_date || raw.firstAirDate || (raw.attributes && (raw.attributes.startDate || raw.attributes.releaseDate))
+          }
           if (dateStr) {
             const y = new Date(String(dateStr)).getFullYear()
             if (!isNaN(y)) guess.year = String(y)
