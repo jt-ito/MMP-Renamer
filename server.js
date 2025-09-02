@@ -1589,11 +1589,15 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
       }
       // Prefer per-user configured output path, else server-wide setting
       let configuredOut = null;
+      // Also determine configured input root (to prevent linking back into the input folders)
+      let configuredInput = null;
       try {
         const username = req.session && req.session.username;
         if (username && users[username] && users[username].settings && users[username].settings.scan_output_path) configuredOut = canonicalize(users[username].settings.scan_output_path);
         else if (serverSettings && serverSettings.scan_output_path) configuredOut = canonicalize(serverSettings.scan_output_path);
-      } catch (e) { configuredOut = serverSettings && serverSettings.scan_output_path ? canonicalize(serverSettings.scan_output_path) : null }
+        if (username && users[username] && users[username].settings && users[username].settings.scan_input_path) configuredInput = canonicalize(users[username].settings.scan_input_path);
+        else if (serverSettings && serverSettings.scan_input_path) configuredInput = canonicalize(serverSettings.scan_input_path);
+      } catch (e) { configuredOut = serverSettings && serverSettings.scan_output_path ? canonicalize(serverSettings.scan_output_path) : null; configuredInput = serverSettings && serverSettings.scan_input_path ? canonicalize(serverSettings.scan_input_path) : null }
       const toResolved = path.resolve(to);
       const resultsItem = { itemId: p.itemId };
 
@@ -1724,6 +1728,17 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               } catch (e) { return true }
             }
 
+            // Defensive: never create provider-driven hardlinks inside the configured input path
+            try {
+              if (configuredInput) {
+                const inpResolved = path.resolve(configuredInput);
+                if (String(effectiveToResolved || '').startsWith(inpResolved)) {
+                  appendLog(`HARDLINK_REFUSE_INPUT from=${from} to=${effectiveToResolved} configuredInput=${inpResolved}`);
+                  throw new Error('Refusing to create hardlink inside configured input path');
+                }
+              }
+            } catch (e) { throw e }
+
             if (!fs.existsSync(effectiveToResolved)) {
               // fail early if cross-device (hardlinks won't work across mounts)
               if (!assertSameDevice(from, effectiveToResolved)) {
@@ -1749,8 +1764,8 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
             }
 
               // mark applied in enrich cache and persist (use canonicalized keys)
-            try {
-              const fromKey = canonicalize(from);
+              try {
+                const fromKey = canonicalize(from);
               enrichCache[fromKey] = enrichCache[fromKey] || {};
               enrichCache[fromKey].applied = true;
               enrichCache[fromKey].hidden = true;
@@ -1815,6 +1830,17 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               } catch (e) {
                 // if we couldn't stat, proceed and let linkSync surface the error
               }
+              // Defensive: refuse hardlink into configured input root
+              try {
+                if (configuredInput) {
+                  const inpResolved2 = path.resolve(configuredInput);
+                  const toResolved2 = path.resolve(to);
+                  if (String(toResolved2).startsWith(inpResolved2)) {
+                    appendLog(`HARDLINK_REFUSE_INPUT from=${from} to=${toResolved2} configuredInput=${inpResolved2}`);
+                    throw new Error('Refusing to create hardlink inside configured input path');
+                  }
+                }
+              } catch (e) { throw e }
               try {
                 fs.linkSync(from, to);
                 resultsItem.status = 'hardlinked';
