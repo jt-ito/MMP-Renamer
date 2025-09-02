@@ -1657,45 +1657,37 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 if (!configuredOut) {
                   appendLog(`HARDLINK_WARN no configured output path for from=${from} provider=${prov.renderedName}`);
                 }
-                const baseOut = configuredOut ? path.resolve(configuredOut) : null;
+                // resolve final base output in order: explicit per-plan outputPath -> per-user configured -> server setting
+                const planOut = (p && p.outputPath) ? p.outputPath : null;
+                const resolvedConfigured = planOut || configuredOut || serverSettings && serverSettings.scan_output_path ? (planOut || configuredOut || serverSettings.scan_output_path) : null;
+                const baseOut = resolvedConfigured ? path.resolve(resolvedConfigured) : null;
                 // Diagnostic: log resolved output path and targets to aid debugging when links end up under input
-                try { appendLog(`HARDLINK_CONFIG from=${from} configuredOut=${configuredOut || ''} baseOut=${baseOut || ''} toResolved=${toResolved || ''}`); } catch (e) {}
+                try { appendLog(`HARDLINK_CONFIG from=${from} configuredOut=${configuredOut || ''} planOut=${planOut || ''} baseOut=${baseOut || ''} toResolved=${toResolved || ''}`); } catch (e) {}
                 if (!baseOut) {
                   appendLog(`HARDLINK_FAIL_NO_OUTPUT from=${from} provider=${prov.renderedName || prov.title || ''}`);
-                  throw new Error('No configured output path (user or server). Set output path in settings before applying provider-driven hardlinks.');
+                  throw new Error('No configured output path (user, plan, or server) — cannot hardlink without an output path. Set scan_output_path in settings.');
                 }
                 // Movie vs Series detection: presence of season/episode indicates series
                 const isSeries = (prov.season != null) || (prov.episode != null);
                 if (isSeries) {
-                  // Season folder name (Season NN)
                   const seasonNum = prov.season != null ? String(prov.season) : '1';
                   const seasonFolder = `Season ${String(seasonNum).padStart(2,'0')}`;
-                  // Use provider.renderedName as the exact final filename for series (avoid duplicate ep labels)
                   const seriesRenderedRaw = String(prov.renderedName || prov.title || prov.name || '').trim();
-                  // Derive series folder by stripping the episode suffix beginning with ' - S' (e.g. " - S01E01")
                   let seriesFolderBase = seriesRenderedRaw.replace(/\.[^/.]+$/, '');
                   const sMatch = seriesFolderBase.search(/\s-\sS\d{1,2}E\d{1,3}/);
                   if (sMatch !== -1) seriesFolderBase = seriesFolderBase.slice(0, sMatch).trim();
-                  // If seriesFolderBase is empty fallback to prov.title/year
                   if (!seriesFolderBase) seriesFolderBase = String(prov.title || '').trim() + (prov.year ? ` (${prov.year})` : '');
-                  // ensure folder includes year when available
                   if (prov.year && seriesFolderBase.indexOf(`(${prov.year})`) === -1) seriesFolderBase = seriesFolderBase + ` (${prov.year})`;
                   const dir = path.join(baseOut, sanitize(seriesFolderBase), seasonFolder);
-                  // final filename should be provider.renderedName exactly (sanitized)
                   const filenameBase = sanitize(seriesRenderedRaw);
                   finalFileName2 = (filenameBase + ext2).trim();
                   newToResolved = path.join(dir, finalFileName2);
                 } else {
-                  // Movie layout: Title (Year)/Title (Year).ext
                   const movieBase = sanitize(String(prov.title || prov.renderedName || path.basename(from, ext2)).trim() + (provYear ? ` (${provYear})` : ''));
                   finalFileName2 = (movieBase + ext2).trim();
                   const dir = path.join(baseOut, movieBase);
                   newToResolved = path.join(dir, finalFileName2);
                 }
-              } else {
-                // default: use toResolved's directory but replace basename with rendered name
-                const dir = path.dirname(toResolved);
-                newToResolved = path.join(dir, finalFileName2);
               }
               // ensure directory exists
               const ensureDir = path.dirname(newToResolved);
