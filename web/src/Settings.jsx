@@ -17,7 +17,7 @@ function renderPreviewSample(template) {
     season: '1',
     episode: '2',
     episodeRange: '01-02',
-    tvdbId: '12345'
+  tmdbId: '12345'
   }
   try {
     return String(template || '{title} - {epLabel} - {episodeTitle}')
@@ -29,7 +29,7 @@ function renderPreviewSample(template) {
       .replace('{season}', sample.season)
       .replace('{episode}', sample.episode)
       .replace('{episodeRange}', sample.episodeRange)
-      .replace('{tvdbId}', sample.tvdbId)
+  .replace('{tmdbId}', sample.tmdbId)
   } catch (e) { return template }
 }
 
@@ -164,7 +164,7 @@ export default function Settings({ pushToast }){
             <div style={{fontSize:12, color:'var(--muted)', marginTop:6}}>TMDb is the only external provider used for metadata lookups.</div>
           </div>
           <input value={renameTemplate} onChange={e=>{ setRenameTemplate(e.target.value); setDirty(true) }} placeholder="e.g. {title} ({year}) - {epLabel} - {episodeTitle}" style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)', marginTop:6}} />
-          <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>Available tokens: <code>{'{title}'}</code>, <code>{'{basename}'}</code>, <code>{'{year}'}</code>, <code>{'{epLabel}'}</code>, <code>{'{episodeTitle}'}</code>, <code>{'{season}'}</code>, <code>{'{episode}'}</code>, <code>{'{episodeRange}'}</code>, <code>{'{tvdbId}'}</code> <span style={{opacity:0.8}}>({'{tvdbId}'} currently contains TMDb id for compatibility)</span></div>
+          <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>Available tokens: <code>{'{title}'}</code>, <code>{'{basename}'}</code>, <code>{'{year}'}</code>, <code>{'{epLabel}'}</code>, <code>{'{episodeTitle}'}</code>, <code>{'{season}'}</code>, <code>{'{episode}'}</code>, <code>{'{episodeRange}'}</code>, <code>{'{tmdbId}'}</code> <span style={{opacity:0.8}}>({'{tmdbId}'} contains the TMDb id)</span></div>
           <div style={{marginTop:10, padding:10, borderRadius:8, background:'var(--bg-700)'}}>
             <strong style={{fontSize:13}}>Live preview</strong>
             <div style={{marginTop:8, fontSize:14}}>{renderPreviewSample(renameTemplate)}</div>

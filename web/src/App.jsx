@@ -62,7 +62,7 @@ function normalizeEnrichResponse(data) {
   if (e.parsed || e.provider) return { parsed: e.parsed || null, provider: e.provider || null, hidden: e.hidden || false, applied: e.applied || false }
   // Otherwise build parsed/provider blocks from legacy enrichment shape
   const parsed = (e.parsed) ? e.parsed : (e.parsedName || e.title ? { title: e.title || '', parsedName: e.parsedName || '', season: e.season, episode: e.episode, timestamp: e.timestamp } : null)
-  const provider = (e.provider) ? e.provider : ((e.episodeTitle || e.year || e.providerRenderedName || e.tvdb) ? { title: e.title || parsed && parsed.title || '', year: e.year || null, season: e.season, episode: e.episode, episodeTitle: e.episodeTitle || '', raw: e.provider || e.tvdb || null, renderedName: e.providerRenderedName || e.renderedName || null, matched: !!(e.title || e.episodeTitle) } : null)
+  const provider = (e.provider) ? e.provider : ((e.episodeTitle || e.year || e.providerRenderedName || e.tmdb) ? { title: e.title || parsed && parsed.title || '', year: e.year || null, season: e.season, episode: e.episode, episodeTitle: e.episodeTitle || '', raw: e.provider || e.tmdb || null, renderedName: e.providerRenderedName || e.renderedName || null, matched: !!(e.title || e.episodeTitle) } : null)
   return { parsed: parsed || null, provider: provider || null, hidden: e.hidden || false, applied: e.applied || false }
 }
 
@@ -139,10 +139,10 @@ export default function App() {
   const [auth, setAuth] = useState(null)
   const [authChecked, setAuthChecked] = useState(false)
   const [renameTemplate, setRenameTemplate] = useLocalState('rename_template', '{title} ({year}) - {epLabel} - {episodeTitle}')
-  const [tvdbKey, setTvdbKey] = useLocalState('tvdb_api_key', '')
+  const [legacyTvdbKey, setLegacyTvdbKey] = useLocalState('tvdb_api_key', '')
   // support modern TMDb key while staying backward-compatible with legacy tvdb_api_key
   const [tmdbKey, setTmdbKey] = useLocalState('tmdb_api_key', '')
-  const providerKey = (tmdbKey && String(tmdbKey).length) ? tmdbKey : (tvdbKey || '')
+  const providerKey = (tmdbKey && String(tmdbKey).length) ? tmdbKey : (legacyTvdbKey || '')
   const scanOptionsRef = React.useRef({})
   const batchSize = 12
 
@@ -264,7 +264,7 @@ export default function App() {
     axios.get(API('/settings')).then(r => {
       const s = r.data || {}
       // hydrate local storage-backed state if empty (keep backward-compatible tvdb_api_key storage)
-      try { if (!localStorage.getItem('tvdb_api_key') && s.tvdb_api_key) localStorage.setItem('tvdb_api_key', s.tvdb_api_key) } catch {}
+  try { if (!localStorage.getItem('tvdb_api_key') && s.tvdb_api_key) localStorage.setItem('tvdb_api_key', s.tvdb_api_key) } catch {}
       try { if (!localStorage.getItem('rename_template') && s.userSettings && s.userSettings.rename_template) localStorage.setItem('rename_template', s.userSettings.rename_template) } catch {}
     }).catch(()=>{})
   }, [])

@@ -89,7 +89,7 @@ Getting started (local)
 
 Configuration
 - Server settings (global admin): `data/settings.json` or via Admin UI -> Settings (requires an admin account)
-  - `tmdb_api_key`, `tvdb_api_key` — provider keys used when user keys are not supplied
+  - `tmdb_api_key` — provider key used when user keys are not supplied (legacy `tvdb_api_key` is also accepted for compatibility)
   - `scan_output_path` — server default output path for hardlinking
   - `rename_template` — default rename template
 - Per-user settings stored in `data/users.json` under each user -> `settings`:

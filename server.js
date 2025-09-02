@@ -4,6 +4,60 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
+// Ensure https is available globally; we will add a TMDb-specific rate limiter to avoid
+// exceeding 50 requests per second to api.themoviedb.org. We monkey-patch https.request
+// for that host so existing code can continue to call https.request normally.
+const https = require('https');
+const EventEmitter = require('events');
+const _origHttpsRequest = https.request.bind(https);
+const _tmdbTimestamps = [];
+async function _tmdbRateLimit() {
+  while (true) {
+    const now = Date.now();
+    // drop timestamps older than 1000ms
+    while (_tmdbTimestamps.length && (now - _tmdbTimestamps[0]) > 1000) _tmdbTimestamps.shift();
+    if (_tmdbTimestamps.length < 50) { _tmdbTimestamps.push(now); return }
+    const wait = 1000 - (now - _tmdbTimestamps[0])
+    await new Promise(r => setTimeout(r, wait > 0 ? wait : 5))
+  }
+}
+
+// Monkey-patch https.request for requests targeting TMDb to defer execution until the
+// rate limiter allows it. We return a lightweight EventEmitter that proxies events from
+// the real request once it's issued so existing code that attaches handlers continues to work.
+https.request = function(opts, cb) {
+  try {
+    const host = (opts && (opts.hostname || opts.host)) ? String(opts.hostname || opts.host) : '';
+    if (host && host.indexOf('api.themoviedb.org') !== -1) {
+      const holder = { realReq: null, timeoutMs: null };
+      const fake = new EventEmitter();
+      fake.setTimeout = function(ms) { holder.timeoutMs = ms };
+      fake.destroy = function() { try { if (holder.realReq && typeof holder.realReq.destroy === 'function') holder.realReq.destroy(); } catch (e) {} };
+      fake.end = function() {
+        (async () => {
+          try {
+            await _tmdbRateLimit();
+            const realReq = _origHttpsRequest(opts, cb);
+            holder.realReq = realReq;
+            // proxy relevant events
+            realReq.on('response', (res) => fake.emit('response', res));
+            realReq.on('data', (d) => fake.emit('data', d));
+            realReq.on('end', () => fake.emit('end'));
+            realReq.on('error', (e) => fake.emit('error', e));
+            if (holder.timeoutMs && typeof realReq.setTimeout === 'function') realReq.setTimeout(holder.timeoutMs);
+            realReq.end();
+          } catch (e) {
+            // propagate failures to attached listeners
+            setImmediate(() => fake.emit('error', e));
+          }
+        })();
+      };
+      return fake;
+    }
+  } catch (e) {}
+  return _origHttpsRequest(opts, cb);
+}
+
 const app = express();
 // Enable CORS but allow credentials so cookies can be sent from the browser (echo origin)
 app.use(cors({ origin: true, credentials: true }));
@@ -668,7 +722,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
 
   const guess = { title: seriesName, parsedName: formattedParsedName, season: normSeason, episode: normEpisode, episodeTitle };
 
-  const tmdbKey = providedKey || (users && users.admin && users.admin.settings && (users.admin.settings.tmdb_api_key || users.admin.settings.tvdb_api_key)) || (serverSettings && (serverSettings.tmdb_api_key || serverSettings.tvdb_api_key))
+  const tmdbKey = providedKey || (users && users.admin && users.admin.settings && users.admin.settings.tmdb_api_key) || (serverSettings && serverSettings.tmdb_api_key)
   // determine username (if provided) so we can honor per-user default provider and track fallback counts
   const username = opts && opts.username ? opts.username : null
   // determine preferred provider: per-user -> server -> default to 'tmdb'
@@ -700,11 +754,11 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
           const providerName = (raw && raw.source) ? String(raw.source).toLowerCase() : 'tmdb'
           guess.provider = { matched: true, provider: providerName, id: raw.id || null, raw: raw }
 
-          // Back-compat: populate tvdb object only when provider is TMDb (avoid mislabeling other providers)
+          // Back-compat: populate tmdb object only when provider is TMDb
           if (providerName === 'tmdb') {
-            guess.tvdb = { matched: true, id: raw.id || null, raw: raw }
+            guess.tmdb = { matched: true, id: raw.id || null, raw: raw }
           } else {
-            guess.tvdb = { matched: false }
+            guess.tmdb = { matched: false }
           }
 
           // Year extraction: prefer episode air date (if episode lookup was performed),
@@ -725,14 +779,14 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
             if (!isNaN(y)) guess.year = String(y)
           }
         } catch (mapErr) {
-          // Map error -> keep guess as-is but note tvdb not matched
-          guess.tvdb = { matched: false }
+          // Map error -> keep guess as-is but note tmdb not matched
+          guess.tmdb = { matched: false }
         }
       } else {
-        guess.tvdb = { matched: false }
+  guess.tmdb = { matched: false }
       }
     } catch (e) {
-      guess.tvdb = { error: e.message }
+  guess.tmdb = { error: e.message }
     }
   }
 
@@ -745,7 +799,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     season: guess.season,
     episode: guess.episode,
     episodeTitle: guess.episodeTitle,
-    tvdb: guess.tvdb || null,
+  tmdb: guess.tmdb || null,
     provider: guess.provider || null,
     language: 'en',
     timestamp: Date.now(),
@@ -768,10 +822,10 @@ app.get('/api/libraries', (req, res) => {
 app.get('/api/meta/status', (req, res) => {
   try {
     // check server and user keys (mask)
-    const serverKey = serverSettings && (serverSettings.tmdb_api_key || serverSettings.tvdb_api_key) ? String(serverSettings.tmdb_api_key || serverSettings.tvdb_api_key) : null
+    const serverKey = serverSettings && serverSettings.tmdb_api_key ? String(serverSettings.tmdb_api_key) : null
     const serverMask = serverKey ? (serverKey.slice(0,6) + '...' + serverKey.slice(-4)) : null
     let userKey = null
-    try { const u = req.session && req.session.username && users[req.session.username]; if (u && u.settings && (u.settings.tmdb_api_key || u.settings.tvdb_api_key)) userKey = String(u.settings.tmdb_api_key || u.settings.tvdb_api_key) } catch (e) {}
+  try { const u = req.session && req.session.username && users[req.session.username]; if (u && u.settings && u.settings.tmdb_api_key) userKey = String(u.settings.tmdb_api_key) } catch (e) {}
     const userMask = userKey ? (userKey.slice(0,6) + '...' + userKey.slice(-4)) : null
   // recent META_LOOKUP logs (TMDb attempts and lookup requests)
   let recent = ''
@@ -781,7 +835,7 @@ app.get('/api/meta/status', (req, res) => {
 })
 
 // Backwards compatible endpoint for older clients
-app.get('/api/tvdb/status', (req, res) => {
+app.get('/api/tmdb/status', (req, res) => {
   return app._router.handle(req, res, () => {}, 'GET', '/api/meta/status')
 })
 
@@ -856,10 +910,10 @@ app.post('/api/scan', async (req, res) => {
       // determine effective preferred provider for this user (user setting -> server setting -> tmdb)
       let preferred = 'tmdb'
       try { if (username && users[username] && users[username].settings && users[username].settings.default_meta_provider) preferred = users[username].settings.default_meta_provider; else if (serverSettings && serverSettings.default_meta_provider) preferred = serverSettings.default_meta_provider } catch (e) { preferred = 'tmdb' }
-      // only consider TMDb authoritative if preferred is tmdb and a TMDb/tvdb key exists
-      if (String(preferred).toLowerCase() === 'tmdb') {
-        if (username && users[username] && users[username].settings && users[username].settings.tvdb_api_key) userHasAuthoritativeProviderKey = Boolean(users[username].settings.tvdb_api_key)
-        else if (serverSettings && serverSettings.tvdb_api_key) userHasAuthoritativeProviderKey = Boolean(serverSettings.tvdb_api_key)
+  // only consider TMDb authoritative if preferred is tmdb and a TMDb key exists
+  if (String(preferred).toLowerCase() === 'tmdb') {
+  if (username && users[username] && users[username].settings && users[username].settings.tmdb_api_key) userHasAuthoritativeProviderKey = Boolean(users[username].settings.tmdb_api_key)
+  else if (serverSettings && serverSettings.tmdb_api_key) userHasAuthoritativeProviderKey = Boolean(serverSettings.tmdb_api_key)
       }
     } catch (e) { userHasAuthoritativeProviderKey = false }
     for (const it of items) {
@@ -897,7 +951,7 @@ app.post('/api/scan', async (req, res) => {
               .replace('{season}', parsed.season != null ? String(parsed.season) : '')
               .replace('{episode}', parsed.episode != null ? String(parsed.episode) : '')
               .replace('{episodeRange}', parsed.episodeRange || '')
-              .replace('{tvdbId}', '')
+              .replace('{tmdbId}', '')
             const parsedRendered = String(nameWithoutExtRaw)
               .replace(/\s*\(\s*\)\s*/g, '')
               .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
@@ -940,13 +994,13 @@ app.post('/api/scan', async (req, res) => {
     try {
       const N = 12;
       const first = artifact.items.slice(0, N);
-      // pick tvdb/tmdb key similar to other endpoints (prefer session user's key, then server)
-      let tvdbKey = null;
+  // pick tmdb key similar to other endpoints (prefer session user's key, then server)
+  let tmdbKey = null;
       try {
         const username = req.session && req.session.username;
-        if (username && users[username] && users[username].settings && (users[username].settings.tmdb_api_key || users[username].settings.tvdb_api_key)) tvdbKey = users[username].settings.tmdb_api_key || users[username].settings.tvdb_api_key;
-        else if (serverSettings && (serverSettings.tmdb_api_key || serverSettings.tvdb_api_key)) tvdbKey = serverSettings.tmdb_api_key || serverSettings.tvdb_api_key;
-      } catch (e) { tvdbKey = null }
+  if (username && users[username] && users[username].settings && (users[username].settings.tmdb_api_key)) tmdbKey = users[username].settings.tmdb_api_key;
+  else if (serverSettings && serverSettings.tmdb_api_key) tmdbKey = serverSettings.tmdb_api_key;
+  } catch (e) { tmdbKey = null }
 
       for (const it of first) {
         try {
@@ -958,7 +1012,7 @@ app.post('/api/scan', async (req, res) => {
           const prov = existing && existing.provider ? existing.provider : null;
           const providerComplete = prov && prov.matched && prov.renderedName && (prov.episode == null || (prov.episodeTitle && String(prov.episodeTitle).trim()));
           if (providerComplete) continue;
-          const data = await externalEnrich(key, tvdbKey, { username: req.session && req.session.username });
+          const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username });
           if (!data) continue;
           // compute provider-rendered name using effective template
           try {
@@ -981,7 +1035,7 @@ app.post('/api/scan', async (req, res) => {
               .replace('{season}', data.season != null ? String(data.season) : '')
               .replace('{episode}', data.episode != null ? String(data.episode) : '')
               .replace('{episodeRange}', data.episodeRange || '')
-              .replace('{tvdbId}', (data.tvdb && data.tvdb.raw && (data.tvdb.raw.id || data.tvdb.raw.seriesId)) ? String(data.tvdb.raw.id || data.tvdb.raw.seriesId) : '')
+              .replace('{tmdbId}', (data.tmdb && data.tmdb.raw && (data.tmdb.raw.id || data.tmdb.raw.seriesId)) ? String(data.tmdb.raw.id || data.tmdb.raw.seriesId) : '')
             let providerRendered = String(nameWithoutExtRaw)
               .replace(/\s*\(\s*\)\s*/g, '')
               .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
@@ -1132,7 +1186,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'tvdb_api_key', 'scan_output_path', 'rename_template', 'default_meta_provider'];
+  const allowed = ['tmdb_api_key', 'scan_output_path', 'rename_template', 'default_meta_provider'];
       for (const k of allowed) if (body[k] !== undefined) serverSettings[k] = body[k];
       writeJson(settingsFile, serverSettings);
       appendLog(`SETTINGS_SAVED_GLOBAL by=${username} keys=${Object.keys(body).join(',')}`);
@@ -1143,7 +1197,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'tvdb_api_key', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider'];
+  const allowed = ['tmdb_api_key', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider'];
     for (const k of allowed) { if (body[k] !== undefined) users[username].settings[k] = body[k]; }
     writeJson(usersFile, users);
     appendLog(`SETTINGS_SAVED_USER user=${username} keys=${Object.keys(body).join(',')}`);
@@ -1155,7 +1209,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
 app.get('/api/path/exists', (req, res) => { const p = req.query.path || ''; try { const rp = path.resolve(p); const exists = fs.existsSync(rp); const stat = exists ? fs.statSync(rp) : null; res.json({ exists, isDirectory: stat ? stat.isDirectory() : false, resolved: rp }); } catch (err) { res.json({ exists: false, isDirectory: false, error: err.message }); } });
 
 app.post('/api/enrich', async (req, res) => {
-  const { path: p, tvdb_api_key: tvdb_override, tmdb_api_key: tmdb_override, force } = req.body;
+  const { path: p, tmdb_api_key: tmdb_override, force } = req.body;
   const key = canonicalize(p || '');
   appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'}`);
   try {
@@ -1176,17 +1230,16 @@ app.post('/api/enrich', async (req, res) => {
       return res.json({ enrichment: enrichCache[key] });
     }
     // Resolve an effective provider key early so we can decide whether to short-circuit to parsed-only
-    let tvdbKeyEarly = null
+  let tmdbKeyEarly = null
     try {
-      if (tmdb_override) tvdbKeyEarly = tmdb_override;
-      else if (tvdb_override) tvdbKeyEarly = tvdb_override;
-      else if (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && (users[req.session.username].settings.tmdb_api_key || users[req.session.username].settings.tvdb_api_key)) tvdbKeyEarly = users[req.session.username].settings.tmdb_api_key || users[req.session.username].settings.tvdb_api_key;
-      else if (serverSettings && (serverSettings.tmdb_api_key || serverSettings.tvdb_api_key)) tvdbKeyEarly = serverSettings.tmdb_api_key || serverSettings.tvdb_api_key;
-    } catch (e) { tvdbKeyEarly = null }
+  if (tmdb_override) tmdbKeyEarly = tmdb_override;
+  else if (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.tmdb_api_key) tmdbKeyEarly = users[req.session.username].settings.tmdb_api_key;
+  else if (serverSettings && serverSettings.tmdb_api_key) tmdbKeyEarly = serverSettings.tmdb_api_key;
+    } catch (e) { tmdbKeyEarly = null }
 
     // If we have a parsedCache entry and not forcing a provider refresh, return a lightweight enrichment
     // unless an authoritative provider key is present — in that case perform an external lookup so provider results can override parsed.
-    if (!force && parsedCache[key] && !tvdbKeyEarly) {
+  if (!force && parsedCache[key] && !tmdbKeyEarly) {
       const pc = parsedCache[key]
       const epTitle = (enrichCache[key] && enrichCache[key].provider && enrichCache[key].provider.episodeTitle) ? enrichCache[key].provider.episodeTitle : ''
       // build normalized entry
@@ -1199,14 +1252,13 @@ app.post('/api/enrich', async (req, res) => {
     }
 
     // otherwise perform authoritative external enrich (used by rescan/force)
-    let tvdbKey = null
+    let tmdbKey = null
     try {
-      if (tmdb_override) tvdbKey = tmdb_override;
-      else if (tvdb_override) tvdbKey = tvdb_override;
-      else if (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && (users[req.session.username].settings.tmdb_api_key || users[req.session.username].settings.tvdb_api_key)) tvdbKey = users[req.session.username].settings.tmdb_api_key || users[req.session.username].settings.tvdb_api_key;
-      else if (serverSettings && (serverSettings.tmdb_api_key || serverSettings.tvdb_api_key)) tvdbKey = serverSettings.tmdb_api_key || serverSettings.tvdb_api_key;
-    } catch (e) { tvdbKey = null }
-    const data = await externalEnrich(key, tvdbKey, { username: req.session && req.session.username });
+      if (tmdb_override) tmdbKey = tmdb_override;
+      else if (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.tmdb_api_key) tmdbKey = users[req.session.username].settings.tmdb_api_key;
+      else if (serverSettings && serverSettings.tmdb_api_key) tmdbKey = serverSettings.tmdb_api_key;
+    } catch (e) { tmdbKey = null }
+    const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username });
     // compute provider-rendered name using effective template so provider results can override parsed display
     try {
       const userTemplate = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.rename_template) ? users[req.session.username].settings.rename_template : null;
@@ -1228,7 +1280,7 @@ app.post('/api/enrich', async (req, res) => {
         .replace('{season}', data.season != null ? String(data.season) : '')
         .replace('{episode}', data.episode != null ? String(data.episode) : '')
         .replace('{episodeRange}', data.episodeRange || '')
-        .replace('{tvdbId}', (data.tvdb && data.tvdb.raw && (data.tvdb.raw.id || data.tvdb.raw.seriesId)) ? String(data.tvdb.raw.id || data.tvdb.raw.seriesId) : '')
+        .replace('{tmdbId}', (data.tmdb && data.tmdb.raw && (data.tmdb.raw.id || data.tmdb.raw.seriesId)) ? String(data.tmdb.raw.id || data.tmdb.raw.seriesId) : '')
       let providerRendered = String(nameWithoutExtRaw)
         .replace(/\s*\(\s*\)\s*/g, '')
         .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
@@ -1321,15 +1373,14 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
   if (!s) return res.status(404).json({ error: 'scan not found' });
   const username = req.session && req.session.username;
   appendLog(`REFRESH_SCAN_REQUEST scan=${req.params.scanId} by=${username}`);
-  // pick tmdb/tvdb key if available (tmdb preferred)
-  const { tvdb_api_key: tvdb_override, tmdb_api_key: tmdb_override } = req.body || {};
-  let tvdbKey = null
+  // pick tmdb key if available
+  const { tmdb_api_key: tmdb_override } = req.body || {};
+  let tmdbKey = null
   try {
-    if (tmdb_override) tvdbKey = tmdb_override;
-    else if (tvdb_override) tvdbKey = tvdb_override;
-    else if (username && users[username] && users[username].settings && (users[username].settings.tmdb_api_key || users[username].settings.tvdb_api_key)) tvdbKey = users[username].settings.tmdb_api_key || users[username].settings.tvdb_api_key;
-    else if (serverSettings && (serverSettings.tmdb_api_key || serverSettings.tvdb_api_key)) tvdbKey = serverSettings.tmdb_api_key || serverSettings.tvdb_api_key;
-  } catch (e) { tvdbKey = null }
+  if (tmdb_override) tmdbKey = tmdb_override;
+    else if (username && users[username] && users[username].settings && users[username].settings.tmdb_api_key) tmdbKey = users[username].settings.tmdb_api_key;
+    else if (serverSettings && serverSettings.tmdb_api_key) tmdbKey = serverSettings.tmdb_api_key;
+  } catch (e) { tmdbKey = null }
   const results = [];
   for (const it of s.items) {
     try {
@@ -1343,8 +1394,8 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
       const providerCompleteEx = provEx && provEx.matched && provEx.renderedName && (provEx.episode == null || (provEx.episodeTitle && String(provEx.episodeTitle).trim()));
       if (providerCompleteEx && (!provEx.provider || String(provEx.provider).toLowerCase() === 'tmdb')) {
         data = existing
-      } else {
-        data = await externalEnrich(key, tvdbKey, { username });
+  } else {
+  data = await externalEnrich(key, tmdbKey, { username });
       }
       // compute provider-rendered name and store normalized provider block when we have provider data
       try {
@@ -1367,7 +1418,7 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
             .replace('{season}', data.season != null ? String(data.season) : '')
             .replace('{episode}', data.episode != null ? String(data.episode) : '')
             .replace('{episodeRange}', data.episodeRange || '')
-            .replace('{tvdbId}', (data.tvdb && data.tvdb.raw && (data.tvdb.raw.id || data.tvdb.raw.seriesId)) ? String(data.tvdb.raw.id || data.tvdb.raw.seriesId) : '')
+            .replace('{tmdbId}', (data.tmdb && data.tmdb.raw && (data.tmdb.raw.id || data.tmdb.raw.seriesId)) ? String(data.tmdb.raw.id || data.tmdb.raw.seriesId) : '')
           let providerRendered = String(nameWithoutExtRaw)
             .replace(/\s*\(\s*\)\s*/g, '')
             .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
@@ -1399,11 +1450,11 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
 });
 
 // Debug enrich: return cached enrichment and what externalEnrich would produce now
-app.get('/api/enrich/debug', async (req, res) => { const p = req.query.path || ''; const key = canonicalize(p); const cached = enrichCache[key] || null; // pick tvdb key if available (use server setting only for debug)
-  const tvdbKey = serverSettings && (serverSettings.tmdb_api_key || serverSettings.tvdb_api_key) ? (serverSettings.tmdb_api_key || serverSettings.tvdb_api_key) : null;
+app.get('/api/enrich/debug', async (req, res) => { const p = req.query.path || ''; const key = canonicalize(p); const cached = enrichCache[key] || null; // pick tmdb key if available (use server setting only for debug)
+  const tmdbKey = serverSettings && serverSettings.tmdb_api_key ? serverSettings.tmdb_api_key : null;
   let forced = null;
   try {
-    forced = await externalEnrich(key, tvdbKey, { username: null });
+  forced = await externalEnrich(key, tmdbKey, { username: null });
   } catch (e) { forced = { error: e.message } }
   res.json({ key, cached, forced });
 });
@@ -1452,11 +1503,11 @@ app.post('/api/rename/preview', (req, res) => {
     }
   const episodeTitleToken = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : ''
 
-    // Support extra template tokens: {season}, {episode}, {episodeRange}, {tvdbId}
+  // Support extra template tokens: {season}, {episode}, {episodeRange}, {tmdbId}
     const seasonToken = (meta && meta.season != null) ? String(meta.season) : ''
     const episodeToken = (meta && meta.episode != null) ? String(meta.episode) : ''
     const episodeRangeToken = (meta && meta.episodeRange) ? String(meta.episodeRange) : ''
-    const tvdbIdToken = (meta && meta.tvdb && meta.tvdb.raw && (meta.tvdb.raw.id || meta.tvdb.raw.seriesId)) ? String(meta.tvdb.raw.id || meta.tvdb.raw.seriesId) : ''
+  const tmdbIdToken = (meta && meta.tmdb && meta.tmdb.raw && (meta.tmdb.raw.id || meta.tmdb.raw.seriesId)) ? String(meta.tmdb.raw.id || meta.tmdb.raw.seriesId) : ''
 
   // Build title token from provider/parsed tokens and clean it for render.
   const episodeTitleTokenFromMeta = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : ''
@@ -1478,7 +1529,7 @@ app.post('/api/rename/preview', (req, res) => {
       .replace('{season}', sanitize(seasonToken))
       .replace('{episode}', sanitize(episodeToken))
       .replace('{episodeRange}', sanitize(episodeRangeToken))
-      .replace('{tvdbId}', sanitize(tvdbIdToken));
+  .replace('{tmdbId}', sanitize(tmdbIdToken));
   }
     // Clean up common artifact patterns from empty tokens: stray parentheses, repeated separators
     const nameWithoutExt = String(nameWithoutExtRaw)
@@ -1587,12 +1638,36 @@ function sweepEnrichCache() {
 
 function extractYear(meta, fromPath) {
   if (!meta) meta = {};
-  // common fields
-  const candidates = [meta.year, meta.airedYear, meta.originalYear];
-  for (const c of candidates) if (c && String(c).match(/^\d{4}$/)) return String(c);
-  if (meta.timestamp) {
-    try { const d = new Date(Number(meta.timestamp)); if (!isNaN(d)) return String(d.getFullYear()) } catch (e) {}
-  }
+  // Prefer explicit episode air date -> season-level air date -> series-level dates -> meta.year fields
+  try {
+    // Episode-level (common shapes)
+    const ep = meta.episode || (meta.raw && (meta.raw.episode || meta.raw.episodes && meta.raw.episodes[0])) || null
+    if (ep) {
+      const epDate = ep.air_date || ep.airDate || (ep.attributes && (ep.attributes.air_date || ep.attributes.airDate || ep.attributes.startDate)) || null
+      if (epDate) {
+        const y = new Date(String(epDate)).getFullYear()
+        if (!isNaN(y)) return String(y)
+      }
+    }
+    // Season-level (TMDb attaches seasonAirDate earlier as seasonAirDate)
+    const seasonDate = meta.seasonAirDate || (meta.raw && (meta.raw.seasonAirDate || (meta.raw.season && meta.raw.season.air_date))) || null
+    if (seasonDate) {
+      const y = new Date(String(seasonDate)).getFullYear()
+      if (!isNaN(y)) return String(y)
+    }
+    // Series-level typical fields
+    const seriesDate = meta.first_air_date || meta.release_date || meta.firstAirDate || (meta.raw && (meta.raw.first_air_date || meta.raw.release_date || meta.raw.firstAirDate)) || null
+    if (seriesDate) {
+      const y = new Date(String(seriesDate)).getFullYear()
+      if (!isNaN(y)) return String(y)
+    }
+    // older/top-level year fields
+    const candidates = [meta.year, meta.airedYear, meta.originalYear];
+    for (const c of candidates) if (c && String(c).match(/^\d{4}$/)) return String(c);
+    if (meta.timestamp) {
+      try { const d = new Date(Number(meta.timestamp)); if (!isNaN(d)) return String(d.getFullYear()) } catch (e) {}
+    }
+  } catch (e) { /* best-effort */ }
   // try to find a 4-digit year in title or parsedName
   const searchFields = [meta.title, meta.parsedName, path.basename(fromPath, path.extname(fromPath))];
   for (const f of searchFields) {
@@ -1659,7 +1734,7 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const seasonToken2 = (enrichment && enrichment.season != null) ? String(enrichment.season) : ''
               const episodeToken2 = (enrichment && enrichment.episode != null) ? String(enrichment.episode) : ''
               const episodeRangeToken2 = (enrichment && enrichment.episodeRange) ? String(enrichment.episodeRange) : ''
-              const tvdbIdToken2 = (enrichment && enrichment.tvdb && enrichment.tvdb.raw && (enrichment.tvdb.raw.id || enrichment.tvdb.raw.seriesId)) ? String(enrichment.tvdb.raw.id || enrichment.tvdb.raw.seriesId) : ''
+              const tmdbIdToken2 = (enrichment && enrichment.tmdb && enrichment.tmdb.raw && (enrichment.tmdb.raw.id || enrichment.tmdb.raw.seriesId)) ? String(enrichment.tmdb.raw.id || enrichment.tmdb.raw.seriesId) : ''
               const rawTitle2 = (enrichment && (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title))) ? (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title)) : path.basename(from, ext2)
               // reuse cleaning logic from preview to avoid duplicated episode labels/titles in rendered filenames
               const titleToken2 = cleanTitleForRender(rawTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
@@ -1672,7 +1747,7 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 .replace('{season}', sanitize(seasonToken2))
                 .replace('{episode}', sanitize(episodeToken2))
                 .replace('{episodeRange}', sanitize(episodeRangeToken2))
-                .replace('{tvdbId}', sanitize(tvdbIdToken2))
+                .replace('{tmdbId}', sanitize(tmdbIdToken2))
               const nameWithoutExt2 = String(nameWithoutExtRaw2)
                 .replace(/\s*\(\s*\)\s*/g, '')
                 .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
@@ -1934,7 +2009,6 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
   }
   res.json({ results });
 });
-
 // Unapprove last N applied renames: mark applied->false and unhide
 app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {
   try {
@@ -1987,8 +2061,13 @@ app.post('/api/logs/clear', (req, res) => {
   res.json({ ok: true });
 });
 
-// Backwards-compatible TVDB status endpoint -> proxy to /api/meta/status
+// Backwards-compatible route: keep /api/tvdb/status as an alias for legacy clients (proxies to /api/meta/status)
 app.get('/api/tvdb/status', (req, res) => {
+  return app._router.handle(req, res, () => {}, 'GET', '/api/meta/status')
+})
+
+// Official TMDb status alias (preferred)
+app.get('/api/tmdb/status', (req, res) => {
   return app._router.handle(req, res, () => {}, 'GET', '/api/meta/status')
 })
 
