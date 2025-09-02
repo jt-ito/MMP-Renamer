@@ -90,8 +90,20 @@ async function run(targetPath){
   const parent = path.basename(path.dirname(targetPath));
   const parsedFile = parseFilename(base);
   const parsedParent = parseFilename(parent);
+  // Never treat season/episode parsed from the parent folder as authoritative.
+  // For diagnostic clarity, mask parent-derived season/episode fields so callers
+  // see only the human-friendly title coming from the parent folder.
+  try {
+    if (parsedParent) {
+      parsedParent.season = null;
+      parsedParent.episode = null;
+      parsedParent.episodeTitle = '';
+      parsedParent.episodeRange = null;
+      parsedParent.parsedName = parsedParent.title || parsedParent.parsedName || parent;
+    }
+  } catch (e) {}
   console.log('\nParsed from filename:', parsedFile);
-  console.log('\nParsed from parent folder:', parsedParent);
+  console.log('\nParsed from parent folder (masked):', parsedParent);
 
   const apiKey = readKey();
   console.log('\nTMDb key present:', !!apiKey);

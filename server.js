@@ -572,6 +572,8 @@ function metaLookup(title, apiKey, opts = {}) {
           const pbase = path.basename(String(opts.parentPath || ''))
           const parseFilename = require('./lib/filename-parser')
           const pp = parseFilename(pbase)
+          // Only adopt the parent's human-friendly title. Never copy season/episode
+          // fields from a parent folder; episode numbers must come from the filename.
           if (pp && pp.title) opts.parentCandidate = String(pp.title).trim()
         } catch (e) {}
       }
@@ -584,21 +586,20 @@ function metaLookup(title, apiKey, opts = {}) {
       const parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
       const parentPath = opts && opts.parentPath ? String(opts.parentPath).trim() : null
       const tryParentTmdb = async () => {
-        if (!parentCandidate) {
-          // Derive parentCandidate from opts.parentPath when available
+        // Compute an effective parent candidate but never inherit season/episode
+        // parsed from a parent folder. Preference: opts.parentCandidate -> parentPath parse -> strip from title.
+        let effectiveParent = parentCandidate || null
+        if (!effectiveParent) {
           try {
             if (opts && opts.parentPath) {
               const pbase = path.basename(String(opts.parentPath || ''))
               const parseFilename = require('./lib/filename-parser')
               const pp = parseFilename(pbase)
-              if (pp && pp.title) parentCandidate = String(pp.title).trim()
+              if (pp && pp.title) effectiveParent = String(pp.title).trim()
             }
           } catch (e) {}
         }
-        // If still missing, attempt a conservative derivation from the original title
-        // by stripping episode tokens (e.g., 'Show S01E01' -> 'Show') so parent-based
-        // lookups are attempted when parent detection failed earlier.
-        if (!parentCandidate) {
+        if (!effectiveParent) {
           try {
             const stripEpisodeTokensLocal = (s) => {
               if (!s) return s
@@ -609,10 +610,10 @@ function metaLookup(title, apiKey, opts = {}) {
               return out
             }
             const derived = stripEpisodeTokensLocal(title)
-            if (derived && derived.length && derived !== title) parentCandidate = derived
+            if (derived && derived.length && derived !== title) effectiveParent = derived
           } catch (e) {}
         }
-        if (!parentCandidate) return null
+        if (!effectiveParent) return null
         try {
           if (configuredInput && parentPath) {
             const resolvedConfigured = path.resolve(configuredInput)
@@ -621,7 +622,7 @@ function metaLookup(title, apiKey, opts = {}) {
           }
         } catch (e) {}
         return new Promise((resParent) => {
-          tryTmdbVariants(makeVariants(parentCandidate), (pRes) => {
+          tryTmdbVariants(makeVariants(effectiveParent), (pRes) => {
             if (pRes) return resParent({ name: pRes.name, raw: Object.assign({}, pRes.raw, { id: pRes.id, type: pRes.type || pRes.mediaType || 'tv', source: 'tmdb' }), episode: pRes.episode || null })
             return resParent(null)
           })
@@ -875,7 +876,20 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // so TMDb can match the show by its usual title.
   const epStrForSpecial = String(normEpisode != null ? normEpisode : '')
   const isSpecialCandidate = (Number(normSeason) === 0) || (epStrForSpecial.indexOf('.') !== -1)
-  const seriesLookupTitle = isSpecialCandidate ? (stripEpisodeTokens(seriesName) || seriesName) : seriesName
+  let seriesLookupTitle
+  if (isSpecialCandidate) {
+    // For specials, prefer the parent folder (series) title so we locate the show first,
+    // then lookup the special within that series. Only fall back to stripping episode
+    // tokens from the filename-derived title if no parent candidate was found.
+    if (parentCandidate) {
+      try { appendLog(`META_PARENT_PREFERRED_FOR_SPECIAL parent=${parentCandidate} path=${parentPath || ''}`) } catch (e) {}
+      seriesLookupTitle = parentCandidate
+    } else {
+      seriesLookupTitle = stripEpisodeTokens(seriesName) || seriesName
+    }
+  } else {
+    seriesLookupTitle = seriesName
+  }
   const res = await metaLookup(seriesLookupTitle, tmdbKey, { year: parsed.year, season: normSeason, episode: normEpisode, preferredProvider, parsedEpisodeTitle: episodeTitle, parentCandidate: parentCandidate, parentPath })
       if (res && res.name) {
         // Map TMDb response into our guess structure explicitly
@@ -901,6 +915,14 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
           } else {
             guess.tmdb = { matched: false }
           }
+
+          // IMPORTANT: keep parsed episode/season strictly from filename.
+          // Prevent parent-folder parsing or provider results from overriding
+          // the episode/season numbers that were extracted from the filename.
+          try {
+            guess.season = normSeason;
+            guess.episode = normEpisode;
+          } catch (e) { /* best-effort */ }
 
           // Year extraction: prefer episode air date (if episode lookup was performed),
           // then season-level air date (seasonAirDate attached earlier), then series-level
