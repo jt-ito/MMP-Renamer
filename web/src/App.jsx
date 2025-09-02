@@ -724,8 +724,9 @@ export default function App() {
     return () => window.removeEventListener('renamer:unapproved', handler)
   }, [])
 
+  const selectedCount = Object.keys(selected || {}).length
   return (
-  <div className={"app" + (selectMode ? ' select-mode-shrink' : '')}>
+  <div className={"app" + (selectMode && selectedCount ? ' select-mode-shrink' : '')}>
       <header>
         <h1 style={{cursor:'pointer'}} onClick={() => (window.location.hash = '#/')} title="Go to dashboard">MMP Renamer</h1>
   {/* Header search: placed between title and header actions so it doesn't overlap buttons */}
@@ -749,7 +750,7 @@ export default function App() {
 
         {auth ? (
             <div className="header-actions">
-            <button className={"btn-save" + (selectMode ? ' shifted' : '')} onClick={() => triggerScan(libraries[0])}><span>Scan</span></button>
+            <button className={"btn-save" + (selectMode && selectedCount ? ' shifted' : '')} onClick={() => triggerScan(libraries[0])}><span>Scan</span></button>
             {/* Select + Approve wrapper: Approve is absolutely positioned so it doesn't reserve space when hidden */}
             <div className="select-approve-wrap">
               <button
