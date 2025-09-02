@@ -580,7 +580,7 @@ function metaLookup(title, apiKey, opts = {}) {
       tryOne(0)
     }
 
-    const variants = makeVariants(title)
+  const variants = makeVariants(title)
     const configuredInput = readConfiguredInput()
     // If caller didn't provide a parentCandidate but did provide a parentPath, try to
     // derive a usable parentCandidate from the parent folder's basename so metaLookup
@@ -599,15 +599,18 @@ function metaLookup(title, apiKey, opts = {}) {
     } catch (e) {}
     // TMDb: try variants against TMDb and return first match; if TMDb fails, try parent title (if provided and not input root), then Kitsu as a fallback
     tryTmdbVariants(variants, (tRes) => {
+      try { appendLog(`META_TMDB_VARIANTS_CALLBACK present=${tRes ? 'yes' : 'no'}`) } catch (e) {}
       if (tRes) return resolve({ name: tRes.name, raw: Object.assign({}, tRes.raw, { id: tRes.id, type: tRes.type || tRes.mediaType || 'tv', source: 'tmdb' }), episode: tRes.episode || null })
 
       // If parentCandidate was provided via opts.parentCandidate and it's allowed (not the configured input root), try TMDb with parent variants
-      const parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
-      const parentPath = opts && opts.parentPath ? String(opts.parentPath).trim() : null
+  const parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
+  const parentPath = opts && opts.parentPath ? String(opts.parentPath).trim() : null
+  try { appendLog(`META_PARENT_INFO parentCandidate=${parentCandidate || '<none>'} parentPath=${parentPath || '<none>'}`) } catch (e) {}
       const tryParentTmdb = async () => {
         // Compute an effective parent candidate but never inherit season/episode
         // parsed from a parent folder. Preference: opts.parentCandidate -> parentPath parse -> strip from title.
-        let effectiveParent = parentCandidate || null
+  let effectiveParent = parentCandidate || null
+  try { appendLog(`META_PARENT_DEBUG initialEffective=${effectiveParent || '<none>'}`) } catch (e) {}
         if (!effectiveParent) {
           try {
             if (opts && opts.parentPath) {
@@ -615,6 +618,7 @@ function metaLookup(title, apiKey, opts = {}) {
               const parseFilename = require('./lib/filename-parser')
               const pp = parseFilename(pbase)
               if (pp && pp.title) effectiveParent = String(pp.title).trim()
+              try { appendLog(`META_PARENT_DEBUG parsedParentTitle=${pp && pp.title ? String(pp.title).trim() : '<none>'}`) } catch (e) {}
             }
           } catch (e) {}
         }
@@ -628,18 +632,36 @@ function metaLookup(title, apiKey, opts = {}) {
               out = out.replace(/[_\.\-\s]+/g, ' ').trim()
               return out
             }
-            const derived = stripEpisodeTokensLocal(title)
-            if (derived && derived.length && derived !== title) effectiveParent = derived
+      const derived = stripEpisodeTokensLocal(title)
+      if (derived && derived.length && derived !== title) effectiveParent = derived
+      try { appendLog(`META_PARENT_DEBUG derivedFromTitle=${derived || '<none>'}`) } catch (e) {}
           } catch (e) {}
         }
-        if (!effectiveParent) return null
-        try {
-          if (configuredInput && parentPath) {
-            const resolvedConfigured = path.resolve(configuredInput)
-            const resolvedParent = path.resolve(parentPath)
-            if (resolvedConfigured === resolvedParent) return null
-          }
-        } catch (e) {}
+    try { appendLog(`META_PARENT_DEBUG effectiveParent_now=${effectiveParent || '<none>'}`) } catch (e) {}
+    if (!effectiveParent) return null
+          try {
+            if (configuredInput && parentPath) {
+              try {
+                // Use realpath where possible to avoid mismatches due to symlinks or
+                // trailing slashes. If the parent's realpath equals the configured
+                // input realpath, treat it as the input root and skip parent lookup.
+                let resolvedConfigured = null
+                let resolvedParent = null
+                try {
+                  resolvedConfigured = fs.realpathSync(path.resolve(configuredInput))
+                } catch (e) { resolvedConfigured = path.resolve(configuredInput) }
+                try {
+                  resolvedParent = fs.realpathSync(path.resolve(parentPath))
+                } catch (e) { resolvedParent = path.resolve(parentPath) }
+                try { appendLog(`META_PARENT_DEBUG resolvedConfigured=${resolvedConfigured} resolvedParent=${resolvedParent}`) } catch (e) {}
+                if (resolvedConfigured === resolvedParent) {
+                  try { appendLog(`META_PARENT_DEBUG skipping_parent_lookup_parent_is_input_root=${resolvedParent}`) } catch (e) {}
+                  return null
+                }
+              } catch (e) { /* ignore resolution errors */ }
+            }
+          } catch (e) {}
+    try { appendLog(`META_PARENT_DEBUG willSearch=${effectiveParent}`) } catch (e) {}
         return new Promise((resParent) => {
           tryTmdbVariants(makeVariants(effectiveParent), (pRes) => {
             if (pRes) return resParent({ name: pRes.name, raw: Object.assign({}, pRes.raw, { id: pRes.id, type: pRes.type || pRes.mediaType || 'tv', source: 'tmdb' }), episode: pRes.episode || null })
@@ -649,7 +671,9 @@ function metaLookup(title, apiKey, opts = {}) {
       }
 
       (async () => {
+        try { appendLog(`META_PARENT_INVOCATION attempting tryParentTmdb parentCandidate=${parentCandidate || '<none>'} parentPath=${parentPath || '<none>'}`) } catch (e) {}
         const pTry = await tryParentTmdb()
+        try { appendLog(`META_PARENT_INVOCATION result=${pTry ? 'found' : 'none'}`) } catch (e) {}
         if (pTry) return resolve(pTry)
 
         // Kitsu fallback
@@ -737,6 +761,7 @@ function metaLookup(title, apiKey, opts = {}) {
 }
 
 async function externalEnrich(canonicalPath, providedKey, opts = {}) {
+  try { console.log('DEBUG: externalEnrich START path=', canonicalPath, 'providedKeyPresent=', !!providedKey); } catch (e) {}
   // lightweight filename parser to strip common release tags and extract season/episode
   const base = path.basename(canonicalPath, path.extname(canonicalPath));
   const parseFilename = require('./lib/filename-parser');
@@ -855,6 +880,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   formattedParsedName = formattedParsedName.trim()
 
   const guess = { title: seriesName, parsedName: formattedParsedName, season: normSeason, episode: normEpisode, episodeTitle };
+  try { console.log('DEBUG: externalEnrich parsed guess=', JSON.stringify(guess)); } catch (e) {}
 
   const tmdbKey = providedKey || (users && users.admin && users.admin.settings && users.admin.settings.tmdb_api_key) || (serverSettings && serverSettings.tmdb_api_key)
   // determine username (if provided) so we can honor per-user default provider and track fallback counts
@@ -869,6 +895,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   preferredProvider = 'tmdb'
   if (tmdbKey || preferredProvider) {
     try {
+  try { console.log('DEBUG: externalEnrich will attempt metaLookup seriesLookupTitle=', seriesLookupTitle, 'tmdbKeyPresent=', !!tmdbKey); } catch (e) {}
       const parentPath = path.resolve(path.dirname(canonicalPath))
       // Ensure we search the series title first. If the parsed `seriesName` still contains
       // episode tokens (e.g. 'S01E11.5 ...' or leading 'S01P01'), strip those episode-like
@@ -918,7 +945,31 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     metaOpts.season = normSeason;
     metaOpts.episode = normEpisode;
   }
-  const res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts)
+  let res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts)
+  try { console.log('DEBUG: externalEnrich metaLookup returned res=', !!res); } catch (e) {}
+  // If no provider result found for the filename-derived title, and we have a
+  // parent folder candidate, attempt a secondary lookup using the parent title
+  // (do not allow parent to override parsed season/episode; we still keep
+  // filename-derived numbers locally). This ensures we fall back to parent
+  // folder name when the filename title fails to match.
+  if (!res && parentCandidate) {
+    try { appendLog(`META_PARENT_FALLBACK trying parentCandidate=${parentCandidate}`) } catch (e) {}
+    try {
+      // Ensure we explicitly pass season/episode when invoking parent-based lookup
+      // so TMDb will perform an episode-level lookup once the series is matched.
+      const parentMetaOpts = Object.assign({}, metaOpts || {}, { season: normSeason, episode: normEpisode, parentCandidate: parentCandidate, parentPath: parentPath });
+      try { appendLog(`META_PARENT_FALLBACK invoking metaLookup parentCandidate=${parentCandidate} optsSeason=${parentMetaOpts.season != null ? parentMetaOpts.season : '<none>'} optsEpisode=${parentMetaOpts.episode != null ? parentMetaOpts.episode : '<none>'}`) } catch (e) {}
+      const pRes = await metaLookup(parentCandidate, tmdbKey, parentMetaOpts)
+      if (pRes) {
+        try { appendLog(`META_PARENT_FALLBACK success parentCandidate=${parentCandidate}`) } catch (e) {}
+        res = pRes
+      } else {
+        try { appendLog(`META_PARENT_FALLBACK none parentCandidate=${parentCandidate}`) } catch (e) {}
+      }
+    } catch (e) {
+      try { appendLog(`META_PARENT_FALLBACK error parentCandidate=${parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (e) {}
+    }
+  }
       if (res && res.name) {
         // Map TMDb response into our guess structure explicitly
         try {
