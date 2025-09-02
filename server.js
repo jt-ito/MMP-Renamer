@@ -1717,6 +1717,21 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               // assign for subsequent operations
               // prefer the rendered name if target path differs
               var effectiveToResolved = newToResolved;
+              // helper to create symlink preferring a relative target when possible
+              function createSymlinkPreferRelative(srcPath, linkPath) {
+                try {
+                  const rel = path.relative(path.dirname(linkPath), srcPath);
+                  // If relative path is shorter and doesn't ascend outside root too strangely, try it first
+                  try {
+                    fs.symlinkSync(rel, linkPath, 'file');
+                    appendLog(`SYMLINK_TARGET_USED link=${linkPath} target=${rel}`);
+                    return;
+                  } catch (e) {
+                    // fallback to absolute
+                  }
+                  try { fs.symlinkSync(srcPath, linkPath, 'file'); appendLog(`SYMLINK_TARGET_USED link=${linkPath} target=${srcPath}`); return; } catch (e2) { throw e2 }
+                } catch (e) { throw e }
+              }
             } catch (renderErr) {
               // fallback to original toResolved
               var effectiveToResolved = toResolved;
@@ -1756,9 +1771,9 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 }
               }
             } catch (e) { throw e }
-            if (!fs.existsSync(effectiveToResolved)) {
+              if (!fs.existsSync(effectiveToResolved)) {
               try {
-                try { fs.symlinkSync(from, effectiveToResolved, 'file'); } catch (syErr) { fs.symlinkSync(from, effectiveToResolved); }
+                createSymlinkPreferRelative(from, effectiveToResolved)
                 resultsItem.status = 'symlinked';
                 resultsItem.to = effectiveToResolved;
                 appendLog(`SYMLINK_OK from=${from} to=${effectiveToResolved}`);
@@ -1852,7 +1867,15 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 }
               } catch (e) { throw e }
               try {
-                try { fs.symlinkSync(from, to, 'file'); } catch (syErr2) { fs.symlinkSync(from, to); }
+                // create using helper that prefers relative targets
+                function createSymlinkPreferRelative(srcPath, linkPath) {
+                  try {
+                    const rel = path.relative(path.dirname(linkPath), srcPath);
+                    try { fs.symlinkSync(rel, linkPath, 'file'); appendLog(`SYMLINK_TARGET_USED link=${linkPath} target=${rel}`); return; } catch (e) {}
+                    try { fs.symlinkSync(srcPath, linkPath, 'file'); appendLog(`SYMLINK_TARGET_USED link=${linkPath} target=${srcPath}`); return; } catch (e2) { throw e2 }
+                  } catch (e) { throw e }
+                }
+                createSymlinkPreferRelative(from, to)
                 resultsItem.status = 'symlinked';
                 resultsItem.to = to;
                 appendLog(`SYMLINK_OK from=${from} to=${to}`);
