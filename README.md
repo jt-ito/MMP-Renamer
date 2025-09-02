@@ -140,6 +140,31 @@ services:
       # optionally set global TMDb key
       # - TMDB_API_KEY=your_tmdb_key_here
 
+Alternate docker-compose service example
+---------------------------------------
+
+You can also use the following service block in a compose file. This example mirrors common deployment variables used in this repo and shows a named service with a container name.
+
+```yaml
+mmp-renamer:
+    build:
+      context: ${MR_BUILD_PATH}
+      dockerfile: Dockerfile
+    container_name: mmp-renamer
+    # Optional: you can replace `build:` with `image: mmp-renamer:latest` to run a prebuilt image
+    # Ensure the container (the user really) has R/W privileges by running (enter the path to where you have your data path set in the yml):sudo chown -R 1000:1000 /home/jt/containers/MMP-Renamer/data
+    privileged: true
+    ports:
+      - "${MR_EXTERNAL_PORT}:${MR_INTERNAL_PORT}"
+    environment:
+      - SESSION_KEY=${MR_SESSION_KEY} # required for secure cookie signing
+      - SESSION_COOKIE_SECURE=${MR_SESSION_COOKIE_SECURE} # optional: override secure cookie setting. Usefull when running on localhost (anything without https)
+    volumes:
+      - ${MR_DATA_PATH}:/usr/src/app/data   # persistent runtime data (users, enrich.json, rendered-index.json)
+      - ${MR_MOUNT_PATH}:/mnt:rw  # mount the entire drive that includes both your input and output folders
+    restart: unless-stopped
+```
+
 Notes:
 - Replace `/mnt/disk/media` with your host mountpoint that contains both the input and output folders.
 - If you run the container on Windows, use the host path appropriate for Windows (e.g., `//c/Users/you/media` or `C:\\media` depending on Docker setup). The same principle applies: mount the parent device/mountpoint once.
