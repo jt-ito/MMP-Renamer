@@ -563,6 +563,19 @@ function metaLookup(title, apiKey, opts = {}) {
 
     const variants = makeVariants(title)
     const configuredInput = readConfiguredInput()
+    // If caller didn't provide a parentCandidate but did provide a parentPath, try to
+    // derive a usable parentCandidate from the parent folder's basename so metaLookup
+    // can still attempt a parent-based search during rescans/refreshes.
+    try {
+      if (!(opts && opts.parentCandidate) && opts && opts.parentPath) {
+        try {
+          const pbase = path.basename(String(opts.parentPath || ''))
+          const parseFilename = require('./lib/filename-parser')
+          const pp = parseFilename(pbase)
+          if (pp && pp.title) opts.parentCandidate = String(pp.title).trim()
+        } catch (e) {}
+      }
+    } catch (e) {}
     // TMDb: try variants against TMDb and return first match; if TMDb fails, try parent title (if provided and not input root), then Kitsu as a fallback
     tryTmdbVariants(variants, (tRes) => {
       if (tRes) return resolve({ name: tRes.name, raw: Object.assign({}, tRes.raw, { id: tRes.id, type: tRes.type || tRes.mediaType || 'tv', source: 'tmdb' }), episode: tRes.episode || null })
@@ -571,6 +584,34 @@ function metaLookup(title, apiKey, opts = {}) {
       const parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
       const parentPath = opts && opts.parentPath ? String(opts.parentPath).trim() : null
       const tryParentTmdb = async () => {
+        if (!parentCandidate) {
+          // Derive parentCandidate from opts.parentPath when available
+          try {
+            if (opts && opts.parentPath) {
+              const pbase = path.basename(String(opts.parentPath || ''))
+              const parseFilename = require('./lib/filename-parser')
+              const pp = parseFilename(pbase)
+              if (pp && pp.title) parentCandidate = String(pp.title).trim()
+            }
+          } catch (e) {}
+        }
+        // If still missing, attempt a conservative derivation from the original title
+        // by stripping episode tokens (e.g., 'Show S01E01' -> 'Show') so parent-based
+        // lookups are attempted when parent detection failed earlier.
+        if (!parentCandidate) {
+          try {
+            const stripEpisodeTokensLocal = (s) => {
+              if (!s) return s
+              let out = String(s)
+              out = out.replace(/^\s*(?:S0*\d{1,2}[EPp]0*\d{1,3}(?:\.\d+)?|S0*\d{1,2}|E0*\d{1,3}|0*\d{1,3})[\s\-_:]+/i, '')
+              out = out.replace(/[\s\-_:]+(?:S0*\d{1,2}[EPp]0*\d{1,3}(?:\.\d+)?|S0*\d{1,2}|E0*\d{1,3}|0*\d{1,3})\s*$/i, '')
+              out = out.replace(/[_\.\-\s]+/g, ' ').trim()
+              return out
+            }
+            const derived = stripEpisodeTokensLocal(title)
+            if (derived && derived.length && derived !== title) parentCandidate = derived
+          } catch (e) {}
+        }
         if (!parentCandidate) return null
         try {
           if (configuredInput && parentPath) {
@@ -809,7 +850,33 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   if (tmdbKey || preferredProvider) {
     try {
       const parentPath = path.resolve(path.dirname(canonicalPath))
-      const res = await metaLookup(seriesName, tmdbKey, { year: parsed.year, season: normSeason, episode: normEpisode, preferredProvider, parsedEpisodeTitle: episodeTitle, parentCandidate: parentCandidate, parentPath })
+      // Ensure we search the series title first. If the parsed `seriesName` still contains
+      // episode tokens (e.g. 'S01E11.5 ...' or leading 'S01P01'), strip those episode-like
+      // tokens out so TMDb receives a clean series candidate. We keep the original parsed
+      // episode/season in opts so metaLookup can still perform episode-level lookup once the
+      // series is matched.
+      function stripEpisodeTokens(s) {
+        try {
+          if (!s) return s
+          let out = String(s)
+          // remove leading episode markers like 'S01E01', 'S01E11.5', 'S01P01', 'E01', '01'
+          out = out.replace(/^\s*(?:S0*\d{1,2}[EPp]0*\d{1,3}(?:\.\d+)?|S0*\d{1,2}|E0*\d{1,3}|0*\d{1,3})[\s\-_:]+/i, '')
+          // also remove trailing episode markers e.g. ' - S01E01' or ' S01E01'
+          out = out.replace(/[\s\-_:]+(?:S0*\d{1,2}[EPp]0*\d{1,3}(?:\.\d+)?|S0*\d{1,2}|E0*\d{1,3}|0*\d{1,3})\s*$/i, '')
+          // collapse leftover separators and trim
+          out = out.replace(/[_\.\-\s]+/g, ' ').trim()
+          return out
+        } catch (e) { return s }
+      }
+
+  // Only strip episode tokens for special-like episodes so regular SxxEyy lookups
+  // remain untouched. A special candidate is either season 0 or a decimal episode
+  // number (e.g., 11.5). For non-special episodes, forward the original seriesName
+  // so TMDb can match the show by its usual title.
+  const epStrForSpecial = String(normEpisode != null ? normEpisode : '')
+  const isSpecialCandidate = (Number(normSeason) === 0) || (epStrForSpecial.indexOf('.') !== -1)
+  const seriesLookupTitle = isSpecialCandidate ? (stripEpisodeTokens(seriesName) || seriesName) : seriesName
+  const res = await metaLookup(seriesLookupTitle, tmdbKey, { year: parsed.year, season: normSeason, episode: normEpisode, preferredProvider, parsedEpisodeTitle: episodeTitle, parentCandidate: parentCandidate, parentPath })
       if (res && res.name) {
         // Map TMDb response into our guess structure explicitly
         try {
