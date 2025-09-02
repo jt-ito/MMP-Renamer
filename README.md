@@ -60,68 +60,115 @@ Build with custom repo/ref (the Dockerfile supports `REPO_URL` and `REPO_REF` bu
 ```powershell
 docker build --build-arg REPO_URL=https://github.com/jt-ito/MMP-Renamer.git --build-arg REPO_REF=main -t mmp-renamer:latest .
 ```
+MMP-Renamer
+===========
 
-Example `docker-compose.yml` snippet:
+A lightweight media renamer and organizer with provider-based enrichment (TMDb/Kitsu).
 
-```yaml
+This README describes how to run the server and web UI, configure metadata providers, and how to run in Docker or Docker Compose. It also explains an important mount rule when running inside containers: hardlinks cannot cross filesystems, so mount the parent mount point (or entire device) into the container instead of mounting multiple individual subpaths from the same device.
+
+Quick features
+- Filename parsing and parsed vs provider naming separation (parsed results never include episodeTitle)
+- TMDb primary provider with Kitsu fallback
+- Per-user and server settings (API keys, scan input/output, rename template)
+- Hardlink-only "apply" semantics by default (no copy fallback) — keeps storage efficient and avoids duplicates
+- Background first-N enrichment to populate provider-rendered names
+- Sweep helper to purge stale enrichment entries
+
+Getting started (local)
+1. Install Node.js 18+ and npm
+2. Clone repo and install deps
+
+   npm install
+
+3. Start server (development)
+
+   node server.js
+
+4. Open the web UI at http://localhost:5173 (or the port you configured)
+
+Configuration
+- Server settings (global admin): `data/settings.json` or via Admin UI -> Settings (requires an admin account)
+  - `tmdb_api_key`, `tvdb_api_key` — provider keys used when user keys are not supplied
+  - `scan_output_path` — server default output path for hardlinking
+  - `rename_template` — default rename template
+- Per-user settings stored in `data/users.json` under each user -> `settings`:
+  - `scan_input_path` — user default input path for scans
+  - `scan_output_path` — user default output path for renames
+  - `tmdb_api_key` — optional user key that overrides server key
+  - `rename_template` — user template to override server default
+
+Important: hardlinks and mounts (Docker/containers)
+-----------------------------------------------
+Hardlinks are implemented with `fs.linkSync` and therefore cannot be created across different filesystems or mount points. When the server runs inside a container, the kernel sees container mount points as distinct filesystems if you mount multiple host directories separately — even if they live on the same physical device. That causes EXDEV (cross-device link) errors when the server attempts to hardlink from the input path to the output path.
+
+To avoid this problem, mount the entire parent mount (or the device root) into the container and reference subfolders inside the container. Do NOT mount separate subfolders individually when you need to hardlink between them.
+
+Example: Bad (DON'T do this)
+- Mount `/mnt/disk/media/input` -> `/input`
+- Mount `/mnt/disk/media/output` -> `/media`
+
+Even though both host paths live on the same physical device, the container will often treat `/input` and `/media` as separate mount points and hardlinks will fail with EXDEV.
+
+Example: Good (DO this)
+- Mount `/mnt/disk/media` -> `/media`
+  - Use `/media/input` and `/media/output` inside the container for scanning and output.
+
+This ensures the kernel sees the source and the destination as the same filesystem and hardlinks succeed.
+
+Docker / Docker Compose
+-----------------------
+A recommended Docker setup is to mount the parent media directory into the container and map a host data directory for the server state.
+
+Minimal docker-compose example:
+
+version: '3.8'
 services:
-  mmp-renamer:
-    build:
-      context: ${MR_BUILD_PATH}
-      dockerfile: Dockerfile
-    # Optional: you can replace `build:` with `image: mmp-renamer:latest` to run a prebuilt image
-    # Ensure the container (the user really) has R/W privileges by running (enter the path to where you have your data path set in the yml):sudo chown -R 1000:1000 /home/jt/containers/MMP-Renamer/data
-    privileged: true
-    ports:
-      - "${MR_EXTERNAL_PORT}:${MR_INTERNAL_PORT}"
-    environment:
-      - SESSION_KEY=${MR_SESSION_KEY} # required for secure cookie signing
-      - SESSION_COOKIE_SECURE=${MR_SESSION_COOKIE_SECURE} # optional: override secure cookie setting. Usefull when running on localhost (anything without https)
+  renamer:
+    image: node:18-alpine
+    working_dir: /app
     volumes:
-      - ${MR_DATA_PATH}:/usr/src/app/data   # persistent runtime data (users, enrich.json, rendered-index.json)
-      - ${JF_MEDIA_PATH}:/media:rw  # optional: media library for hardlinking
-      - ${MR_INPUT_PATH}:/input:rw   # optional: input folder to scan
-    restart: unless-stopped
-```
+      - ./data:/app/data
+      - /mnt/disk/media:/media   # mount the entire media mountpoint
+      - ./web:/app/web
+      - ./lib:/app/lib
+    command: sh -c "npm install --production && node server.js"
+    ports:
+      - "5173:5173"
+    environment:
+      - NODE_ENV=production
+      # optionally set global TMDb key
+      # - TMDB_API_KEY=your_tmdb_key_here
 
-## Security & initialization
+Notes:
+- Replace `/mnt/disk/media` with your host mountpoint that contains both the input and output folders.
+- If you run the container on Windows, use the host path appropriate for Windows (e.g., `//c/Users/you/media` or `C:\\media` depending on Docker setup). The same principle applies: mount the parent device/mountpoint once.
 
-- Do NOT commit the `data/` directory. It holds runtime state and secrets (API keys, password hashes).
-- The repo includes `.gitignore` to exclude `data/` and common build artifacts.
-- To create an admin without storing plaintext passwords in the repo:
-  - Start the server once with `ADMIN_PASSWORD` set (it will create the admin on first run), then
-    remove `ADMIN_PASSWORD` from the environment.
-  - Or use the helper scripts in `scripts/` to generate a bcrypt hash and populate `data/users.json`.
+Running without Docker
+----------------------
+If you run directly on a host OS, hardlinks will succeed as long as the input and output paths are on the same filesystem. If your input and output are on different drives, hardlinks will not be possible.
 
-## What's changed in this fork
+Behavior choices
+- Default: hardlink-only. If the server cannot hardlink due to EXDEV, the operation fails and is logged. This avoids accidental duplication.
+- Alternative: you may enable a copy-on-cross-device fallback by setting a server option (not enabled by default) — this will copy the file when hardlinks are impossible. Use with care.
 
-- TMDb enrichment is used when a TMDb API key is configured (old Kitsu provider removed).
-- Preview/apply now prefers creating hardlinks under the configured output path and does not
-  mutate the original files.
-- Applied renames are persisted with metadata and can be unapproved from the UI.
-- Default rename template: `{title} ({year}) - {epLabel} - {episodeTitle}`.
-- Select-mode and batch approve UI added.
+Admin & Troubleshooting
+- Check `data/logs.txt` for helpful short tokens (SCAN_START, ENRICH_REQUEST, ENRICH_SUCCESS, PREVIEW_EFFECTIVE_OUTPUT, HARDLINK_OK, HARDLINK_FAIL, HARDLINK_CROSS_DEVICE, HARDLINK_REFUSE_INPUT)
+- If you see `HARDLINK_CROSS_DEVICE` or EXDEV errors, verify mounts as described above.
+- Use the `/api/path/exists` endpoint to confirm the server can see configured paths.
 
-## Development notes & next steps
+Security & Permissions
+- The server must have read access to scan input folders and write access to the configured output path.
+- When running in Docker, ensure the container user has correct permissions or use a bind-mounted data directory with compatible permissions.
 
-- The backend is a single `server.js` Express app; frontend lives in `web/` (Vite + React).
-- If you want CI or automated image publishing, I can add a GitHub Actions workflow that builds
-  the web assets and images using repository secrets (recommended approach for private tokens).
+Contributing
+- Tests and scripts live under `scripts/` — please run `npm test` or inspect `scripts/test-hardlink.js` when changing hardlink logic.
 
-## How I validated changes (local checks you can reproduce)
+Credits
+- Built with Node.js and a minimal React UI in `web/`.
 
-- Confirm data persistence: `data/enrich.json` and `data/rendered-index.json` are written when
-  items are applied.
-- Sanity check: run server and use the UI to scan a small folder, preview a rename, and apply it.
+License
+- MIT
 
-## Help me push this
 
-I updated and sanitized files in the workspace locally. To push the sanitized repo to GitHub from
-your machine run the usual git commands (set user.name / user.email, commit, and push). I could not
-complete the push here because this environment doesn't have your Git credentials.
-
-If you want, I can add a short `CONTRIBUTING.md`, a GitHub Actions workflow for CI, or a `docker-compose.override.yml` for development.
-
----
-
-Licensed under MIT (example)
+If you'd like, I can also add a small troubleshooting checklist to the Admin UI that detects EXDEV situations and warns users before they apply renames. Let me know if you want that added and where you'd like the guidance displayed.
