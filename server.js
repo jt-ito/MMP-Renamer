@@ -273,6 +273,20 @@ function metaLookup(title, apiKey, opts = {}) {
   return new Promise((resolve) => {
     const https = require('https')
 
+    function readConfiguredInput() {
+      try {
+        const u = readJson(usersFile, {}) || {}
+        for (const k of Object.keys(u)) {
+          try { if (u[k] && u[k].settings && u[k].settings.scan_input_path) return path.resolve(u[k].settings.scan_input_path) } catch (e) {}
+        }
+      } catch (e) {}
+      try {
+        const s = readJson(settingsFile, {}) || {}
+        if (s && s.scan_input_path) return path.resolve(s.scan_input_path)
+      } catch (e) {}
+      return null
+    }
+
     function makeVariants(t) {
       const s = String(t || '').trim()
       const variants = []
@@ -548,12 +562,37 @@ function metaLookup(title, apiKey, opts = {}) {
     }
 
     const variants = makeVariants(title)
-    // TMDb: try variants against TMDb and return first match; if TMDb fails, try Kitsu as a fallback
+    const configuredInput = readConfiguredInput()
+    // TMDb: try variants against TMDb and return first match; if TMDb fails, try parent title (if provided and not input root), then Kitsu as a fallback
     tryTmdbVariants(variants, (tRes) => {
       if (tRes) return resolve({ name: tRes.name, raw: Object.assign({}, tRes.raw, { id: tRes.id, type: tRes.type || tRes.mediaType || 'tv', source: 'tmdb' }), episode: tRes.episode || null })
 
-      // Kitsu fallback
-      function tryKitsuVariants(variantsK, cbK) {
+      // If parentCandidate was provided via opts.parentCandidate and it's allowed (not the configured input root), try TMDb with parent variants
+      const parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
+      const parentPath = opts && opts.parentPath ? String(opts.parentPath).trim() : null
+      const tryParentTmdb = async () => {
+        if (!parentCandidate) return null
+        try {
+          if (configuredInput && parentPath) {
+            const resolvedConfigured = path.resolve(configuredInput)
+            const resolvedParent = path.resolve(parentPath)
+            if (resolvedConfigured === resolvedParent) return null
+          }
+        } catch (e) {}
+        return new Promise((resParent) => {
+          tryTmdbVariants(makeVariants(parentCandidate), (pRes) => {
+            if (pRes) return resParent({ name: pRes.name, raw: Object.assign({}, pRes.raw, { id: pRes.id, type: pRes.type || pRes.mediaType || 'tv', source: 'tmdb' }), episode: pRes.episode || null })
+            return resParent(null)
+          })
+        })
+      }
+
+      (async () => {
+        const pTry = await tryParentTmdb()
+        if (pTry) return resolve(pTry)
+
+        // Kitsu fallback
+        function tryKitsuVariants(variantsK, cbK) {
         const baseHostK = 'kitsu.io'
         const tryOneK = (iK) => {
           if (iK >= variantsK.length) return cbK(null);
@@ -611,10 +650,27 @@ function metaLookup(title, apiKey, opts = {}) {
         tryOneK(0)
       }
 
-      tryKitsuVariants(variants, (kRes) => {
+      // First try Kitsu with original title variants
+      tryKitsuVariants(variants, async (kRes) => {
         if (kRes) return resolve({ name: kRes.name, raw: Object.assign({}, kRes.raw, { id: kRes.id, type: kRes.type || 'tv', source: 'kitsu' }), episode: kRes.episode || null })
+        // If no Kitsu hit and parentCandidate exists and is allowed, try Kitsu with parent
+        if (parentCandidate) {
+          try {
+            if (configuredInput && parentPath) {
+              const resolvedConfigured = path.resolve(configuredInput)
+              const resolvedParent = path.resolve(parentPath)
+              if (resolvedConfigured === resolvedParent) return resolve(null)
+            }
+          } catch (e) {}
+          tryKitsuVariants(makeVariants(parentCandidate), (kRes2) => {
+            if (kRes2) return resolve({ name: kRes2.name, raw: Object.assign({}, kRes2.raw, { id: kRes2.id, type: kRes2.type || 'tv', source: 'kitsu' }), episode: kRes2.episode || null })
+            return resolve(null)
+          })
+          return
+        }
         return resolve(null)
       })
+    })
     })
   })
 }
@@ -656,42 +712,41 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   }
 
   // If parsed title looks like an episode (e.g., filename only contains SxxEyy - Title), prefer a parent-folder as series title
-  if (isEpisodeLike(seriesName) || isNoiseLike(seriesName)) {
-    try {
-  const parent = path.dirname(canonicalPath)
-  // normalize separators to '/' so splitting works for both Windows and POSIX-style input
-  const parts = String(parent).replace(/\\/g,'/').split('/').filter(Boolean)
-      const SKIP_FOLDER_TOKENS = new Set(['input','library','scan','local','media','video']);
-      for (let i = parts.length - 1; i >= 0; i--) {
+  // Compute a parent-folder candidate but do NOT prefer it yet — we'll try filename first, then parent if TMDb fails.
+  let parentCandidate = null
+  try {
+    const parent = path.dirname(canonicalPath)
+    // normalize separators to '/' so splitting works for both Windows and POSIX-style input
+    const parts = String(parent).replace(/\\/g,'/').split('/').filter(Boolean)
+    const SKIP_FOLDER_TOKENS = new Set(['input','library','scan','local','media','video']);
+    for (let i = parts.length - 1; i >= 0; i--) {
+      try {
+        const seg = parts[i]
+        if (!seg) continue
+        const pParsed = parseFilename(seg)
+        let cand = pParsed && pParsed.title ? String(pParsed.title).trim() : ''
+        if (!cand) continue
+        // If the candidate begins with a common folder keyword (e.g. 'input 86'), strip it
         try {
-          const seg = parts[i]
-          if (!seg) continue
-          const pParsed = parseFilename(seg)
-          let cand = pParsed && pParsed.title ? String(pParsed.title).trim() : ''
-          if (!cand) continue
-          // If the candidate begins with a common folder keyword (e.g. 'input 86'), strip it
-          try {
-            const toks = cand.split(/\s+/).filter(Boolean)
-            if (toks.length > 1 && SKIP_FOLDER_TOKENS.has(String(toks[0]).toLowerCase())) {
-              cand = toks.slice(1).join(' ')
-            }
-              // if after stripping it's still a skip token, ignore
-              if (SKIP_FOLDER_TOKENS.has(String(cand).toLowerCase())) continue
-            } catch (e) { /* ignore token cleanup errors */ }
-            // If candidate is numeric-only but the original folder segment contains an explicit season marker
-            // (e.g., 'S01' or '1x02'), accept the numeric series name. Otherwise skip episode-like or noisy candidates.
-            const rawSeg = String(seg || '')
-            const hasSeasonMarker = /\bS\d{1,2}([EPp]\d{1,3})?\b|\b\d{1,2}x\d{1,3}\b/i.test(rawSeg)
-            if (!(/^[0-9]+$/.test(String(cand).trim()) && hasSeasonMarker)) {
-              if (isEpisodeLike(cand) || isNoiseLike(cand)) continue
-            }
-          // prefer parent folder candidate
-          seriesName = cand
-          break
-        } catch (e) { /* ignore and continue up the path */ }
-      }
-    } catch (e) { /* ignore */ }
-  }
+          const toks = cand.split(/\s+/).filter(Boolean)
+          if (toks.length > 1 && SKIP_FOLDER_TOKENS.has(String(toks[0]).toLowerCase())) {
+            cand = toks.slice(1).join(' ')
+          }
+          // if after stripping it's still a skip token, ignore
+          if (SKIP_FOLDER_TOKENS.has(String(cand).toLowerCase())) continue
+        } catch (e) { /* ignore token cleanup errors */ }
+        // If candidate is numeric-only but the original folder segment contains an explicit season marker
+        // (e.g., 'S01' or '1x02'), accept the numeric series name. Otherwise skip episode-like or noisy candidates.
+        const rawSeg = String(seg || '')
+        const hasSeasonMarker = /\bS\d{1,2}([EPp]\d{1,3})?\b|\b\d{1,2}x\d{1,3}\b/i.test(rawSeg)
+        if (!(/^[0-9]+$/.test(String(cand).trim()) && hasSeasonMarker)) {
+          if (isEpisodeLike(cand) || isNoiseLike(cand)) continue
+        }
+        parentCandidate = cand
+        break
+      } catch (e) { /* ignore and continue up the path */ }
+    }
+  } catch (e) { /* ignore */ }
   if (normEpisode != null) {
     const eps = String(normEpisode)
     const epsRe = new RegExp('\\b0*' + eps + '\\b')
@@ -705,6 +760,24 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
       }
     }
   }
+
+    // Strip version-suffix tokens like 'v2', 'v3' that often follow episode markers (but preserve decimal episodes like 11.5)
+    function stripVersionSuffix(s) {
+      try {
+        if (!s) return s
+        let out = String(s)
+        // Remove attached vN after episode tokens: S01E01v2, E01v2, 01v2
+        out = out.replace(/\b((?:S\d{1,2}E\d{1,3})|(?:E\d{1,3})|(?:\d{1,3}))v\d+\b/ig, '$1')
+        // Remove trailing standalone vN tokens like ' - v2' or ' v3'
+        out = out.replace(/[-_\s]+v\d+\b/ig, '')
+        // Also remove trailing 'v2' attached to words like 'Episodev2'
+        out = out.replace(/v\d+\b/ig, '')
+        return out.trim()
+      } catch (e) { return s }
+    }
+
+    seriesName = stripVersionSuffix(seriesName)
+    episodeTitle = stripVersionSuffix(episodeTitle)
 
   function pad(n){ return String(n).padStart(2,'0') }
   let epLabel = ''
@@ -735,7 +808,8 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   preferredProvider = 'tmdb'
   if (tmdbKey || preferredProvider) {
     try {
-  const res = await metaLookup(seriesName, tmdbKey, { year: parsed.year, season: normSeason, episode: normEpisode, preferredProvider, parsedEpisodeTitle: episodeTitle })
+      const parentPath = path.resolve(path.dirname(canonicalPath))
+      const res = await metaLookup(seriesName, tmdbKey, { year: parsed.year, season: normSeason, episode: normEpisode, preferredProvider, parsedEpisodeTitle: episodeTitle, parentCandidate: parentCandidate, parentPath })
       if (res && res.name) {
         // Map TMDb response into our guess structure explicitly
         try {
