@@ -606,6 +606,8 @@ function metaLookup(title, apiKey, opts = {}) {
   const parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
   const parentPath = opts && opts.parentPath ? String(opts.parentPath).trim() : null
   try { appendLog(`META_PARENT_INFO parentCandidate=${parentCandidate || '<none>'} parentPath=${parentPath || '<none>'}`) } catch (e) {}
+  // Extra flush log: ensure any parent info is persisted before we attempt the parent lookup IIFE
+  try { appendLog(`META_PARENT_INFO_FLUSHED parentCandidate=${parentCandidate || '<none>'} parentPath=${parentPath || '<none>'}`) } catch (e) {}
       const tryParentTmdb = async () => {
         // Compute an effective parent candidate but never inherit season/episode
         // parsed from a parent folder. Preference: opts.parentCandidate -> parentPath parse -> strip from title.
