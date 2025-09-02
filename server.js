@@ -1401,8 +1401,26 @@ app.get('/api/enrich/debug', async (req, res) => { const p = req.query.path || '
 app.post('/api/rename/preview', (req, res) => {
   const { items, template, outputPath } = req.body || {};
   if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'items required' });
-  // resolve effective output path: request overrides server setting
-  const effectiveOutput = outputPath || serverSettings.scan_output_path || '';
+  // resolve effective output path: request overrides per-user setting -> server setting
+  let effectiveOutput = '';
+  try {
+    if (outputPath) {
+      effectiveOutput = outputPath;
+    } else {
+      const username = req.session && req.session.username;
+      if (username && users[username] && users[username].settings && users[username].settings.scan_output_path) {
+        effectiveOutput = users[username].settings.scan_output_path;
+      } else if (serverSettings && serverSettings.scan_output_path) {
+        effectiveOutput = serverSettings.scan_output_path;
+      } else {
+        effectiveOutput = '';
+      }
+    }
+    if (effectiveOutput) effectiveOutput = canonicalize(effectiveOutput);
+  } catch (e) {
+    effectiveOutput = outputPath || (serverSettings && serverSettings.scan_output_path) || '';
+  }
+  try { appendLog(`PREVIEW_EFFECTIVE_OUTPUT user=${req.session && req.session.username ? req.session.username : ''} effectiveOutput=${effectiveOutput || ''}`); } catch (e) {}
   const plans = items.map(it => {
     const fromPath = canonicalize(it.canonicalPath);
     const meta = enrichCache[fromPath] || {};
