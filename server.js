@@ -898,12 +898,8 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         break
       } catch (e) { /* ignore per-segment parse errors */ }
     }
-    if (parts.length > 1) {
-      const left = parts[0].replace(/[-_\s]+$/,'').trim()
-      const right = parts.slice(1).join('').replace(/^[\-_\s]+/,'').trim()
-      if (left) seriesName = left
-      if (right) episodeTitle = right
-    }
+  // Do not override seriesName from arbitrary parent path segments (e.g., '/mnt').
+  // The parentCandidate variable above is sufficient; leave seriesName as parsed from filename.
   } catch (e) { /* ignore parent derivation errors */ }
 
     // Strip version-suffix tokens like 'v2', 'v3' that often follow episode markers (but preserve decimal episodes like 11.5)
