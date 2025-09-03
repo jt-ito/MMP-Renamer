@@ -363,7 +363,7 @@ function metaLookup(title, apiKey, opts = {}) {
 
   // TMDb-only lookup implemented below
 
-    function tryTmdbVariants(variants, cb) {
+  function tryTmdbVariants(variants, cb, feedLabel) {
       if (!apiKey) return cb(null)
       const useTv = (opts && (opts.season != null || opts.episode != null))
       const baseHost = 'api.themoviedb.org'
@@ -371,7 +371,8 @@ function metaLookup(title, apiKey, opts = {}) {
           if (i >= variants.length) return cb(null);
           const q = encodeURIComponent(variants[i]);
           const searchPath = useTv ? `/3/search/tv?api_key=${encodeURIComponent(apiKey)}&query=${q}` : `/3/search/multi?api_key=${encodeURIComponent(apiKey)}&query=${q}`;
-          try { appendLog(`META_TMDB_SEARCH_FEED title=${String(title || '').slice(0,200)} variant=${String(variants[i] || '').slice(0,200)} useTv=${useTv}`) } catch (e) {}
+      const feed = (typeof feedLabel !== 'undefined' && feedLabel !== null) ? String(feedLabel).slice(0,200) : String(title || '').slice(0,200)
+      try { appendLog(`META_TMDB_SEARCH_FEED feed=${feed} variant=${String(variants[i] || '').slice(0,200)} useTv=${useTv}`) } catch (e) {}
           const req = https.request({ hostname: baseHost, path: searchPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (res) => {
             let sb = '';
             res.on('data', d => sb += d);
@@ -651,8 +652,8 @@ function metaLookup(title, apiKey, opts = {}) {
         } catch (e) {}
       }
     } catch (e) {}
-    // TMDb: try variants against TMDb and return first match; if TMDb fails, try parent title (if provided and not input root), then Kitsu as a fallback
-    tryTmdbVariants(variants, (tRes) => {
+  // TMDb: try variants against TMDb and return first match (feedLabel=title); if TMDb fails, try parent title (if provided and not input root), then Kitsu as a fallback
+  tryTmdbVariants(variants, (tRes) => {
       try { appendLog(`META_TMDB_VARIANTS_CALLBACK present=${tRes ? 'yes' : 'no'}`) } catch (e) {}
       if (tRes) return resolve({ name: tRes.name, raw: Object.assign({}, tRes.raw, { id: tRes.id, type: tRes.type || tRes.mediaType || 'tv', source: 'tmdb' }), episode: tRes.episode || null })
 
@@ -717,14 +718,14 @@ function metaLookup(title, apiKey, opts = {}) {
               } catch (e) { /* ignore resolution errors */ }
             }
           } catch (e) {}
-    try { appendLog(`META_PARENT_DEBUG willSearch=${effectiveParent}`) } catch (e) {}
-        return new Promise((resParent) => {
+      try { appendLog(`META_PARENT_DEBUG willSearch=${effectiveParent}`) } catch (e) {}
+    return new Promise((resParent) => {
           try {
             // Aggressive diagnostics: compute parent variants and log them so we
             // can observe what will be sent to TMDb for parent-based lookup.
             const pVariants = makeVariants(effectiveParent)
             try { appendLog(`META_PARENT_VARIANTS parent=${effectiveParent} variants=${JSON.stringify(pVariants).slice(0,1000)}`) } catch (e) {}
-            tryTmdbVariants(pVariants, (pRes) => {
+      tryTmdbVariants(pVariants, (pRes) => {
               try { appendLog(`META_PARENT_TMDB_RESULT parent=${effectiveParent} found=${pRes ? 'yes' : 'no'}`) } catch (e) {}
               if (pRes) return resParent({ name: pRes.name, raw: Object.assign({}, pRes.raw, { id: pRes.id, type: pRes.type || pRes.mediaType || 'tv', source: 'tmdb' }), episode: pRes.episode || null })
               return resParent(null)
