@@ -332,6 +332,35 @@ function metaLookup(title, apiKey, opts = {}) {
       return [...new Set(variants.map(v => (v || '').trim()))].filter(Boolean)
     }
 
+    // Normalization + similarity helpers used to validate TMDb hits against the variant
+    function normalizeForCompareName(s) {
+      try { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim() } catch (e) { return String(s || '') }
+    }
+    function levenshtein(a,b) {
+      if (!a || !b) return Math.max(a ? a.length : 0, b ? b.length : 0)
+      const al = a.length, bl = b.length
+      const dp = Array.from({ length: al + 1 }, (_, i) => Array(bl + 1).fill(0))
+      for (let i = 0; i <= al; i++) dp[i][0] = i
+      for (let j = 0; j <= bl; j++) dp[0][j] = j
+      for (let i = 1; i <= al; i++) {
+        for (let j = 1; j <= bl; j++) {
+          const cost = a[i-1] === b[j-1] ? 0 : 1
+          dp[i][j] = Math.min(dp[i-1][j] + 1, dp[i][j-1] + 1, dp[i-1][j-1] + cost)
+        }
+      }
+      return dp[al][bl]
+    }
+    function similarEnoughName(a,b) {
+      const na = normalizeForCompareName(a)
+      const nb = normalizeForCompareName(b)
+      if (!na || !nb) return false
+      if (na === nb) return true
+      if (na.indexOf(nb) !== -1 || nb.indexOf(na) !== -1) return true
+      const dist = levenshtein(na, nb)
+      const norm = dist / Math.max(na.length, nb.length, 1)
+      return norm <= 0.35
+    }
+
   // TMDb-only lookup implemented below
 
     function tryTmdbVariants(variants, cb) {
@@ -342,6 +371,7 @@ function metaLookup(title, apiKey, opts = {}) {
           if (i >= variants.length) return cb(null);
           const q = encodeURIComponent(variants[i]);
           const searchPath = useTv ? `/3/search/tv?api_key=${encodeURIComponent(apiKey)}&query=${q}` : `/3/search/multi?api_key=${encodeURIComponent(apiKey)}&query=${q}`;
+          try { appendLog(`META_TMDB_SEARCH_FEED title=${String(title || '').slice(0,200)} variant=${String(variants[i] || '').slice(0,200)} useTv=${useTv}`) } catch (e) {}
           const req = https.request({ hostname: baseHost, path: searchPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (res) => {
             let sb = '';
             res.on('data', d => sb += d);
@@ -360,7 +390,17 @@ function metaLookup(title, apiKey, opts = {}) {
                     });
                     if (match) return fetchTmdbDetails(match, cb);
                   }
-                  return fetchTmdbDetails(hits[0], cb);
+                  // Validate top hits by name similarity to avoid false-positive matches on short variants
+                  for (let hi = 0; hi < Math.min(6, hits.length); hi++) {
+                    const h = hits[hi]
+                    const candidateName = String(h.name || h.original_name || h.title || '')
+                    const sim = similarEnoughName(variants[i], candidateName)
+                    try { appendLog(`META_TMDB_HIT_CHECK variant=${variants[i]} candidate=${candidateName.slice(0,200)} similar=${sim}`) } catch (e) {}
+                    if (sim) return fetchTmdbDetails(h, cb)
+                  }
+                  // No sufficiently similar hit found; continue to next variant
+                  setImmediate(() => tryOne(i + 1));
+                  return
                 }
               } catch (e) { /* ignore */ }
               setImmediate(() => tryOne(i + 1));
