@@ -665,10 +665,20 @@ function metaLookup(title, apiKey, opts = {}) {
           } catch (e) {}
     try { appendLog(`META_PARENT_DEBUG willSearch=${effectiveParent}`) } catch (e) {}
         return new Promise((resParent) => {
-          tryTmdbVariants(makeVariants(effectiveParent), (pRes) => {
-            if (pRes) return resParent({ name: pRes.name, raw: Object.assign({}, pRes.raw, { id: pRes.id, type: pRes.type || pRes.mediaType || 'tv', source: 'tmdb' }), episode: pRes.episode || null })
+          try {
+            // Aggressive diagnostics: compute parent variants and log them so we
+            // can observe what will be sent to TMDb for parent-based lookup.
+            const pVariants = makeVariants(effectiveParent)
+            try { appendLog(`META_PARENT_VARIANTS parent=${effectiveParent} variants=${JSON.stringify(pVariants).slice(0,1000)}`) } catch (e) {}
+            tryTmdbVariants(pVariants, (pRes) => {
+              try { appendLog(`META_PARENT_TMDB_RESULT parent=${effectiveParent} found=${pRes ? 'yes' : 'no'}`) } catch (e) {}
+              if (pRes) return resParent({ name: pRes.name, raw: Object.assign({}, pRes.raw, { id: pRes.id, type: pRes.type || pRes.mediaType || 'tv', source: 'tmdb' }), episode: pRes.episode || null })
+              return resParent(null)
+            })
+          } catch (e) {
+            try { appendLog(`META_PARENT_ERROR parent=${effectiveParent} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
             return resParent(null)
-          })
+          }
         })
       }
 
