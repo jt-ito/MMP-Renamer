@@ -332,6 +332,13 @@ function metaLookup(title, apiKey, opts = {}) {
       return [...new Set(variants.map(v => (v || '').trim()))].filter(Boolean)
     }
 
+  // Meta-level feed title: if caller wants to force a particular feed label
+  // (for example when invoking metaLookup on a parent folder), they can set
+  // opts._feedLabel and that value will be used for TMDb search logging and
+  // as the default feed when tryTmdbVariants is invoked without an explicit
+  // feedLabel argument.
+  const metaFeedTitle = (opts && opts._feedLabel) ? String(opts._feedLabel).slice(0,200) : String(title || '').slice(0,200)
+
     // Normalization + similarity helpers used to validate TMDb hits against the variant
     function normalizeForCompareName(s) {
       try { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim() } catch (e) { return String(s || '') }
@@ -371,7 +378,7 @@ function metaLookup(title, apiKey, opts = {}) {
           if (i >= variants.length) return cb(null);
           const q = encodeURIComponent(variants[i]);
           const searchPath = useTv ? `/3/search/tv?api_key=${encodeURIComponent(apiKey)}&query=${q}` : `/3/search/multi?api_key=${encodeURIComponent(apiKey)}&query=${q}`;
-      const feed = (typeof feedLabel !== 'undefined' && feedLabel !== null) ? String(feedLabel).slice(0,200) : String(title || '').slice(0,200)
+  const feed = (typeof feedLabel !== 'undefined' && feedLabel !== null) ? String(feedLabel).slice(0,200) : metaFeedTitle
       try { appendLog(`META_TMDB_SEARCH_FEED feed=${feed} variant=${String(variants[i] || '').slice(0,200)} useTv=${useTv}`) } catch (e) {}
           const req = https.request({ hostname: baseHost, path: searchPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (res) => {
             let sb = '';
@@ -657,7 +664,9 @@ function metaLookup(title, apiKey, opts = {}) {
       try { appendLog(`META_TMDB_VARIANTS_CALLBACK present=${tRes ? 'yes' : 'no'}`) } catch (e) {}
       if (tRes) return resolve({ name: tRes.name, raw: Object.assign({}, tRes.raw, { id: tRes.id, type: tRes.type || tRes.mediaType || 'tv', source: 'tmdb' }), episode: tRes.episode || null })
 
-      // If parentCandidate was provided via opts.parentCandidate and it's allowed (not the configured input root), try TMDb with parent variants
+  // If filename-level TMDb missed, force a parent lookup (diagnostic) so we can observe parent-fed requests
+  try { appendLog(`META_PARENT_FORCED_LOOKUP parentCandidate=${opts && opts.parentCandidate ? opts.parentCandidate : '<none>'} parentPath=${opts && opts.parentPath ? opts.parentPath : '<none>'}`) } catch (e) {}
+  // If parentCandidate was provided via opts.parentCandidate and it's allowed (not the configured input root), try TMDb with parent variants
   const parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
   const parentPath = opts && opts.parentPath ? String(opts.parentPath).trim() : null
   try { appendLog(`META_PARENT_INFO parentCandidate=${parentCandidate || '<none>'} parentPath=${parentPath || '<none>'}`) } catch (e) {}
@@ -721,15 +730,27 @@ function metaLookup(title, apiKey, opts = {}) {
       try { appendLog(`META_PARENT_DEBUG willSearch=${effectiveParent}`) } catch (e) {}
     return new Promise((resParent) => {
           try {
-            // Aggressive diagnostics: compute parent variants and log them so we
-            // can observe what will be sent to TMDb for parent-based lookup.
-            const pVariants = makeVariants(effectiveParent)
-            try { appendLog(`META_PARENT_VARIANTS parent=${effectiveParent} variants=${JSON.stringify(pVariants).slice(0,1000)}`) } catch (e) {}
-      tryTmdbVariants(pVariants, (pRes) => {
-              try { appendLog(`META_PARENT_TMDB_RESULT parent=${effectiveParent} found=${pRes ? 'yes' : 'no'}`) } catch (e) {}
-              if (pRes) return resParent({ name: pRes.name, raw: Object.assign({}, pRes.raw, { id: pRes.id, type: pRes.type || pRes.mediaType || 'tv', source: 'tmdb' }), episode: pRes.episode || null })
+            // Aggressive diagnostics: force a top-level metaLookup using the
+            // effectiveParent as the title so we can guarantee the parent title
+            // is sent to providers and logged. Clear parentCandidate/parentPath to
+            // avoid recursive parent fallbacks inside the child call.
+            try { appendLog(`META_PARENT_VARIANTS parent=${effectiveParent} variants=${JSON.stringify(makeVariants(effectiveParent)).slice(0,1000)}`) } catch (e) {}
+            try {
+              try { appendLog(`META_PARENT_WILL_CALL_METALOOKUP parent=${effectiveParent}`) } catch (e) {}
+              const parentOpts = Object.assign({}, opts || {}, { parentCandidate: null, parentPath: null, _feedLabel: effectiveParent })
+              metaLookup(effectiveParent, apiKey, parentOpts).then((pmRes) => {
+                try { appendLog(`META_PARENT_TMDB_RESULT parent=${effectiveParent} found=${pmRes ? 'yes' : 'no'}`) } catch (e) {}
+                if (pmRes) return resParent(pmRes)
+                return resParent(null)
+              }).catch((err) => {
+                try { appendLog(`META_PARENT_ERROR parent=${effectiveParent} err=${err && err.message ? err.message : String(err)}`) } catch (e) {}
+                return resParent(null)
+              })
+            } catch (e) {
+              try { appendLog(`META_PARENT_ERROR parent=${effectiveParent} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
               return resParent(null)
-            })
+            }
+
           } catch (e) {
             try { appendLog(`META_PARENT_ERROR parent=${effectiveParent} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
             return resParent(null)
@@ -802,8 +823,8 @@ function metaLookup(title, apiKey, opts = {}) {
         tryOneK(0)
       }
 
-      // First try Kitsu with original title variants
-      tryKitsuVariants(variants, async (kRes) => {
+  // First try Kitsu with original title variants
+  tryKitsuVariants(variants, async (kRes) => {
         if (kRes) return resolve({ name: kRes.name, raw: Object.assign({}, kRes.raw, { id: kRes.id, type: kRes.type || 'tv', source: 'kitsu' }), episode: kRes.episode || null })
         // If no Kitsu hit and parentCandidate exists and is allowed, try Kitsu with parent
         if (parentCandidate) {
@@ -2376,6 +2397,8 @@ const PORT = process.env.PORT || 5173;
 // export helpers for test harnesses
 module.exports = module.exports || {};
 module.exports.externalEnrich = externalEnrich;
+// Export metaLookup for test harnesses and debugging
+module.exports.metaLookup = metaLookup;
 
 // Only start the HTTP server when this file is run directly, not when required as a module
 if (require.main === module) {
