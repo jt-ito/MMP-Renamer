@@ -284,6 +284,21 @@ function metaLookup(title, apiKey, opts = {}) {
     const mask = apiKey ? (String(apiKey).slice(0,6) + '...' + String(apiKey).slice(-4)) : null
     appendLog(`META_LOOKUP_REQUEST title=${title} keyPresent=${apiKey ? 'yes' : 'no'} keyMask=${mask}`)
   } catch (e) {}
+  // If caller didn't pass an apiKey, attempt to fall back to configured keys
+  // in users/settings so recursive parent-based metaLookup calls still reach TMDb.
+  try {
+    if (!apiKey) {
+      try {
+        const u = readJson(usersFile, {}) || {};
+        if (!apiKey && u && u.admin && u.admin.settings && u.admin.settings.tmdb_api_key) apiKey = u.admin.settings.tmdb_api_key;
+      } catch (e) {}
+      try {
+        const s = readJson(settingsFile, {}) || {};
+        if (!apiKey && s && s.tmdb_api_key) apiKey = s.tmdb_api_key;
+      } catch (e) {}
+      try { appendLog(`META_TMDB_KEY_FALLBACK used=${apiKey ? 'yes' : 'no'}`) } catch (e) {}
+    }
+  } catch (e) {}
   return new Promise((resolve) => {
     const https = require('https')
 
@@ -721,8 +736,16 @@ function metaLookup(title, apiKey, opts = {}) {
                 } catch (e) { resolvedParent = path.resolve(parentPath) }
                 try { appendLog(`META_PARENT_DEBUG resolvedConfigured=${resolvedConfigured} resolvedParent=${resolvedParent}`) } catch (e) {}
                 if (resolvedConfigured === resolvedParent) {
-                  try { appendLog(`META_PARENT_DEBUG skipping_parent_lookup_parent_is_input_root=${resolvedParent}`) } catch (e) {}
-                  return null
+                  try { appendLog(`META_PARENT_DEBUG resolvedConfigured=${resolvedConfigured} resolvedParent=${resolvedParent} force=${opts && opts.force ? 'yes' : 'no'}`) } catch (e) {}
+                  // If caller requested a forced rescan (opts.force), allow a parent lookup
+                  // even when the parent path equals the configured input root. This helps
+                  // debugging and honors explicit user intent to use the parent folder as
+                  // a fallback when filename-driven lookups fail.
+                  if (!(opts && opts.force)) {
+                    try { appendLog(`META_PARENT_DEBUG skipping_parent_lookup_parent_is_input_root=${resolvedParent}`) } catch (e) {}
+                    return null
+                  }
+                  try { appendLog(`META_PARENT_DEBUG forcing_parent_lookup_despite_input_root=${resolvedParent}`) } catch (e) {}
                 }
               } catch (e) { /* ignore resolution errors */ }
             }
@@ -1017,7 +1040,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // perform name-based matching against TMDb's season-0 specials list. However
   // keep the parsed episode/season locally so the UI and hardlink names still
   // reflect the filename-derived numbers.
-  const metaOpts = { year: parsed.year, preferredProvider, parsedEpisodeTitle: episodeTitle, parentCandidate: parentCandidate, parentPath };
+  const metaOpts = { year: parsed.year, preferredProvider, parsedEpisodeTitle: episodeTitle, parentCandidate: parentCandidate, parentPath, force: (opts && opts.force) ? true : false };
   if (!isSpecialCandidate) {
     metaOpts.season = normSeason;
     metaOpts.episode = normEpisode;

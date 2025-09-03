@@ -1,0 +1,139 @@
+MMP App Full Description (MMP terms)
+
+OVERVIEW
+
+This document describes the entire MMP-Renamer application using the project's internal terms and concepts ("MMP terms"). It is intended for developers, integrators, and power users who need a single source-of-truth mapping of features, data flows, configuration, diagnostics, and operational behavior.
+
+CORE PURPOSE
+- MMP-Renamer scans a filesystem input path for video files, parses filenames to extract canonical tokens (title, parsedName, season, episode, episodeTitle, episodeRange), looks up authoritative metadata from external providers (primary: TMDb, fallback: Kitsu for anime), and produces a "renamed" or "rendered" target name using a configurable template. Renames are executed as hardlinks in the configured output path.
+
+KEY MMP TERMS → CODE SYMBOLS
+- parsed / parsedName / parseFilename: the filename parser implemented in `lib/filename-parser.js`. Outputs: title, parsedName, season, episode, episodeTitle, episodeRange, year.
+- guess / formattedParsedName: internal "best guess" metadata built from the filename parse and provider results during `externalEnrich`.
+- provider / provider block: the external metadata result returned from `metaLookup` and stored under an enrich cache provider entry.
+- TMDb: primary metadata provider; looked up by `metaLookup()` and via TMDb HTTP API (api.themoviedb.org). Uses TV/movie search, tv season/episode endpoints, season-0 for specials.
+- Kitsu: anime fallback provider (kitsu.io). Only used if TMDb fails or when preferred for anime.
+- parentCandidate / parentPath: a derived human-friendly series title from the parent folder (never used to derive season/episode numbers, only as series title fallback). Derived from `opts.parentCandidate` or parsing the parent folder basename.
+- specials / season-0: fractional/decimal episodes are classified as specials; special lookup uses season 0 lists and name-similarity against parsedEpisodeTitle.
+- normSeason / normEpisode: normalized season/episode derived from filename parsing and used as the authoritative season/episode values everywhere.
+- force-rescan / force: an option that tells the system to ignore cached provider results and re-query providers, also triggers autosweep to remove stale cache.
+- hardlink-only renames: the app creates hardlinks in the output path rather than moving or copying source files.
+- enrich cache: the JSON store `data/enrich.json` which persists provider lookups, mapping canonicalPath→provider/parsed results.
+- parsed-cache: `data/parsed-cache.json` stores lightweight parse results by canonical path.
+- META_* logs: structured diagnostic markers appended to `data/logs.txt` for traceability (e.g., META_LOOKUP_REQUEST, META_TMDB_ATTEMPT, META_PARENT_INFO, META_PARENT_INVOCATION, META_PARENT_FALLBACK, META_PARENT_INFO_FLUSHED, ENRICH_REQUEST, ENRICH_SUCCESS, etc.).
+
+ARCHITECTURE & DATA FLOW
+1. Scan
+   - Endpoint: `/api/scan` or CLI scripts. Walks configured input path, filters video extensions, builds a list of items with `canonicalPath`.
+   - Parsed quick-pass: each discovered file is parsed with `lib/filename-parser.js` and a parsed cache entry saved for UI responsiveness.
+
+2. Parsing
+   - `lib/filename-parser.js` cleans release tokens, bracketed suffixes, quality/resolution tags; extracts season/episode tokens, supports decimal (fractional) episodes and episode ranges.
+   - Output example: { title: 'Some Show', parsedName: 'Some Show - S01E02', season: 1, episode: 2, episodeTitle: 'Pilot', episodeRange: null, year: '2020' }
+
+3. Enrichment (metadata lookup)
+   - `externalEnrich(canonicalPath, providedKey, opts)` is the orchestrator.
+   - It computes `seriesName`, `episodeTitle`, `normSeason`, `normEpisode` (filename-first, canonical). These are authoritative for S/E.
+   - Builds `metaOpts` and calls `metaLookup(title, apiKey, metaOpts)`.
+   - `metaLookup` generates variants for title search, performs TMDb searches first (multi or tv search depending on opts.season/episode), then attempts episode-level endpoints when season/episode provided.
+   - If TMDb fails on filename-derived variants, `externalEnrich` will attempt a parent-based lookup: `metaLookup(parentCandidate, tmdbKey, parentMetaOpts)` where `parentMetaOpts` explicitly includes `season` and `episode` set from filename (never from parent).
+   - If TMDb fails entirely, Kitsu is tried as a fallback (for anime). Kitsu episode endpoints are attempted when `opts.episode` is present.
+
+4. Provider matching heuristics
+   - Variant generation: cleans separators, strips bracketed suffixes, shortens to word prefixes, lowercase variants, appends year when available.
+   - Specials handling: When episode is decimal or season==0, initial series lookup omits season/episode to allow name-based matching against season-0 specials; parsedEpisodeTitle is used to match special names when numeric matching fails.
+   - Episode similarity: for decimal episodes, the code compares filename-derived parsedEpisodeTitle to TMDb episode.name using a normalized Levenshtein-based similarity; if not similar enough, it falls back to season-0 lookup or integer floor episode lookup.
+
+5. Caching & persistence
+   - `data/enrich.json` stores normalizeEnrichEntry results (parsed and provider blocks). `normalizeEnrichEntry` ensures a consistent shape for UI and downstream logic.
+   - `data/parsed-cache.json` stores lightweight parse results per canonical path to avoid re-parsing on every scan.
+   - `autosweep` semantics: force-rescan can evict stale cache entries (implementation detail: force triggers re-query and cache replacement).
+
+6. Renaming/hardlink operations
+   - The app renders names using a rename template (default: `{title} ({year}) - {epLabel} - {episodeTitle}`) stored in serverSettings or per-user settings.
+   - All applied renames create hardlinks under the configured outputPath; UI warns if output path does not exist.
+
+SECURITY & CONFIG
+- Session management: cookie-session with a persisted `data/session.key` used for signing cookies.
+- TMDb API key: can be configured via server settings (`data/settings.json`) or per-user settings; masked in logs (first 6 / last 4 characters only).
+- Rate limiting: TMDb is rate-limited in-process — code monkey-patches `https.request` to defer requests to api.themoviedb.org until the internal sliding window has capacity (≤50 requests per 1000ms).
+
+DIAGNOSTICS & LOGGING (MMP terms)
+- `appendLog()` writes timestamped lines to `data/logs.txt`.
+- Important markers:
+  - `ENRICH_REQUEST` path=... force=yes|no
+  - `META_LOOKUP_REQUEST` title=... keyPresent=yes|no keyMask=...
+  - `META_TMDB_ATTEMPT` q=... results=N type=tv|multi
+  - `META_TMDB_VARIANTS_CALLBACK present=yes|no`
+  - `META_PARENT_INFO` parentCandidate=... parentPath=...
+  - `META_PARENT_INFO_FLUSHED` (extra diagnostic flush to ensure persistence before parent-IIFE)
+  - `META_PARENT_INVOCATION attempting tryParentTmdb parentCandidate=... parentPath=...`
+  - `META_PARENT_INVOCATION result=found|none`
+  - `META_PARENT_FALLBACK` invoking metaLookup parentCandidate=... optsSeason=... optsEpisode=...
+  - `META_KITSU_ATTEMPT` q=... results=N
+- These markers are used to trace exact lookup flows and determine where fallback logic was engaged.
+
+WEB UI & ENDPOINTS
+- `web/` contains a Vite React app. Important components:
+  - `Settings.jsx` exposes TMDb key, rename template, input/output paths.
+  - `Users.jsx` user management (per-user settings stored in `data/users.json`).
+- API endpoints of interest:
+  - `/api/scan` - start a filesystem scan
+  - `/api/meta/status` - diagnostic endpoint exposing whether server/user keys are present and recent META_* logs
+  - `/api/tmdb/status` - legacy alias
+  - `/api/users`, `/api/register`, `/api/login`, etc. for auth and settings
+
+SCRIPTS & TEST HELPERS (repo)
+- `tmp_force_parent.js` / `tmp_force_parent_real.js` - helper scripts to run `externalEnrich` against a single file path for diagnostic reproduction.
+- `scripts/try-tmdb-lookup.js` - developer script to exercise TMDb lookup logic locally; demonstrates masking of parent-derived season/episode for diagnostics.
+- Several tmp_*.js helpers were added during development to reproduce parent-fallback cases.
+
+PLUGGABLE BEHAVIOR & DESIGN DECISIONS (MMP rationale)
+- Filename-first: season and episode numeric values must always come from filename parsing. Providers or parent folder parsing may not override these values. This guarantees deterministic, user-controlled episode numbering.
+- Parent-only for series title: parent folder titles are considered only when filename-first provider lookups fail. When used, parent lookups are invoked with filename-derived season/episode so provider episode endpoints are still attempted.
+- Specials as first-class: fractional episodes and season-0 specials are handled by omitting S/E from the initial lookup and using parsedEpisodeTitle for name-based matching against season-0 lists.
+- Hardlink-only renames: prevents moving or copying of originals; keeps original files in place while presenting renamed hardlinks for consumption by media servers like Jellyfin.
+
+EDGE CASES & HEURISTICS
+- Realpath-based input root check: when parentPath resolves to the configured input root, parent lookup is skipped to avoid searching the input library container as a series title.
+- Stripping version suffixes (v2, v3) near episode tokens to avoid false episode text in the series name.
+- Numeric folder names are accepted as series title only when the folder also contains explicit season markers (e.g., 'S01') to avoid treating season numbers like titles.
+
+DEVELOPER NOTES
+- `metaLookup` returns provider-shaped objects: { name, raw: {..., id, type, source}, episode: { ... } } or null.
+- `externalEnrich` assembles the final returned enriched result, combining filename-derived `guess` with provider data but explicitly preserving filename-derived `guess.season` and `guess.episode`.
+- Tests: add a minimal unit test harness to verify filename-first invariants and parent-fallback invocation (happy path + special fractional episode + parent fallback).
+- When changing provider logic, update META_* logging to maintain traceability of decisions.
+
+HOW TO RUN (developer quick-start)
+1. Install Node.js (v16/18+ recommended). No extra packages necessary beyond what's in repo.
+2. Start the server locally (if using web UI): `node server.js` (or use npm script if present).
+3. Configure TMDb key in Settings UI or in `data/settings.json` / per-user settings.
+4. Use `node tmp_force_parent.js <absolute-path> <TMDB_KEY>` to reproduce a single-file enrich run and inspect `data/logs.txt`.
+5. Use the web UI to configure input/output paths and run scans.
+
+TROUBLESHOOTING
+- If TMDb searches return 0 results for a filename variant but parentCandidate exists:
+  - Confirm `META_PARENT_INFO_FLUSHED` appears in `data/logs.txt`. If not, the helper run may be running an older binary or process.
+  - Confirm `data/settings.json` and `data/users.json` do not set an input path equal to the parent path (which would skip parent lookup via realpath compare).
+  - Ensure TMDb key is valid and not rate-limited. Check `meta/status` and recent META_* logs.
+- If provider episode metadata appears but guess.season/guess.episode are being overwritten, check `server.js` mapping block — intentionally sets `guess.season = normSeason; guess.episode = normEpisode` to enforce filename-first.
+
+CHANGE LOG SUMMARY (important recent edits)
+- Enforced filename-first S/E invariants in `externalEnrich` and mapping in `server.js` (guards to prevent provider/parent overrides).
+- Parent-fallback invocation explicitly passes filename-derived `season` and `episode` via `parentMetaOpts` so TMDb episode endpoints are attempted under the parent title.
+- Added diagnostic META_PARENT_* log lines to increase visibility into parent fallback flow.
+- Added `META_PARENT_INFO_FLUSHED` as a guaranteed flush log immediately after parentCandidate extraction.
+- Added and fixed test helper `tmp_force_parent.js` to accept CLI path and key.
+
+UNANSWERED / FUTURE IMPROVEMENTS
+- Expand variant generation with transliteration/canonical English titles when parent lookup still fails for anime or obscure titles.
+- Add a retry/backoff for transient TMDb/Kitsu errors and better error visibility in `meta/status` endpoint.
+- Add unit tests that simulate TMDb/Kitsu responses so CI can validate parent-fallback and specials behavior.
+
+CONTACT & MAINTAINER
+- Repo: MMP-Renamer (branch: main)
+- Owner: jt-ito
+- Developer notes and test harnesses live under `scripts/` and temporary helpers `tmp_*.js` in the repo root.
+
+--- End of MMP App Full Description
