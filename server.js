@@ -39,11 +39,25 @@ https.request = function(opts, cb) {
             await _tmdbRateLimit();
             const realReq = _origHttpsRequest(opts, cb);
             holder.realReq = realReq;
-            // proxy relevant events
-            realReq.on('response', (res) => fake.emit('response', res));
-            realReq.on('data', (d) => fake.emit('data', d));
-            realReq.on('end', () => fake.emit('end'));
-            realReq.on('error', (e) => fake.emit('error', e));
+            // Verbose diagnostic: log outgoing TMDb request
+            try { appendLog(`META_TMDB_HTTP_REQUEST host=${String(opts.hostname || opts.host)} path=${String(opts.path)} method=${String(opts.method || 'GET')}`) } catch (e) {}
+            // Capture and log response body snippets for diagnostics
+            realReq.on('response', (res) => {
+              try {
+                let sb = '';
+                res.on('data', (d) => { try { sb += d } catch (e) {} ; fake.emit('data', d) });
+                res.on('end', () => {
+                  try { appendLog(`META_TMDB_HTTP_RESPONSE host=${String(opts.hostname || opts.host)} path=${String(opts.path)} status=${res.statusCode} bodySnippet=${String(sb || '').slice(0,2000).replace(/\n/g,' ')}`) } catch (e) {}
+                  try { fake.emit('end') } catch (e) {}
+                });
+                res.on('error', (e) => { try { fake.emit('error', e) } catch (ee) {} });
+                // still expose the response event for existing consumers
+                try { fake.emit('response', res) } catch (e) {}
+              } catch (e) {
+                try { fake.emit('response', res) } catch (ee) {}
+              }
+            });
+            realReq.on('error', (e) => { try { appendLog(`META_TMDB_HTTP_ERROR host=${String(opts.hostname || opts.host)} path=${String(opts.path)} err=${e && e.message ? e.message : String(e)}`) } catch (e) {} ; try { fake.emit('error', e) } catch (ee) {} });
             if (holder.timeoutMs && typeof realReq.setTimeout === 'function') realReq.setTimeout(holder.timeoutMs);
             realReq.end();
           } catch (e) {
@@ -842,22 +856,15 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         }
         parentCandidate = cand
         break
-      } catch (e) { /* ignore and continue up the path */ }
+      } catch (e) { /* ignore per-segment parse errors */ }
     }
-  } catch (e) { /* ignore */ }
-  if (normEpisode != null) {
-    const eps = String(normEpisode)
-    const epsRe = new RegExp('\\b0*' + eps + '\\b')
-    if (epsRe.test(seriesName)) {
-      const parts = seriesName.split(epsRe)
-      if (parts.length > 1) {
-        const left = parts[0].replace(/[-_\s]+$/,'').trim()
-        const right = parts.slice(1).join('').replace(/^[\-_\s]+/,'').trim()
-        if (left) seriesName = left
-        if (right) episodeTitle = right
-      }
+    if (parts.length > 1) {
+      const left = parts[0].replace(/[-_\s]+$/,'').trim()
+      const right = parts.slice(1).join('').replace(/^[\-_\s]+/,'').trim()
+      if (left) seriesName = left
+      if (right) episodeTitle = right
     }
-  }
+  } catch (e) { /* ignore parent derivation errors */ }
 
     // Strip version-suffix tokens like 'v2', 'v3' that often follow episode markers (but preserve decimal episodes like 11.5)
     function stripVersionSuffix(s) {
