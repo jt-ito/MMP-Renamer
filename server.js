@@ -299,7 +299,12 @@ function metaLookup(title, apiKey, opts = {}) {
       try { appendLog(`META_TMDB_KEY_FALLBACK used=${apiKey ? 'yes' : 'no'}`) } catch (e) {}
     }
   } catch (e) {}
-  return new Promise((resolve) => {
+  // Fast path: impose a global timeout for the entire meta lookup to avoid
+  // very long rescans when providers are slow or unreachable. This can be
+  // configured with the META_LOOKUP_TIMEOUT_MS env var.
+  const META_LOOKUP_TIMEOUT_MS = process.env.META_LOOKUP_TIMEOUT_MS ? parseInt(process.env.META_LOOKUP_TIMEOUT_MS, 10) : 15000;
+
+  const inner = new Promise((resolve) => {
     const https = require('https')
 
     function readConfiguredInput() {
@@ -385,17 +390,20 @@ function metaLookup(title, apiKey, opts = {}) {
 
   // TMDb-only lookup implemented below
 
-  function tryTmdbVariants(variants, cb, feedLabel) {
-      if (!apiKey) return cb(null)
-      const useTv = (opts && (opts.season != null || opts.episode != null))
-      const baseHost = 'api.themoviedb.org'
-      const tryOne = (i) => {
-          if (i >= variants.length) return cb(null);
-          const q = encodeURIComponent(variants[i]);
-          const searchPath = useTv ? `/3/search/tv?api_key=${encodeURIComponent(apiKey)}&query=${q}` : `/3/search/multi?api_key=${encodeURIComponent(apiKey)}&query=${q}`;
+  function tryTmdbVariants(variants, cb, feedLabel, tmdbOpts) {
+    // tmdbOpts: { maxVariants, tmdbRequestTimeout }
+    if (!apiKey) return cb(null)
+    const useTv = (opts && (opts.season != null || opts.episode != null))
+    const baseHost = 'api.themoviedb.org'
+    const maxVariants = (tmdbOpts && tmdbOpts.maxVariants) ? Number(tmdbOpts.maxVariants) : 3
+    const reqTimeout = (tmdbOpts && tmdbOpts.tmdbRequestTimeout) ? Number(tmdbOpts.tmdbRequestTimeout) : 3000
+    const tryOne = (i) => {
+      if (i >= Math.min(variants.length, maxVariants)) return cb(null);
+      const q = encodeURIComponent(variants[i]);
+      const searchPath = useTv ? `/3/search/tv?api_key=${encodeURIComponent(apiKey)}&query=${q}` : `/3/search/multi?api_key=${encodeURIComponent(apiKey)}&query=${q}`;
   const feed = (typeof feedLabel !== 'undefined' && feedLabel !== null) ? String(feedLabel).slice(0,200) : metaFeedTitle
-      try { appendLog(`META_TMDB_SEARCH_FEED feed=${feed} variant=${String(variants[i] || '').slice(0,200)} useTv=${useTv}`) } catch (e) {}
-          const req = https.request({ hostname: baseHost, path: searchPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (res) => {
+    try { appendLog(`META_TMDB_SEARCH_FEED feed=${feed} variant=${String(variants[i] || '').slice(0,200)} useTv=${useTv}`) } catch (e) {}
+      const req = https.request({ hostname: baseHost, path: searchPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: reqTimeout }, (res) => {
             let sb = '';
             res.on('data', d => sb += d);
             res.on('end', () => {
@@ -431,11 +439,11 @@ function metaLookup(title, apiKey, opts = {}) {
               } catch (e) { /* ignore */ }
               setImmediate(() => tryOne(i + 1));
             });
-          });
-          req.on('error', () => setImmediate(() => tryOne(i + 1)));
-          req.on('timeout', () => { req.destroy(); setImmediate(() => tryOne(i + 1)); });
-          req.end();
-      }
+      });
+      req.on('error', () => setImmediate(() => tryOne(i + 1)));
+      req.on('timeout', () => { try { req.destroy(); } catch (e) {} ; setImmediate(() => tryOne(i + 1)); });
+      req.end();
+    }
       function fetchTmdbDetails(hit, cb) {
         try {
           const id = hit.id
@@ -657,11 +665,11 @@ function metaLookup(title, apiKey, opts = {}) {
           return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit })
         } catch (e) { return cb(null) }
       }
-      tryOne(0)
+  tryOne(0)
     }
 
   const variants = makeVariants(title)
-    const configuredInput = readConfiguredInput()
+  const configuredInput = readConfiguredInput()
     // If caller didn't provide a parentCandidate but did provide a parentPath, try to
     // derive a usable parentCandidate from the parent folder's basename so metaLookup
     // can still attempt a parent-based search during rescans/refreshes.
@@ -677,7 +685,8 @@ function metaLookup(title, apiKey, opts = {}) {
         } catch (e) {}
       }
     } catch (e) {}
-  // TMDb: try variants against TMDb and return first match (feedLabel=title); if TMDb fails, try parent title (if provided and not input root), then Kitsu as a fallback
+  // TMDb: try variants against TMDb and return first match (feedLabel=title);
+  // fast behavior: try only a small number of variants and short per-request timeouts.
   tryTmdbVariants(variants, (tRes) => {
       try { appendLog(`META_TMDB_VARIANTS_CALLBACK present=${tRes ? 'yes' : 'no'}`) } catch (e) {}
       if (tRes) return resolve({ name: tRes.name, raw: Object.assign({}, tRes.raw, { id: tRes.id, type: tRes.type || tRes.mediaType || 'tv', source: 'tmdb' }), episode: tRes.episode || null })
@@ -690,7 +699,7 @@ function metaLookup(title, apiKey, opts = {}) {
   try { appendLog(`META_PARENT_INFO parentCandidate=${parentCandidate || '<none>'} parentPath=${parentPath || '<none>'}`) } catch (e) {}
   // Extra flush log: ensure any parent info is persisted before we attempt the parent lookup IIFE
   try { appendLog(`META_PARENT_INFO_FLUSHED parentCandidate=${parentCandidate || '<none>'} parentPath=${parentPath || '<none>'}`) } catch (e) {}
-      const tryParentTmdb = async () => {
+  const tryParentTmdb = async () => {
         // Compute an effective parent candidate but never inherit season/episode
         // parsed from a parent folder. Preference: opts.parentCandidate -> parentPath parse -> strip from title.
   let effectiveParent = parentCandidate || null
@@ -781,7 +790,7 @@ function metaLookup(title, apiKey, opts = {}) {
                 try { appendLog(`META_PARENT_TMDB_RESULT parent=${effectiveParent} found=${tResParent ? 'yes' : 'no'}`) } catch (e) {}
                 if (tResParent) return resParent({ name: tResParent.name, raw: Object.assign({}, tResParent.raw, { id: tResParent.id, type: tResParent.type || tResParent.mediaType || 'tv', source: 'tmdb' }), episode: tResParent.episode || null })
                 return resParent(null)
-              }, effectiveParent)
+              }, effectiveParent, { maxVariants: 3, tmdbRequestTimeout: 3000 })
             } catch (e) {
               try { appendLog(`META_PARENT_ERROR parent=${effectiveParent} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
               return resParent(null)
@@ -799,89 +808,15 @@ function metaLookup(title, apiKey, opts = {}) {
         const pTry = await tryParentTmdb()
         try { appendLog(`META_PARENT_INVOCATION result=${pTry ? 'found' : 'none'}`) } catch (e) {}
         if (pTry) return resolve(pTry)
-
-        // Kitsu fallback
-        function tryKitsuVariants(variantsK, cbK) {
-        const baseHostK = 'kitsu.io'
-        const tryOneK = (iK) => {
-          if (iK >= variantsK.length) return cbK(null);
-          const qk = encodeURIComponent(variantsK[iK]);
-          const searchPathK = `/api/edge/anime?filter[text]=${qk}`;
-          const reqK = https.request({ hostname: baseHostK, path: searchPathK, method: 'GET', headers: { 'Accept': 'application/vnd.api+json' }, timeout: 5000 }, (resK) => {
-            let sbk = '';
-            resK.on('data', d => sbk += d);
-            resK.on('end', () => {
-              try {
-                const jk = JSON.parse(sbk || '{}');
-                const hitsK = jk && jk.data ? jk.data : [];
-                appendLog(`META_KITSU_ATTEMPT q=${variantsK[iK]} results=${hitsK.length}`);
-                if (hitsK && hitsK.length > 0) {
-                  const hit = hitsK[0];
-                  const id = hit.id;
-                  const attrs = hit.attributes || {};
-                  const animeTitle = attrs.canonicalTitle || (attrs.titles && (attrs.titles.en || attrs.titles.en_jp)) || attrs.slug || variantsK[iK];
-                  // if episode requested, attempt episode lookup via episodes endpoint
-                  if (opts && opts.episode != null) {
-                    const epNum = String(opts.episode);
-                    const epPath = `/api/edge/episodes?filter[anime]=${encodeURIComponent(id)}&filter[number]=${encodeURIComponent(epNum)}`;
-                    const epReq = https.request({ hostname: baseHostK, path: epPath, method: 'GET', headers: { 'Accept': 'application/vnd.api+json' }, timeout: 5000 }, (epRes) => {
-                      let ebk = '';
-                      epRes.on('data', d => ebk += d);
-                      epRes.on('end', () => {
-                        try {
-                          const ejk = JSON.parse(ebk || '{}');
-                          const epHits = ejk && ejk.data ? ejk.data : [];
-                          if (epHits && epHits.length > 0) {
-                            const ep = epHits[0];
-                            const epAttrs = ep.attributes || {};
-                            return cbK({ provider: 'kitsu', id, type: 'tv', name: animeTitle, raw: Object.assign({}, hit, { episodes: epHits }), episode: { number: epAttrs.number || epAttrs.absoluteNumber || opts.episode, title: epAttrs.canonicalTitle || (epAttrs.titles && (epAttrs.titles.en || epAttrs.titles.en_jp)) || '' } });
-                          }
-                        } catch (e) {}
-                        // no episode match found, return series-level hit
-                        return cbK({ provider: 'kitsu', id, type: 'tv', name: animeTitle, raw: hit, episode: null });
-                      });
-                    });
-                    epReq.on('error', () => { return cbK({ provider: 'kitsu', id, type: 'tv', name: animeTitle, raw: hit, episode: null }); });
-                    epReq.on('timeout', () => { epReq.destroy(); return cbK({ provider: 'kitsu', id, type: 'tv', name: animeTitle, raw: hit, episode: null }); });
-                    epReq.end();
-                    return;
-                  }
-                  return cbK({ provider: 'kitsu', id, type: 'tv', name: animeTitle, raw: hit, episode: null });
-                }
-              } catch (e) { /* ignore */ }
-              setImmediate(() => tryOneK(iK + 1));
-            });
-          });
-          reqK.on('error', () => setImmediate(() => tryOneK(iK + 1)));
-          reqK.on('timeout', () => { reqK.destroy(); setImmediate(() => tryOneK(iK + 1)); });
-          reqK.end();
-        }
-        tryOneK(0)
-      }
-
-  // First try Kitsu with original title variants
-  tryKitsuVariants(variants, async (kRes) => {
-        if (kRes) return resolve({ name: kRes.name, raw: Object.assign({}, kRes.raw, { id: kRes.id, type: kRes.type || 'tv', source: 'kitsu' }), episode: kRes.episode || null })
-        // If no Kitsu hit and parentCandidate exists and is allowed, try Kitsu with parent
-        if (parentCandidate) {
-          try {
-            if (configuredInput && parentPath) {
-              const resolvedConfigured = path.resolve(configuredInput)
-              const resolvedParent = path.resolve(parentPath)
-              if (resolvedConfigured === resolvedParent) return resolve(null)
-            }
-          } catch (e) {}
-          tryKitsuVariants(makeVariants(parentCandidate), (kRes2) => {
-            if (kRes2) return resolve({ name: kRes2.name, raw: Object.assign({}, kRes2.raw, { id: kRes2.id, type: kRes2.type || 'tv', source: 'kitsu' }), episode: kRes2.episode || null })
-            return resolve(null)
-          })
-          return
-        }
+        // No Kitsu fallback in the fast, simplified flow - return null quickly
         return resolve(null)
       })
     })
-    })
   })
+
+  const timeoutPromise = new Promise(res => setTimeout(() => { try { appendLog(`META_LOOKUP_TIMEOUT title=${title}`) } catch (e) {} ; res(null); }, META_LOOKUP_TIMEOUT_MS));
+
+  return Promise.race([inner, timeoutPromise]);
 }
 
 async function externalEnrich(canonicalPath, providedKey, opts = {}) {
