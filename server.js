@@ -446,6 +446,14 @@ function metaLookup(title, apiKey, opts = {}) {
                           return fetchTmdbDetails(h, cb)
                         }
                       }
+                      // If caller explicitly asks to accept the top hit for parent-mode
+                      // (covers non-latin titles and localized/romanized mismatches), do it.
+                      try {
+                        if (tmdbOpts && tmdbOpts.acceptTopHit && hi === 0) {
+                          try { appendLog(`META_TMDB_HIT_ACCEPT_TOP variant=${variants[i]} candidate=${candidateName.slice(0,200)}`) } catch (e) {}
+                          return fetchTmdbDetails(h, cb)
+                        }
+                      } catch (e) {}
                     } catch (e) {}
                   }
                   // No sufficiently similar hit found; continue to next variant
@@ -806,7 +814,7 @@ function metaLookup(title, apiKey, opts = {}) {
                 try { appendLog(`META_PARENT_TMDB_RESULT parent=${effectiveParent} found=${tResParent ? 'yes' : 'no'}`) } catch (e) {}
                 if (tResParent) return resParent({ name: tResParent.name, raw: Object.assign({}, tResParent.raw, { id: tResParent.id, type: tResParent.type || tResParent.mediaType || 'tv', source: 'tmdb' }), episode: tResParent.episode || null })
                 return resParent(null)
-              }, effectiveParent, { maxVariants: 3, tmdbRequestTimeout: 3000, relaxed: true })
+              }, effectiveParent, { maxVariants: 3, tmdbRequestTimeout: 3000, relaxed: true, acceptTopHit: true })
             } catch (e) {
               try { appendLog(`META_PARENT_ERROR parent=${effectiveParent} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
               return resParent(null)
