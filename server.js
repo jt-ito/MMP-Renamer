@@ -763,7 +763,20 @@ function metaLookup(title, apiKey, opts = {}) {
               // TMDb-specific variant search directly so the parent title is
               // guaranteed to be queried against TMDb.
               try { appendLog(`META_PARENT_WILL_CALL_TMDB parent=${effectiveParent}`) } catch (e) {}
-              const parentVariants = makeVariants(effectiveParent)
+              // Build variants from both the parsed effectiveParent and the raw parent folder basename.
+              // Many release folders include the English title in parentheses; using the raw basename
+              // ensures those variants are tried (improves match chance for localized titles).
+              let parentVariants = makeVariants(effectiveParent || '');
+              try {
+                if (parentPath) {
+                  const rawParentBase = String(path.basename(parentPath || '') || '').trim();
+                  if (rawParentBase && rawParentBase !== effectiveParent) {
+                    const rawVariants = makeVariants(rawParentBase);
+                    parentVariants = [...new Set((parentVariants || []).concat(rawVariants || []))];
+                    try { appendLog(`META_PARENT_VARIANTS_COMBINED parent=${effectiveParent} rawBase=${rawParentBase} combinedCount=${parentVariants.length}`) } catch (e) {}
+                  }
+                }
+              } catch (e) {}
               tryTmdbVariants(parentVariants, (tResParent) => {
                 try { appendLog(`META_PARENT_TMDB_RESULT parent=${effectiveParent} found=${tResParent ? 'yes' : 'no'}`) } catch (e) {}
                 if (tResParent) return resParent({ name: tResParent.name, raw: Object.assign({}, tResParent.raw, { id: tResParent.id, type: tResParent.type || tResParent.mediaType || 'tv', source: 'tmdb' }), episode: tResParent.episode || null })
