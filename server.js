@@ -838,7 +838,11 @@ function metaLookup(title, apiKey, opts = {}) {
     })
   })
 
-  const timeoutPromise = new Promise(res => setTimeout(() => { try { appendLog(`META_LOOKUP_TIMEOUT title=${title}`) } catch (e) {} ; res(null); }, META_LOOKUP_TIMEOUT_MS));
+  // Allow caller to request extra time for parent-driven lookups by setting
+  // opts._parentDirect = true. Parent lookups often require extra requests
+  // (episode endpoint, season lookups) so give them a larger window.
+  const lookupTimeoutMs = (opts && opts._parentDirect) ? Math.max(META_LOOKUP_TIMEOUT_MS, 20000) : META_LOOKUP_TIMEOUT_MS;
+  const timeoutPromise = new Promise(res => setTimeout(() => { try { appendLog(`META_LOOKUP_TIMEOUT title=${title}`) } catch (e) {} ; res(null); }, lookupTimeoutMs));
 
   return Promise.race([inner, timeoutPromise]);
 }
@@ -1024,12 +1028,12 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // (do not allow parent to override parsed season/episode; we still keep
   // filename-derived numbers locally). This ensures we fall back to parent
   // folder name when the filename title fails to match.
-  if (!res && parentCandidate) {
+    if (!res && parentCandidate) {
     try { appendLog(`META_PARENT_FALLBACK trying parentCandidate=${parentCandidate}`) } catch (e) {}
     try {
       // Ensure we explicitly pass season/episode when invoking parent-based lookup
       // so TMDb will perform an episode-level lookup once the series is matched.
-      const parentMetaOpts = Object.assign({}, metaOpts || {}, { season: normSeason, episode: normEpisode, parentCandidate: parentCandidate, parentPath: parentPath });
+      const parentMetaOpts = Object.assign({}, metaOpts || {}, { season: normSeason, episode: normEpisode, parentCandidate: parentCandidate, parentPath: parentPath, _parentDirect: true });
       try { appendLog(`META_PARENT_FALLBACK invoking metaLookup parentCandidate=${parentCandidate} optsSeason=${parentMetaOpts.season != null ? parentMetaOpts.season : '<none>'} optsEpisode=${parentMetaOpts.episode != null ? parentMetaOpts.episode : '<none>'}`) } catch (e) {}
       const pRes = await metaLookup(parentCandidate, tmdbKey, parentMetaOpts)
       if (pRes) {
