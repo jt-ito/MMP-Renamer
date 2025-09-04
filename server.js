@@ -813,7 +813,55 @@ function metaLookup(title, apiKey, opts = {}) {
               tryTmdbVariants(parentVariants, (tResParent) => {
                 try { appendLog(`META_PARENT_TMDB_RESULT parent=${effectiveParent} found=${tResParent ? 'yes' : 'no'}`) } catch (e) {}
                 if (tResParent) return resParent({ name: tResParent.name, raw: Object.assign({}, tResParent.raw, { id: tResParent.id, type: tResParent.type || tResParent.mediaType || 'tv', source: 'tmdb' }), episode: tResParent.episode || null })
-                return resParent(null)
+                // If the variants call didn't accept a hit, we'll perform a direct
+                // TMDb search for the parent and accept the top hit (with episode
+                // details fetched when applicable).
+                const directSearch = (cb) => {
+                  if (!apiKey) return cb(null)
+                  const q = encodeURIComponent(effectiveParent)
+                  const searchPath = `/3/search/tv?api_key=${encodeURIComponent(apiKey)}&query=${q}`
+                  const req2 = https.request({ hostname: baseHost, path: searchPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (res2) => {
+                    let sb2 = '';
+                    res2.on('data', d => sb2 += d);
+                    res2.on('end', () => {
+                      try {
+                        const j2 = JSON.parse(sb2 || '{}')
+                        const hits2 = j2 && j2.results ? j2.results : [];
+                        if (hits2 && hits2.length > 0) return cb(hits2[0]);
+                      } catch (e) {}
+                      return cb(null)
+                    })
+                  })
+                  req2.on('error', () => cb(null))
+                  req2.on('timeout', () => { try { req2.destroy(); } catch (e) {} ; cb(null) })
+                  req2.end()
+                }
+                directSearch((topHit) => {
+                  if (!topHit) return resParent(null)
+                  try {
+                    const id = topHit.id
+                    const mediaType = topHit.media_type || (topHit.name ? 'tv' : 'movie')
+                    if (mediaType === 'tv' && opts && opts.season != null && opts.episode != null) {
+                      const epPath = `/3/tv/${id}/season/${encodeURIComponent(opts.season)}/episode/${encodeURIComponent(opts.episode)}?api_key=${encodeURIComponent(apiKey)}`
+                      const er2 = https.request({ hostname: baseHost, path: epPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (res3) => {
+                        let eb = '';
+                        res3.on('data', d => eb += d);
+                        res3.on('end', () => {
+                          try {
+                            const ej = JSON.parse(eb || '{}')
+                            if (ej && ej.name) return resParent({ name: topHit.name || topHit.original_name || topHit.title, raw: Object.assign({}, topHit, { id: topHit.id, type: 'tv', source: 'tmdb' }), episode: ej })
+                          } catch (e) {}
+                          return resParent({ name: topHit.name || topHit.original_name || topHit.title, raw: Object.assign({}, topHit, { id: topHit.id, type: 'tv', source: 'tmdb' }), episode: null })
+                        })
+                      })
+                      er2.on('error', () => resParent({ name: topHit.name || topHit.original_name || topHit.title, raw: Object.assign({}, topHit, { id: topHit.id, type: 'tv', source: 'tmdb' }), episode: null }))
+                      er2.on('timeout', () => { try { er2.destroy(); } catch (e) {} ; resParent({ name: topHit.name || topHit.original_name || topHit.title, raw: Object.assign({}, topHit, { id: topHit.id, type: 'tv', source: 'tmdb' }), episode: null }) })
+                      er2.end()
+                      return
+                    }
+                  } catch (e) {}
+                  return resParent({ name: topHit.name || topHit.original_name || topHit.title, raw: Object.assign({}, topHit, { id: topHit.id, type: topHit.media_type || 'tv', source: 'tmdb' }), episode: null })
+                })
               }, effectiveParent, { maxVariants: 3, tmdbRequestTimeout: 3000, relaxed: true, acceptTopHit: true })
             } catch (e) {
               try { appendLog(`META_PARENT_ERROR parent=${effectiveParent} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
