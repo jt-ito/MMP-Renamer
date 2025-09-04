@@ -818,8 +818,10 @@ function metaLookup(title, apiKey, opts = {}) {
                 // details fetched when applicable).
                 const directSearch = (cb) => {
                   if (!apiKey) return cb(null)
+                  try { appendLog(`META_PARENT_DIRECTSEARCH_START parent=${effectiveParent}`) } catch (e) {}
                   const q = encodeURIComponent(effectiveParent)
                   const searchPath = `/3/search/tv?api_key=${encodeURIComponent(apiKey)}&query=${q}`
+                  try { appendLog(`META_PARENT_DIRECTSEARCH_HTTP_REQ host=${baseHost} path=${searchPath}`) } catch (e) {}
                   const req2 = https.request({ hostname: baseHost, path: searchPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (res2) => {
                     let sb2 = '';
                     res2.on('data', d => sb2 += d);
@@ -889,7 +891,7 @@ function metaLookup(title, apiKey, opts = {}) {
   // Allow caller to request extra time for parent-driven lookups by setting
   // opts._parentDirect = true. Parent lookups often require extra requests
   // (episode endpoint, season lookups) so give them a larger window.
-  const lookupTimeoutMs = (opts && opts._parentDirect) ? Math.max(META_LOOKUP_TIMEOUT_MS, 20000) : META_LOOKUP_TIMEOUT_MS;
+  const lookupTimeoutMs = (opts && opts._parentDirect) ? Math.max(META_LOOKUP_TIMEOUT_MS, 30000) : META_LOOKUP_TIMEOUT_MS;
   const timeoutPromise = new Promise(res => setTimeout(() => { try { appendLog(`META_LOOKUP_TIMEOUT title=${title}`) } catch (e) {} ; res(null); }, lookupTimeoutMs));
 
   return Promise.race([inner, timeoutPromise]);
