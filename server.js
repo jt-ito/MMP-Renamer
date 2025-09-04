@@ -736,16 +736,12 @@ function metaLookup(title, apiKey, opts = {}) {
                 } catch (e) { resolvedParent = path.resolve(parentPath) }
                 try { appendLog(`META_PARENT_DEBUG resolvedConfigured=${resolvedConfigured} resolvedParent=${resolvedParent}`) } catch (e) {}
                 if (resolvedConfigured === resolvedParent) {
-                  try { appendLog(`META_PARENT_DEBUG resolvedConfigured=${resolvedConfigured} resolvedParent=${resolvedParent} force=${opts && opts.force ? 'yes' : 'no'}`) } catch (e) {}
-                  // If caller requested a forced rescan (opts.force), allow a parent lookup
-                  // even when the parent path equals the configured input root. This helps
-                  // debugging and honors explicit user intent to use the parent folder as
-                  // a fallback when filename-driven lookups fail.
-                  if (!(opts && opts.force)) {
-                    try { appendLog(`META_PARENT_DEBUG skipping_parent_lookup_parent_is_input_root=${resolvedParent}`) } catch (e) {}
-                    return null
-                  }
-                  try { appendLog(`META_PARENT_DEBUG forcing_parent_lookup_despite_input_root=${resolvedParent}`) } catch (e) {}
+                  try { appendLog(`META_PARENT_DEBUG resolvedConfigured=${resolvedConfigured} resolvedParent=${resolvedParent} (input_root_match)`) } catch (e) {}
+                  // Previously we skipped parent lookup when the parent folder equalled
+                  // the configured input root unless opts.force was set. That prevented
+                  // legitimate parent-folder lookups in many rescans. Always attempt the
+                  // parent lookup here so callers that provide a parentCandidate get a
+                  // true fallback search; keep the diagnostic log to aid troubleshooting.
                 }
               } catch (e) { /* ignore resolution errors */ }
             }
@@ -759,16 +755,17 @@ function metaLookup(title, apiKey, opts = {}) {
             // avoid recursive parent fallbacks inside the child call.
             try { appendLog(`META_PARENT_VARIANTS parent=${effectiveParent} variants=${JSON.stringify(makeVariants(effectiveParent)).slice(0,1000)}`) } catch (e) {}
             try {
-              try { appendLog(`META_PARENT_WILL_CALL_METALOOKUP parent=${effectiveParent}`) } catch (e) {}
-              const parentOpts = Object.assign({}, opts || {}, { parentCandidate: null, parentPath: null, _feedLabel: effectiveParent })
-              metaLookup(effectiveParent, apiKey, parentOpts).then((pmRes) => {
-                try { appendLog(`META_PARENT_TMDB_RESULT parent=${effectiveParent} found=${pmRes ? 'yes' : 'no'}`) } catch (e) {}
-                if (pmRes) return resParent(pmRes)
+              // Instead of recursively calling metaLookup (which can cause
+              // unexpected short-circuiting or options inheritance), call the
+              // TMDb-specific variant search directly so the parent title is
+              // guaranteed to be queried against TMDb.
+              try { appendLog(`META_PARENT_WILL_CALL_TMDB parent=${effectiveParent}`) } catch (e) {}
+              const parentVariants = makeVariants(effectiveParent)
+              tryTmdbVariants(parentVariants, (tResParent) => {
+                try { appendLog(`META_PARENT_TMDB_RESULT parent=${effectiveParent} found=${tResParent ? 'yes' : 'no'}`) } catch (e) {}
+                if (tResParent) return resParent({ name: tResParent.name, raw: Object.assign({}, tResParent.raw, { id: tResParent.id, type: tResParent.type || tResParent.mediaType || 'tv', source: 'tmdb' }), episode: tResParent.episode || null })
                 return resParent(null)
-              }).catch((err) => {
-                try { appendLog(`META_PARENT_ERROR parent=${effectiveParent} err=${err && err.message ? err.message : String(err)}`) } catch (e) {}
-                return resParent(null)
-              })
+              }, effectiveParent)
             } catch (e) {
               try { appendLog(`META_PARENT_ERROR parent=${effectiveParent} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
               return resParent(null)
