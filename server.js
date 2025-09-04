@@ -431,6 +431,22 @@ function metaLookup(title, apiKey, opts = {}) {
                     const sim = similarEnoughName(variants[i], candidateName)
                     try { appendLog(`META_TMDB_HIT_CHECK variant=${variants[i]} candidate=${candidateName.slice(0,200)} similar=${sim}`) } catch (e) {}
                     if (sim) return fetchTmdbDetails(h, cb)
+                    // Relaxed parent-mode acceptance: if caller set tmdbOpts.relaxed,
+                    // allow the top hit to be accepted via a simple word-overlap check
+                    // (helps for localized or romanized/English title mismatches).
+                    try {
+                      const relaxed = tmdbOpts && tmdbOpts.relaxed;
+                      if (!sim && relaxed && hi === 0) {
+                        function wordsOf(s) { return String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w && w.length >= 3) }
+                        const vWords = wordsOf(variants[i])
+                        const cWords = wordsOf(candidateName)
+                        const common = vWords.filter(w => cWords.indexOf(w) !== -1)
+                        if (common.length > 0) {
+                          try { appendLog(`META_TMDB_HIT_RELAXED variant=${variants[i]} candidate=${candidateName.slice(0,200)} common=${common.join(',')}`) } catch (e) {}
+                          return fetchTmdbDetails(h, cb)
+                        }
+                      }
+                    } catch (e) {}
                   }
                   // No sufficiently similar hit found; continue to next variant
                   setImmediate(() => tryOne(i + 1));
@@ -790,7 +806,7 @@ function metaLookup(title, apiKey, opts = {}) {
                 try { appendLog(`META_PARENT_TMDB_RESULT parent=${effectiveParent} found=${tResParent ? 'yes' : 'no'}`) } catch (e) {}
                 if (tResParent) return resParent({ name: tResParent.name, raw: Object.assign({}, tResParent.raw, { id: tResParent.id, type: tResParent.type || tResParent.mediaType || 'tv', source: 'tmdb' }), episode: tResParent.episode || null })
                 return resParent(null)
-              }, effectiveParent, { maxVariants: 3, tmdbRequestTimeout: 3000 })
+              }, effectiveParent, { maxVariants: 3, tmdbRequestTimeout: 3000, relaxed: true })
             } catch (e) {
               try { appendLog(`META_PARENT_ERROR parent=${effectiveParent} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
               return resParent(null)
