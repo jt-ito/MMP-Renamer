@@ -1073,6 +1073,12 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   }
   let res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts)
   try { console.log('DEBUG: externalEnrich metaLookup returned res=', !!res); } catch (e) {}
+  // Diagnostic: log a trimmed version of the metaLookup response so we can
+  // see whether the provider returned series/episode data before parent fallback.
+  try {
+    const shortRaw = (res && res.raw) ? JSON.stringify(res.raw).slice(0,400).replace(/\n/g,' ') : ''
+    appendLog(`META_LOOKUP_RAW title=${seriesLookupTitle} found=${res && res.name ? 'yes' : 'no'} resName=${res && res.name ? res.name : '<none>'} raw=${shortRaw}`)
+  } catch (e) { try { console.log('DEBUG: append META_LOOKUP_RAW failed', e && e.message) } catch (e) {} }
   // If no provider result found for the filename-derived title, and we have a
   // parent folder candidate, attempt a secondary lookup using the parent title
   // (do not allow parent to override parsed season/episode; we still keep
@@ -1174,6 +1180,14 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     extraGuess: guess
   };
 }
+
+// Diagnostic: log the final applied guess when externalEnrich is about to finish
+// (inserted as a lightweight instrumentation - will not affect behavior)
+try {
+  // best-effort: append a short one-line summary to logs
+  const _dbg = (typeof guess !== 'undefined') ? `META_APPLY_RESULT title=${guess.title || '<none>'} episodeTitle=${guess.episodeTitle || '<none>'} season=${guess.season != null ? guess.season : '<none>'} episode=${guess.episode != null ? guess.episode : '<none>'} provider=${(guess.provider && guess.provider.provider) ? guess.provider.provider : '<none>'}` : 'META_APPLY_RESULT guess=<undefined>'
+  try { appendLog(_dbg) } catch (e) { /* ignore logging failure */ }
+} catch (e) { /* ignore */ }
 
 // Normalize path canonicalization (simple lower-case, resolve)
 function canonicalize(p) {
