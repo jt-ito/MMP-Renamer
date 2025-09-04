@@ -400,9 +400,12 @@ function metaLookup(title, apiKey, opts = {}) {
             res.on('data', d => sb += d);
             res.on('end', () => {
               try {
-                const j = JSON.parse(sb || '{}');
+                let j = {};
+                try { j = JSON.parse(sb || '{}') } catch (e) { j = {} }
                 const hits = j && j.results ? j.results : [];
-                appendLog(`META_TMDB_ATTEMPT q=${variants[i]} results=${hits.length} type=${useTv ? 'tv' : 'multi'}`);
+                const totalResults = (j && (j.total_results != null)) ? j.total_results : hits.length;
+                const totalPages = (j && (j.total_pages != null)) ? j.total_pages : 1;
+                appendLog(`META_TMDB_ATTEMPT q=${variants[i]} results=${hits.length} total=${totalResults} total_pages=${totalPages} type=${useTv ? 'tv' : 'multi'}`);
                 if (hits && hits.length > 0) {
                   if (opts && opts.year) {
                     const y = String(opts.year);
