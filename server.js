@@ -19,6 +19,23 @@ const cookieSession = require('cookie-session');
 // simple cookie session for auth
 // cookie-session will be initialized after we ensure a persistent SESSION_KEY is available
 
+// simple auth middleware helpers
+function requireAuth(req, res, next) {
+  try {
+    if (req && req.session && req.session.username) return next();
+    return res.status(401).json({ error: 'unauthenticated' });
+  } catch (e) { return res.status(401).json({ error: 'unauthenticated' }) }
+}
+
+function requireAdmin(req, res, next) {
+  try {
+    const username = req && req.session && req.session.username;
+    if (!username) return res.status(401).json({ error: 'unauthenticated' });
+    if (users && users[username] && users[username].role === 'admin') return next();
+    return res.status(403).json({ error: 'forbidden' });
+  } catch (e) { return res.status(403).json({ error: 'forbidden' }) }
+}
+
 const DATA_DIR = path.resolve(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
