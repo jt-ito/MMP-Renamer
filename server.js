@@ -4,73 +4,10 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
-// Ensure https is available globally; we will add a TMDb-specific rate limiter to avoid
-// exceeding 50 requests per second to api.themoviedb.org. We monkey-patch https.request
-// for that host so existing code can continue to call https.request normally.
-const https = require('https');
-const EventEmitter = require('events');
-const _origHttpsRequest = https.request.bind(https);
-const _tmdbTimestamps = [];
-async function _tmdbRateLimit() {
-  while (true) {
-    const now = Date.now();
-    // drop timestamps older than 1000ms
-    while (_tmdbTimestamps.length && (now - _tmdbTimestamps[0]) > 1000) _tmdbTimestamps.shift();
-    if (_tmdbTimestamps.length < 50) { _tmdbTimestamps.push(now); return }
-    const wait = 1000 - (now - _tmdbTimestamps[0])
-    await new Promise(r => setTimeout(r, wait > 0 ? wait : 5))
-  }
-}
-
-// Monkey-patch https.request for requests targeting TMDb to defer execution until the
-// rate limiter allows it. We return a lightweight EventEmitter that proxies events from
-// the real request once it's issued so existing code that attaches handlers continues to work.
-https.request = function(opts, cb) {
-  try {
-    const host = (opts && (opts.hostname || opts.host)) ? String(opts.hostname || opts.host) : '';
-    if (host && host.indexOf('api.themoviedb.org') !== -1) {
-      const holder = { realReq: null, timeoutMs: null };
-      const fake = new EventEmitter();
-      fake.setTimeout = function(ms) { holder.timeoutMs = ms };
-      fake.destroy = function() { try { if (holder.realReq && typeof holder.realReq.destroy === 'function') holder.realReq.destroy(); } catch (e) {} };
-      fake.end = function() {
-        (async () => {
-          try {
-            await _tmdbRateLimit();
-            const realReq = _origHttpsRequest(opts, cb);
-            holder.realReq = realReq;
-            // Verbose diagnostic: log outgoing TMDb request
-            try { appendLog(`META_TMDB_HTTP_REQUEST host=${String(opts.hostname || opts.host)} path=${String(opts.path)} method=${String(opts.method || 'GET')}`) } catch (e) {}
-            // Capture and log response body snippets for diagnostics
-            realReq.on('response', (res) => {
-              try {
-                let sb = '';
-                res.on('data', (d) => { try { sb += d } catch (e) {} ; fake.emit('data', d) });
-                res.on('end', () => {
-                  try { appendLog(`META_TMDB_HTTP_RESPONSE host=${String(opts.hostname || opts.host)} path=${String(opts.path)} status=${res.statusCode} bodySnippet=${String(sb || '').slice(0,2000).replace(/\n/g,' ')}`) } catch (e) {}
-                  try { fake.emit('end') } catch (e) {}
-                });
-                res.on('error', (e) => { try { fake.emit('error', e) } catch (ee) {} });
-                // still expose the response event for existing consumers
-                try { fake.emit('response', res) } catch (e) {}
-              } catch (e) {
-                try { fake.emit('response', res) } catch (ee) {}
-              }
-            });
-            realReq.on('error', (e) => { try { appendLog(`META_TMDB_HTTP_ERROR host=${String(opts.hostname || opts.host)} path=${String(opts.path)} err=${e && e.message ? e.message : String(e)}`) } catch (e) {} ; try { fake.emit('error', e) } catch (ee) {} });
-            if (holder.timeoutMs && typeof realReq.setTimeout === 'function') realReq.setTimeout(holder.timeoutMs);
-            realReq.end();
-          } catch (e) {
-            // propagate failures to attached listeners
-            setImmediate(() => fake.emit('error', e));
-          }
-        })();
-      };
-      return fake;
-    }
-  } catch (e) {}
-  return _origHttpsRequest(opts, cb);
-}
+// External API integration removed: TMDb-related helpers and https monkey-patch
+// have been disabled to eliminate external HTTP calls. The metaLookup function
+// below is a no-op stub that returns null so the rest of the server continues
+// to operate without external provider lookups.
 
 const app = express();
 // Enable CORS but allow credentials so cookies can be sent from the browser (echo origin)
@@ -105,796 +42,198 @@ function ensureFile(filePath, defaultContent) {
   }
 }
 
-ensureFile(scanStoreFile, {});
-ensureFile(enrichStoreFile, {});
-ensureFile(logsFile, '');
-ensureFile(settingsFile, {});
-ensureFile(usersFile, {});
-ensureFile(renderedIndexFile, {});
-ensureFile(parsedCacheFile, {});
+async function metaLookup(title, apiKey, opts = {}) {
+  // Lightweight, rate-limited meta lookup using AniList -> Kitsu -> TMDb fallback.
+  // Inputs: title (string), apiKey (tmdb key, optional), opts may include season, episode, parentCandidate, parentPath, _parentDirect
+  // Output: Promise resolving to { name, raw, episode } or null
+  if (!title) return Promise.resolve(null)
 
-// Persist a generated SESSION_KEY to disk if none provided. This ensures cookie signing works
-// across restarts when using a host-mounted data directory, without requiring env vars.
-const sessionKeyFile = path.join(DATA_DIR, 'session.key');
-function loadOrCreateSessionKey() {
-  try {
-    // Accept either SESSION_KEY or MR_SESSION_KEY (compose env) for compatibility
-    const envKey = (process.env.SESSION_KEY && String(process.env.SESSION_KEY).trim()) ? String(process.env.SESSION_KEY).trim() : ((process.env.MR_SESSION_KEY && String(process.env.MR_SESSION_KEY).trim()) ? String(process.env.MR_SESSION_KEY).trim() : null);
-    if (envKey) return envKey;
-    if (fs.existsSync(sessionKeyFile)) {
-      const k = String(fs.readFileSync(sessionKeyFile, 'utf8') || '').trim();
-      if (k) return k;
-    }
-    const newKey = uuidv4();
-    try { fs.writeFileSync(sessionKeyFile, newKey, { encoding: 'utf8' }); } catch (e) { console.error('failed write session.key', e && e.message); }
-    return newKey;
-  } catch (e) { console.error('loadOrCreateSessionKey', e && e.message); return uuidv4(); }
-}
-const EFFECTIVE_SESSION_KEY = loadOrCreateSessionKey();
-
-// simple cookie session for auth (initialized with EFFECTIVE_SESSION_KEY)
-app.use(cookieSession({
-  name: 'session',
-  keys: [EFFECTIVE_SESSION_KEY],
-  maxAge: 24 * 60 * 60 * 1000,
-  httpOnly: true,
-  // Allow explicit override for secure cookies. In Docker images NODE_ENV=production
-  // is often set, but the container may be served over plain HTTP (no TLS). In that
-  // case browsers will ignore cookies with the Secure flag. Set SESSION_COOKIE_SECURE
-  // to 'false' when running over plain HTTP in containers to allow cookies.
-  secure: (typeof process.env.SESSION_COOKIE_SECURE !== 'undefined')
-    ? String(process.env.SESSION_COOKIE_SECURE).toLowerCase() === 'true'
-    : (process.env.NODE_ENV === 'production'),
-  sameSite: 'lax'
-}));
-
-function readJson(file, def) { try { return JSON.parse(fs.readFileSync(file, 'utf8') || ''); } catch (e) { return def; } }
-function writeJson(file, obj) {
-  try {
-    const tmp = file + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), { encoding: 'utf8' });
-    fs.renameSync(tmp, file);
-  } catch (e) {
-    console.error('writeJson error', file, e && e.message);
-    // best-effort fallback
-    try { fs.writeFileSync(file, JSON.stringify(obj, null, 2), { encoding: 'utf8' }); } catch (e2) { console.error('writeJson fallback failed', e2 && e2.message); }
+  // Minimal per-host pacing to avoid hammering external APIs
+  const hostPace = { 'graphql.anilist.co': 250, 'kitsu.io': 250, 'api.themoviedb.org': 300 } // ms
+  const lastRequestAt = metaLookup._lastRequestAt = metaLookup._lastRequestAt || {}
+  async function pace(host) {
+    const now = Date.now()
+    const last = lastRequestAt[host] || 0
+    const wait = Math.max(0, (hostPace[host] || 300) - (now - last))
+    if (wait > 0) await new Promise(r => setTimeout(r, wait))
+    lastRequestAt[host] = Date.now()
   }
-}
 
-let scans = readJson(scanStoreFile, {});
-let enrichCache = readJson(enrichStoreFile, {});
-let serverSettings = readJson(settingsFile, {});
-let users = readJson(usersFile, {});
-let renderedIndex = readJson(renderedIndexFile, {});
-let parsedCache = readJson(parsedCacheFile, {});
+  function normalize(s) { try { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim() } catch (e) { return String(s || '') } }
+  function wordOverlap(a,b){ try { const wa = normalize(a).split(' ').filter(Boolean); const wb = normalize(b).split(' ').filter(Boolean); if (!wa.length || !wb.length) return 0; const common = wa.filter(x=>wb.indexOf(x)!==-1); return common.length/Math.max(wa.length, wb.length); } catch (e){ return 0 } }
 
-// Helper: normalize enrich cache entries to a clear shape { parsed: {...}, provider: {...}, ... }
-function makeParsedEntry(parsed) {
-  if (!parsed) return null;
-  return { title: parsed.title || '', parsedName: parsed.parsedName || '', season: parsed.season != null ? parsed.season : null, episode: parsed.episode != null ? parsed.episode : null, timestamp: parsed.timestamp || Date.now() };
-}
+  // Build simple variants to try (original, cleaned, stripped parentheses, lowercase)
+  function makeVariants(t){ const s = String(t || '').trim(); const variants = []; if (!s) return variants; variants.push(s); const cleaned = s.replace(/[._\-:]+/g,' ').replace(/\s+/g,' ').trim(); variants.push(cleaned); const stripped = cleaned.replace(/\s*[\[(].*?[\])]/g, '').replace(/\s+/g,' ').trim(); if (stripped && stripped !== cleaned) variants.push(stripped); variants.push(stripped.toLowerCase()); return [...new Set(variants)].slice(0,5) }
 
-function makeProviderEntry(data, renderedName) {
-  if (!data) return null;
-  return { title: data.title || '', year: data.year || null, season: data.season != null ? data.season : null, episode: data.episode != null ? data.episode : null, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: renderedName || null, matched: !!data.title };
-}
-
-function normalizeEnrichEntry(raw) {
-  raw = raw || {};
-  const out = {};
-  // retain applied/hidden flags at top-level
-  if (raw.applied) out.applied = raw.applied;
-  if (raw.hidden) out.hidden = raw.hidden;
-  if (raw.appliedAt) out.appliedAt = raw.appliedAt;
-  if (raw.appliedTo) out.appliedTo = raw.appliedTo;
-  if (raw.renderedName) out.renderedName = raw.renderedName;
-  if (raw.metadataFilename) out.metadataFilename = raw.metadataFilename;
-  // parsed block
-  if (raw.parsed) out.parsed = makeParsedEntry(raw.parsed);
-  else if (raw.title || raw.parsedName || raw.season != null || raw.episode != null) out.parsed = makeParsedEntry({ title: raw.title || '', parsedName: raw.parsedName || '', season: raw.season, episode: raw.episode, timestamp: raw.timestamp });
-  else out.parsed = null;
-  // provider block
-  if (raw.provider) out.provider = makeProviderEntry(raw.provider, raw.providerRenderedName || raw.provider && raw.provider.renderedName || raw.renderedName || null);
-  else if (raw.providerRenderedName || raw.episodeTitle || raw.year) out.provider = makeProviderEntry({ title: raw.title || (raw.parsed && raw.parsed.title) || '', year: raw.year || null, season: raw.season, episode: raw.episode, episodeTitle: raw.episodeTitle || '' }, raw.providerRenderedName || raw.renderedName || null);
-  else out.provider = null;
-  out.cachedAt = raw.cachedAt || Date.now();
-  out.sourceId = raw.sourceId || null;
-  return out;
-}
-
-async function ensureAdmin() {
-  try {
-    // If users already exist, nothing to do
-    if (users && Object.keys(users).length > 0) return;
-    // If an ADMIN_PASSWORD env var was provided, create an admin user automatically.
-    // Otherwise leave registration open so the first web registration will create the admin.
-  // Accept ADMIN_PASSWORD or MR_ADMIN_PASSWORD
-  const adminPwd = (process.env.ADMIN_PASSWORD && String(process.env.ADMIN_PASSWORD).trim()) ? String(process.env.ADMIN_PASSWORD).trim() : (process.env.MR_ADMIN_PASSWORD && String(process.env.MR_ADMIN_PASSWORD).trim() ? String(process.env.MR_ADMIN_PASSWORD).trim() : null);
-    if (!adminPwd) {
-      appendLog('NO_ADMIN_AUTOCREATE: registration open (no ADMIN_PASSWORD)');
-      return;
-    }
-    const hash = await bcrypt.hash(String(adminPwd), 10);
-    const uname = 'admin';
-    users = users || {};
-    users[uname] = { username: uname, passwordHash: hash, role: 'admin' };
-    writeJson(usersFile, users);
-    appendLog('USER_CREATED admin (from ADMIN_PASSWORD env)');
-  } catch (e) {
-    appendLog('ENSURE_ADMIN_FAIL ' + (e && e.message ? e.message : String(e)));
+  // Simple HTTP helpers
+  const https = require('https')
+  function httpRequest(options, body, timeoutMs = 4000) {
+    return new Promise((resolve, reject) => {
+      let timed = false
+      const req = https.request(options, (res) => {
+        let sb = ''
+        res.on('data', d => sb += d)
+        res.on('end', () => {
+          if (timed) return
+          resolve({ statusCode: res.statusCode, headers: res.headers, body: sb })
+        })
+      })
+      req.on('error', (err) => { if (timed) return; reject(err) })
+      req.setTimeout(timeoutMs, () => { timed = true; try{ req.destroy() }catch(e){}; reject(new Error('timeout')) })
+      if (body) req.write(body)
+      req.end()
+    })
   }
-}
-ensureAdmin().catch(()=>{});
 
-function requireAuth(req, res, next) { if (req.session && req.session.username && users[req.session.username]) return next(); return res.status(401).json({ error: 'unauthenticated' }); }
-function requireAdmin(req, res, next) { if (!req.session || !req.session.username) return res.status(401).json({ error: 'unauthenticated' }); const u = users[req.session.username]; if (!u || u.role !== 'admin') return res.status(403).json({ error: 'forbidden' }); return next(); }
-
-app.post('/api/login', async (req, res) => { const { username, password } = req.body || {}; const user = users[username]; if (!user) return res.status(401).json({ error: 'invalid' }); const ok = await bcrypt.compare(password, user.passwordHash); if (!ok) return res.status(401).json({ error: 'invalid' }); req.session.username = username; res.json({ ok: true, username, role: user.role }); });
-app.post('/api/logout', (req, res) => { req.session = null; res.json({ ok: true }); });
-app.get('/api/session', (req, res) => { if (req.session && req.session.username && users[req.session.username]) { const u = users[req.session.username]; return res.json({ authenticated: true, username: u.username, role: u.role }); } res.json({ authenticated: false }); });
-
-// Expose whether registration is open (no users exist)
-app.get('/api/auth/status', (req, res) => {
-  try {
-    const hasUsers = users && Object.keys(users).length > 0;
-    return res.json({ hasUsers });
-  } catch (e) { return res.status(500).json({ error: e.message }); }
-});
-
-// One-time open registration: only allowed when there are no users recorded yet.
-app.post('/api/register', async (req, res) => {
-  try {
-    const { username, password } = req.body || {};
-    if (!username || !password) return res.status(400).json({ error: 'username and password required' });
-    // If users already exist, close registration
-    if (users && Object.keys(users).length > 0) return res.status(403).json({ error: 'registration closed' });
-    if (String(password).length < 6) return res.status(400).json({ error: 'password too short (min 6 chars)' });
-    const uname = String(username).trim();
-    const hash = await bcrypt.hash(String(password), 10);
-    // First created user becomes admin
-    users[uname] = { username: uname, passwordHash: hash, role: 'admin' };
-    writeJson(usersFile, users);
-    // create session for the new user
-    req.session.username = uname;
-    appendLog(`USER_REGISTERED initial admin=${uname}`);
-    return res.json({ ok: true, username: uname, role: 'admin' });
-  } catch (e) { return res.status(500).json({ error: e.message }); }
-});
-
-app.get('/api/users', requireAuth, requireAdmin, (req, res) => { const list = Object.values(users).map(u => ({ username: u.username, role: u.role })); res.json({ users: list }); });
-app.post('/api/users', requireAuth, requireAdmin, async (req, res) => { const { username, password, role } = req.body || {}; if (!username || !password) return res.status(400).json({ error: 'username and password required' }); if (users[username]) return res.status(400).json({ error: 'user exists' }); try { const hash = await bcrypt.hash(password, 10); users[username] = { username, passwordHash: hash, role: role || 'user' }; writeJson(usersFile, users); appendLog(`USER_CREATE ${username} by=${req.session.username}`); res.json({ ok: true, username, role: users[username].role }); } catch (err) { res.status(500).json({ error: err.message }); } });
-app.delete('/api/users/:username', requireAuth, requireAdmin, (req, res) => { const target = req.params.username; if (!users[target]) return res.status(404).json({ error: 'not found' }); if (target === 'admin') return res.status(400).json({ error: 'cannot delete admin' }); delete users[target]; writeJson(usersFile, users); appendLog(`USER_DELETE ${target} by=${req.session.username}`); res.json({ ok: true }); });
-
-app.post('/api/users/:username/password', requireAuth, async (req, res) => {
-  const target = req.params.username; const { currentPassword, newPassword } = req.body || {};
-  if (!newPassword || String(newPassword).length < 6) return res.status(400).json({ error: 'newPassword required (min 6 chars)' });
-  if (!users[target]) return res.status(404).json({ error: 'user not found' });
-  const requester = req.session.username; const requesterUser = users[requester];
-  if (requesterUser && requesterUser.role === 'admin') { try { const hash = await bcrypt.hash(newPassword, 10); users[target].passwordHash = hash; writeJson(usersFile, users); appendLog(`USER_PWD_CHANGE target=${target} by=${requester}`); return res.json({ ok: true }); } catch (err) { return res.status(500).json({ error: err.message }) }
-  }
-  if (requester !== target) return res.status(403).json({ error: 'forbidden' }); if (!currentPassword) return res.status(400).json({ error: 'currentPassword required' });
-  try { const ok = await bcrypt.compare(currentPassword, users[target].passwordHash); if (!ok) return res.status(401).json({ error: 'invalid current password' }); const hash = await bcrypt.hash(newPassword, 10); users[target].passwordHash = hash; writeJson(usersFile, users); appendLog(`USER_PWD_CHANGE_SELF user=${target}`); return res.json({ ok: true }); } catch (err) { return res.status(500).json({ error: err.message }) }
-});
-
-function appendLog(line) { const ts = new Date().toISOString(); const entry = `${ts} ${line}\n`; fs.appendFileSync(logsFile, entry); }
-
-// Mock external metadata provider (TMDb)
-function metaLookup(title, apiKey, opts = {}) {
-  try {
-    const mask = apiKey ? (String(apiKey).slice(0,6) + '...' + String(apiKey).slice(-4)) : null
-    appendLog(`META_LOOKUP_REQUEST title=${title} keyPresent=${apiKey ? 'yes' : 'no'} keyMask=${mask}`)
-  } catch (e) {}
-  // If caller didn't pass an apiKey, attempt to fall back to configured keys
-  // in users/settings so recursive parent-based metaLookup calls still reach TMDb.
-  try {
-    if (!apiKey) {
-      try {
-        const u = readJson(usersFile, {}) || {};
-        if (!apiKey && u && u.admin && u.admin.settings && u.admin.settings.tmdb_api_key) apiKey = u.admin.settings.tmdb_api_key;
-      } catch (e) {}
-      try {
-        const s = readJson(settingsFile, {}) || {};
-        if (!apiKey && s && s.tmdb_api_key) apiKey = s.tmdb_api_key;
-      } catch (e) {}
-      try { appendLog(`META_TMDB_KEY_FALLBACK used=${apiKey ? 'yes' : 'no'}`) } catch (e) {}
-    }
-  } catch (e) {}
-  // Fast path: impose a global timeout for the entire meta lookup to avoid
-  // very long rescans when providers are slow or unreachable. This can be
-  // configured with the META_LOOKUP_TIMEOUT_MS env var.
-  const META_LOOKUP_TIMEOUT_MS = process.env.META_LOOKUP_TIMEOUT_MS ? parseInt(process.env.META_LOOKUP_TIMEOUT_MS, 10) : 15000;
-
-  const inner = new Promise((resolve) => {
-    const https = require('https')
-
-    function readConfiguredInput() {
-      try {
-        const u = readJson(usersFile, {}) || {}
-        for (const k of Object.keys(u)) {
-          try { if (u[k] && u[k].settings && u[k].settings.scan_input_path) return path.resolve(u[k].settings.scan_input_path) } catch (e) {}
-        }
-      } catch (e) {}
-      try {
-        const s = readJson(settingsFile, {}) || {}
-        if (s && s.scan_input_path) return path.resolve(s.scan_input_path)
-      } catch (e) {}
-      return null
-    }
-
-    function makeVariants(t) {
-      const s = String(t || '').trim()
-      const variants = []
-      if (!s) return variants
-      // original
-      variants.push(s)
-      // clean separators -> spaces
-      const cleaned = s.replace(/[._\-:]+/g, ' ').replace(/\s+/g, ' ').trim()
-      variants.push(cleaned)
-      // strip bracketed/parenthetical suffixes: "Title (something)" or "Title [something]"
-      const stripped = cleaned.replace(/\s*[\[(].*?[\])]/g, '').replace(/\s+/g, ' ').trim()
-      if (stripped && stripped !== cleaned) variants.push(stripped)
-      // try shorter word prefixes
-      const words = stripped.split(/\s+/).filter(Boolean)
-      if (words.length > 0) variants.push(words.slice(0, Math.min(5, words.length)).join(' '))
-      if (words.length > 1) variants.push(words.slice(0, Math.min(3, words.length)).join(' '))
-  // (no provider-specific suffixes — TMDb-only lookup)
-      // try appending year if provided in opts
-      try {
-        if (opts && opts.year) {
-          const y = String(opts.year)
-          variants.push(stripped + ' ' + y)
-          variants.push(stripped + ' (' + y + ')')
-        }
-      } catch (e) {}
-      // lowercase variants
-      variants.push(stripped.toLowerCase())
-      // unique and filtered
-      return [...new Set(variants.map(v => (v || '').trim()))].filter(Boolean)
-    }
-
-  // Meta-level feed title: if caller wants to force a particular feed label
-  // (for example when invoking metaLookup on a parent folder), they can set
-  // opts._feedLabel and that value will be used for TMDb search logging and
-  // as the default feed when tryTmdbVariants is invoked without an explicit
-  // feedLabel argument.
-  const metaFeedTitle = (opts && opts._feedLabel) ? String(opts._feedLabel).slice(0,200) : String(title || '').slice(0,200)
-
-    // Normalization + similarity helpers used to validate TMDb hits against the variant
-    function normalizeForCompareName(s) {
-      try { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim() } catch (e) { return String(s || '') }
-    }
-    function levenshtein(a,b) {
-      if (!a || !b) return Math.max(a ? a.length : 0, b ? b.length : 0)
-      const al = a.length, bl = b.length
-      const dp = Array.from({ length: al + 1 }, (_, i) => Array(bl + 1).fill(0))
-      for (let i = 0; i <= al; i++) dp[i][0] = i
-      for (let j = 0; j <= bl; j++) dp[0][j] = j
-      for (let i = 1; i <= al; i++) {
-        for (let j = 1; j <= bl; j++) {
-          const cost = a[i-1] === b[j-1] ? 0 : 1
-          dp[i][j] = Math.min(dp[i-1][j] + 1, dp[i][j-1] + 1, dp[i-1][j-1] + cost)
-        }
-      }
-      return dp[al][bl]
-    }
-    function similarEnoughName(a,b) {
-      const na = normalizeForCompareName(a)
-      const nb = normalizeForCompareName(b)
-      if (!na || !nb) return false
-      if (na === nb) return true
-      if (na.indexOf(nb) !== -1 || nb.indexOf(na) !== -1) return true
-      const dist = levenshtein(na, nb)
-      const norm = dist / Math.max(na.length, nb.length, 1)
-      return norm <= 0.35
-    }
-
-  // TMDb-only lookup implemented below
-
-  function tryTmdbVariants(variants, cb, feedLabel, tmdbOpts) {
-    // tmdbOpts: { maxVariants, tmdbRequestTimeout }
-    if (!apiKey) return cb(null)
-    const useTv = (opts && (opts.season != null || opts.episode != null))
-    const baseHost = 'api.themoviedb.org'
-    const maxVariants = (tmdbOpts && tmdbOpts.maxVariants) ? Number(tmdbOpts.maxVariants) : 3
-    const reqTimeout = (tmdbOpts && tmdbOpts.tmdbRequestTimeout) ? Number(tmdbOpts.tmdbRequestTimeout) : 3000
-    const tryOne = (i) => {
-      if (i >= Math.min(variants.length, maxVariants)) return cb(null);
-      const q = encodeURIComponent(variants[i]);
-      const searchPath = useTv ? `/3/search/tv?api_key=${encodeURIComponent(apiKey)}&query=${q}` : `/3/search/multi?api_key=${encodeURIComponent(apiKey)}&query=${q}`;
-  const feed = (typeof feedLabel !== 'undefined' && feedLabel !== null) ? String(feedLabel).slice(0,200) : metaFeedTitle
-    try { appendLog(`META_TMDB_SEARCH_FEED feed=${feed} variant=${String(variants[i] || '').slice(0,200)} useTv=${useTv}`) } catch (e) {}
-      const req = https.request({ hostname: baseHost, path: searchPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: reqTimeout }, (res) => {
-            let sb = '';
-            res.on('data', d => sb += d);
-            res.on('end', () => {
-              try {
-                let j = {};
-                try { j = JSON.parse(sb || '{}') } catch (e) { j = {} }
-                const hits = j && j.results ? j.results : [];
-                const totalResults = (j && (j.total_results != null)) ? j.total_results : hits.length;
-                const totalPages = (j && (j.total_pages != null)) ? j.total_pages : 1;
-                appendLog(`META_TMDB_ATTEMPT q=${variants[i]} results=${hits.length} total=${totalResults} total_pages=${totalPages} type=${useTv ? 'tv' : 'multi'}`);
-                if (hits && hits.length > 0) {
-                  if (opts && opts.year) {
-                    const y = String(opts.year);
-                    const match = hits.find(h => {
-                      const fy = h.first_air_date || h.release_date || h.firstAirDate;
-                      if (!fy) return false;
-                      try { return String(new Date(fy).getFullYear()) === y; } catch (e) { return false; }
-                    });
-                    if (match) return fetchTmdbDetails(match, cb);
-                  }
-                  // Validate top hits by name similarity to avoid false-positive matches on short variants
-                  for (let hi = 0; hi < Math.min(6, hits.length); hi++) {
-                    const h = hits[hi]
-                    const candidateName = String(h.name || h.original_name || h.title || '')
-                    const sim = similarEnoughName(variants[i], candidateName)
-                    try { appendLog(`META_TMDB_HIT_CHECK variant=${variants[i]} candidate=${candidateName.slice(0,200)} similar=${sim}`) } catch (e) {}
-                    if (sim) return fetchTmdbDetails(h, cb)
-                    // Relaxed parent-mode acceptance: if caller set tmdbOpts.relaxed,
-                    // allow the top hit to be accepted via a simple word-overlap check
-                    // (helps for localized or romanized/English title mismatches).
-                    try {
-                      const relaxed = tmdbOpts && tmdbOpts.relaxed;
-                      if (!sim && relaxed && hi === 0) {
-                        function wordsOf(s) { return String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w && w.length >= 3) }
-                        const vWords = wordsOf(variants[i])
-                        const cWords = wordsOf(candidateName)
-                        const common = vWords.filter(w => cWords.indexOf(w) !== -1)
-                        if (common.length > 0) {
-                          try { appendLog(`META_TMDB_HIT_RELAXED variant=${variants[i]} candidate=${candidateName.slice(0,200)} common=${common.join(',')}`) } catch (e) {}
-                          return fetchTmdbDetails(h, cb)
-                        }
-                      }
-                      // If caller explicitly asks to accept the top hit for parent-mode
-                      // (covers non-latin titles and localized/romanized mismatches), do it.
-                      try {
-                        if (tmdbOpts && tmdbOpts.acceptTopHit && hi === 0) {
-                          try { appendLog(`META_TMDB_HIT_ACCEPT_TOP variant=${variants[i]} candidate=${candidateName.slice(0,200)}`) } catch (e) {}
-                          return fetchTmdbDetails(h, cb)
-                        }
-                      } catch (e) {}
-                    } catch (e) {}
-                  }
-                  // No sufficiently similar hit found; continue to next variant
-                  setImmediate(() => tryOne(i + 1));
-                  return
-                }
-              } catch (e) { /* ignore */ }
-              setImmediate(() => tryOne(i + 1));
-            });
-      });
-      req.on('error', () => setImmediate(() => tryOne(i + 1)));
-      req.on('timeout', () => { try { req.destroy(); } catch (e) {} ; setImmediate(() => tryOne(i + 1)); });
-      req.end();
-    }
-      function fetchTmdbDetails(hit, cb) {
-        try {
-          const id = hit.id
-          const mediaType = hit.media_type || (hit.name ? 'tv' : 'movie')
-          // If caller provided season & episode, prefer episode-level lookup with fallbacks for specials/decimals
-          if (mediaType === 'tv' && opts && opts.season != null && opts.episode != null) {
-            const epPath = `/3/tv/${id}/season/${encodeURIComponent(opts.season)}/episode/${encodeURIComponent(opts.episode)}?api_key=${encodeURIComponent(apiKey)}`
-            const er = https.request({ hostname: baseHost, path: epPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (res) => {
-              let eb = ''
-              res.on('data', d => eb += d)
-              res.on('end', async () => {
-                let ej = null
-                try { ej = JSON.parse(eb || '{}') } catch (e) { ej = null }
-                // If episode lookup returned a useful name/number, decide whether to accept it.
-                if (ej && ej.name) {
-                  try {
-                    // If caller provided a parsed episode title (from filename) and the requested
-                    // episode was a fractional/decimal (e.g., "11.5"), compare similarity between
-                    // the TMDb episode name and the parsed title. If they are not similar enough,
-                    // do not accept this episode result here and fall through to specials/season0 logic.
-                    const parsedEpTitle = opts && opts.parsedEpisodeTitle ? String(opts.parsedEpisodeTitle || '').trim() : '';
-                    const epRequestedStr = String(opts.episode || '');
-                    const isDecimal = epRequestedStr.indexOf('.') !== -1;
-                    function normalizeForCompare(s) { try { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim(); } catch (e) { return String(s || '').toLowerCase(); } }
-                    function levenshtein(a,b) {
-                      if (!a || !b) return Math.max(a ? a.length : 0, b ? b.length : 0)
-                      const al = a.length, bl = b.length
-                      const dp = Array.from({ length: al + 1 }, (_, i) => Array(bl + 1).fill(0))
-                      for (let i = 0; i <= al; i++) dp[i][0] = i
-                      for (let j = 0; j <= bl; j++) dp[0][j] = j
-                      for (let i = 1; i <= al; i++) {
-                        for (let j = 1; j <= bl; j++) {
-                          const cost = a[i-1] === b[j-1] ? 0 : 1
-                          dp[i][j] = Math.min(dp[i-1][j] + 1, dp[i][j-1] + 1, dp[i-1][j-1] + cost)
-                        }
-                      }
-                      return dp[al][bl]
-                    }
-                    function similarEnough(a,b) {
-                      const na = normalizeForCompare(a)
-                      const nb = normalizeForCompare(b)
-                      if (!na || !nb) return false
-                      if (na === nb) return true
-                      if (na.indexOf(nb) !== -1 || nb.indexOf(na) !== -1) return true
-                      const dist = levenshtein(na, nb)
-                      const norm = dist / Math.max(na.length, nb.length, 1)
-                      return norm <= 0.4
-                    }
-                    if (isDecimal && parsedEpTitle) {
-                      const tmdbEpName = ej.name || ej.title || '';
-                      if (!similarEnough(tmdbEpName, parsedEpTitle)) {
-                        // treat as not matched and continue to season0 / specials fallback logic
-                      } else {
-                        return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: hit, episode: ej })
-                      }
-                    } else {
-                      return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: hit, episode: ej })
-                    }
-                  } catch (e) {
-                    return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: hit, episode: ej })
-                  }
-                }
-
-                // Only attempt season-0 (specials) lookup for true special candidates:
-                // - explicitly season 0, or
-                // - fractional/decimal episode numbers (e.g., 11.5)
-                const epStr = String(opts.episode || '')
-                const isSpecialCandidate = (Number(opts.season) === 0) || (epStr.indexOf('.') !== -1)
-                if (!isSpecialCandidate) {
-                  // Not a special candidate; return series-level hit without extra season0 work
-                  return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit })
-                }
-
-                // Fallback 1: try season 0 (specials) list and attempt to find a matching special
-                const season0Path = `/3/tv/${id}/season/0?api_key=${encodeURIComponent(apiKey)}`
-                const s0req = https.request({ hostname: baseHost, path: season0Path, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (sres) => {
-                  let sb = ''
-                  sres.on('data', d => sb += d)
-                  sres.on('end', () => {
-                    let s0 = null
-                    try { s0 = JSON.parse(sb || '{}') } catch (e) { s0 = null }
-                    const specials = s0 && s0.episodes ? s0.episodes : null
-                    if (specials && Array.isArray(specials) && specials.length > 0) {
-                      try {
-                        const reqEpStr = String(opts.episode || '')
-                        const reqNum = Number(reqEpStr)
-                        const floorNum = isNaN(reqNum) ? null : Math.floor(reqNum)
-                        // Try to match by exact episode_number (including integer fallback)
-                        let match = null
-                        if (!isNaN(reqNum)) {
-                          match = specials.find(e => Number(e.episode_number) === reqNum) || specials.find(e => Number(e.episode_number) === floorNum)
-                        }
-                        // Try matching by air_date if episode endpoint returned an air_date
-                        if (!match && ej && ej.air_date) match = specials.find(e => e.air_date === ej.air_date)
-                        // If we still don't have a match, and the caller provided a parsed episode
-                        // title (from the filename), try matching specials by name similarity.
-                        // This helps for decimal/fractional episodes (e.g. 11.5) where TMDb
-                        // places the special in season 0 and numeric lookup fails.
-                        if (!match && opts && opts.parsedEpisodeTitle) {
-                          try {
-                            const parsedTitleLocal = String(opts.parsedEpisodeTitle || '').trim();
-                            if (parsedTitleLocal) {
-                              const sByName = specials.find(e => {
-                                try {
-                                  const candidateName = String(e.name || e.title || (e.attributes && (e.attributes.canonicalTitle || e.attributes.title)) || '').trim();
-                                  if (!candidateName) return false
-                                  return similarEnough(candidateName, parsedTitleLocal)
-                                } catch (e) { return false }
-                              })
-                              if (sByName) match = sByName
-                            }
-                          } catch (e) { /* ignore name-matching errors */ }
-                        }
-                        if (match) return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }), episode: match })
-                      } catch (e) { /* ignore matching errors */ }
-                    }
-
-                    // Fallback 2: if the requested episode had a decimal (e.g., 11.5), try integer episode lookup (floor)
-                    try {
-                      const reqEpStr2 = String(opts.episode || '')
-                      const reqNum2 = Number(reqEpStr2)
-                      if (!isNaN(reqNum2) && String(reqEpStr2).indexOf('.') !== -1) {
-                        const intEp = Math.floor(reqNum2)
-                        const intPath = `/3/tv/${id}/season/${encodeURIComponent(opts.season)}/episode/${encodeURIComponent(intEp)}?api_key=${encodeURIComponent(apiKey)}`
-                        const ir = https.request({ hostname: baseHost, path: intPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (ires) => {
-                          let ib = ''
-                          ires.on('data', d => ib += d)
-                          ires.on('end', () => {
-                            try {
-                              const ij = JSON.parse(ib || '{}')
-                              if (ij && ij.name) return cb({ provider: 'tmdb', id, type: 'tv', name: hit.name || hit.original_name || hit.title, raw: hit, episode: ij })
-                            } catch (e) {}
-                            // fall through to generic series-level response
-                            return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) })
-                          })
-                        })
-                        ir.on('error', () => cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) }))
-                        ir.on('timeout', () => { ir.destroy(); cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) }) })
-                        ir.end()
-                        return
-                      }
-                    } catch (e) { /* ignore */ }
-
-                    // Nothing matched: return series-level hit but include specials list for downstream heuristics
-                        // attach per-season air date when available before returning
-                        try {
-                          const seasonNum = opts && (opts.season != null) ? opts.season : null
-                          if (seasonNum != null) {
-                            const seasonPath = `/3/tv/${id}/season/${encodeURIComponent(seasonNum)}?api_key=${encodeURIComponent(apiKey)}`
-                            const sreq = https.request({ hostname: baseHost, path: seasonPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (sres) => {
-                              let sb2 = ''
-                              sres.on('data', d => sb2 += d)
-                              sres.on('end', () => {
-                                try {
-                                  const sj = JSON.parse(sb2 || '{}')
-                                  // TMDb season object may include an air_date or episodes[].air_date — pick earliest
-                                  let seasonAir = sj.air_date || null
-                                  try {
-                                    if (!seasonAir && sj.episodes && Array.isArray(sj.episodes) && sj.episodes.length) {
-                                      const dates = sj.episodes.map(e => e && e.air_date).filter(Boolean)
-                                      if (dates.length) seasonAir = dates.sort()[0]
-                                    }
-                                  } catch (e) {}
-                                  const rawWithSeason = Object.assign({}, hit, { specials })
-                                  if (seasonAir) rawWithSeason.seasonAirDate = seasonAir
-                                  return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: rawWithSeason })
-                                } catch (e) { return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) }) }
-                              })
-                            })
-                            sreq.on('error', () => cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) }))
-                            sreq.on('timeout', () => { sreq.destroy(); cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) }) })
-                            sreq.end()
-                            return
-                          }
-                        } catch (e) { /* fallthrough */ }
-                        return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: Object.assign({}, hit, { specials }) })
-                  })
-                })
-                s0req.on('error', () => cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }))
-                s0req.on('timeout', () => { s0req.destroy(); cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }) })
-                s0req.end()
-              })
-            })
-            er.on('error', () => cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }))
-            er.on('timeout', () => { er.destroy(); cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }) })
-            er.end()
-            return
-          }
-          // If caller requested season (but not episode), try to attach season air date for accurate season year
-          try {
-            if (mediaType === 'tv' && opts && (opts.season != null) && apiKey) {
-              const seasonNum2 = opts.season
-              const seasonPath2 = `/3/tv/${id}/season/${encodeURIComponent(seasonNum2)}?api_key=${encodeURIComponent(apiKey)}`
-              const sreq2 = https.request({ hostname: baseHost, path: seasonPath2, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (sres2) => {
-                let sb3 = ''
-                sres2.on('data', d => sb3 += d)
-                sres2.on('end', () => {
-                  try {
-                    const sj2 = JSON.parse(sb3 || '{}')
-                    let seasonAir2 = sj2.air_date || null
-                    try {
-                      if (!seasonAir2 && sj2.episodes && Array.isArray(sj2.episodes) && sj2.episodes.length) {
-                        const dates2 = sj2.episodes.map(e => e && e.air_date).filter(Boolean)
-                        if (dates2.length) seasonAir2 = dates2.sort()[0]
-                      }
-                    } catch (e) {}
-                    const rawWithSeason2 = Object.assign({}, hit)
-                    if (seasonAir2) rawWithSeason2.seasonAirDate = seasonAir2
-                    return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: rawWithSeason2 })
-                  } catch (e) { return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }) }
-                })
-              })
-              sreq2.on('error', () => cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }))
-              sreq2.on('timeout', () => { sreq2.destroy(); cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit }) })
-              sreq2.end()
-              return
-            }
-          } catch (e) { /* ignore */ }
-          return cb({ provider: 'tmdb', id, type: mediaType, name: hit.name || hit.original_name || hit.title, raw: hit })
-        } catch (e) { return cb(null) }
-      }
-  tryOne(0)
-    }
-
-  const variants = makeVariants(title)
-  const configuredInput = readConfiguredInput()
-    // If caller didn't provide a parentCandidate but did provide a parentPath, try to
-    // derive a usable parentCandidate from the parent folder's basename so metaLookup
-    // can still attempt a parent-based search during rescans/refreshes.
+  // AniList GraphQL search
+  async function searchAniList(q) {
     try {
-      if (!(opts && opts.parentCandidate) && opts && opts.parentPath) {
+      await pace('graphql.anilist.co')
+      const query = `query ($search: String) { Page(page:1, perPage:5) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } } } }`;
+      const vars = JSON.stringify({ search: String(q || '') })
+      const body = JSON.stringify({ query, variables: JSON.parse(vars) })
+      // Use POST to graphql.anilist.co
+  // include AniList API key header when available (per-user or server)
+      let anilistKey = null
+      try {
+        if (opts && opts.anilist_key) anilistKey = opts.anilist_key
+        else if (opts && opts.username && users && users[opts.username] && users[opts.username].settings && users[opts.username].settings.anilist_api_key) anilistKey = users[opts.username].settings.anilist_api_key
+        else if (serverSettings && serverSettings.anilist_api_key) anilistKey = serverSettings.anilist_api_key
+      } catch (e) { anilistKey = null }
+  const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+  if (anilistKey) headers['Authorization'] = `Bearer ${String(anilistKey)}`
+  const opt = { hostname: 'graphql.anilist.co', path: '/', method: 'POST', headers }
+      const res = await httpRequest(opt, body, 3500)
+      if (!res || !res.body) return null
+      let j = null
+      try { j = JSON.parse(res.body) } catch (e) { return null }
+      const items = j && j.data && j.data.Page && Array.isArray(j.data.Page.media) ? j.data.Page.media : []
+      if (!items || !items.length) return null
+  // select preferred title: english -> romaji -> native
+  items.sort((a,b)=> (wordOverlap(String(b.title.english||b.title.romaji||b.title.native||''), String(q)) - wordOverlap(String(a.title.english||a.title.romaji||a.title.native||''), String(q))));
+  const pick = items[0]
+  if (!pick) return null
+  // pick English when available, otherwise romaji, otherwise native
+  const name = (pick.title && (pick.title.english || pick.title.romaji || pick.title.native)) ? (pick.title.english || pick.title.romaji || pick.title.native) : null
+      return { provider: 'anilist', id: pick.id, name: name, raw: pick }
+    } catch (e) { return null }
+  }
+
+  // Kitsu: find anime by title, then fetch episode by number
+  async function fetchKitsuEpisode(seriesTitle, episodeNumber) {
+    try {
+      if (episodeNumber == null) return null
+      await pace('kitsu.io')
+      const q = encodeURIComponent(String(seriesTitle || '').slice(0,200))
+      const searchPath = `/api/edge/anime?filter[text]=${q}&page[limit]=1`
+      const sres = await httpRequest({ hostname: 'kitsu.io', path: searchPath, method: 'GET', headers: { 'Accept': 'application/vnd.api+json' } }, null, 3000)
+      if (!sres || !sres.body) return null
+      let sj = null
+      try { sj = JSON.parse(sres.body) } catch (e) { sj = null }
+      const an = sj && sj.data && Array.isArray(sj.data) && sj.data.length ? sj.data[0] : null
+      if (!an) return null
+      const animeId = an.id
+      // fetch episode by number
+      await pace('kitsu.io')
+      const epPath = `/api/edge/anime/${encodeURIComponent(animeId)}/episodes?filter[number]=${encodeURIComponent(String(episodeNumber))}&page[limit]=1`
+      const eres = await httpRequest({ hostname: 'kitsu.io', path: epPath, method: 'GET', headers: { 'Accept': 'application/vnd.api+json' } }, null, 3000)
+      if (!eres || !eres.body) return null
+      let ej = null
+      try { ej = JSON.parse(eres.body) } catch (e) { ej = null }
+      const ep = ej && ej.data && Array.isArray(ej.data) && ej.data.length ? ej.data[0] : null
+      if (!ep) return null
+      const epTitle = ep && ep.attributes && (ep.attributes.canonicalTitle || ep.attributes.titles && (ep.attributes.titles.en || ep.attributes.titles.en_jp)) ? (ep.attributes.canonicalTitle || ep.attributes.titles.en || ep.attributes.titles.en_jp) : null
+      return { name: epTitle, raw: ep }
+    } catch (e) { return null }
+  }
+
+  // TMDb lightweight search + episode fetch (fallback)
+  async function searchTmdbAndEpisode(q, tmdbKey, season, episode) {
+    if (!tmdbKey) return null
+    try {
+      await pace('api.themoviedb.org')
+      const qenc = encodeURIComponent(String(q || '').slice(0,200))
+      const searchPath = `/3/search/tv?api_key=${encodeURIComponent(tmdbKey)}&query=${qenc}`
+      const sres = await httpRequest({ hostname: 'api.themoviedb.org', path: searchPath, method: 'GET', headers: { 'Accept': 'application/json' } }, null, 3000)
+      if (!sres || !sres.body) return null
+      let sj = null
+      try { sj = JSON.parse(sres.body) } catch (e) { sj = null }
+      const hits = sj && sj.results && Array.isArray(sj.results) ? sj.results : []
+      if (!hits.length) return null
+      const top = hits[0]
+      const name = top.name || top.original_name || top.title || null
+      const raw = Object.assign({}, top, { source: 'tmdb' })
+      if (season != null && episode != null) {
         try {
-          const pbase = path.basename(String(opts.parentPath || ''))
-          const parseFilename = require('./lib/filename-parser')
-          const pp = parseFilename(pbase)
-          // Only adopt the parent's human-friendly title. Never copy season/episode
-          // fields from a parent folder; episode numbers must come from the filename.
-          if (pp && pp.title) opts.parentCandidate = String(pp.title).trim()
+          await pace('api.themoviedb.org')
+          const epPath = `/3/tv/${encodeURIComponent(top.id)}/season/${encodeURIComponent(season)}/episode/${encodeURIComponent(episode)}?api_key=${encodeURIComponent(tmdbKey)}`
+          const eres = await httpRequest({ hostname: 'api.themoviedb.org', path: epPath, method: 'GET', headers: { 'Accept': 'application/json' } }, null, 3000)
+          if (eres && eres.body) {
+            let ej = null
+            try { ej = JSON.parse(eres.body) } catch (e) { ej = null }
+            if (ej && (ej.name || ej.title)) return { provider: 'tmdb', id: top.id, name, raw, episode: ej }
+          }
         } catch (e) {}
       }
-    } catch (e) {}
-  // TMDb: try variants against TMDb and return first match (feedLabel=title);
-  // fast behavior: try only a small number of variants and short per-request timeouts.
-  tryTmdbVariants(variants, (tRes) => {
-      try { appendLog(`META_TMDB_VARIANTS_CALLBACK present=${tRes ? 'yes' : 'no'}`) } catch (e) {}
-      if (tRes) return resolve({ name: tRes.name, raw: Object.assign({}, tRes.raw, { id: tRes.id, type: tRes.type || tRes.mediaType || 'tv', source: 'tmdb' }), episode: tRes.episode || null })
+      return { provider: 'tmdb', id: top.id, name, raw }
+    } catch (e) { return null }
+  }
 
-  // If filename-level TMDb missed, force a parent lookup (diagnostic) so we can observe parent-fed requests
-  try { appendLog(`META_PARENT_FORCED_LOOKUP parentCandidate=${opts && opts.parentCandidate ? opts.parentCandidate : '<none>'} parentPath=${opts && opts.parentPath ? opts.parentPath : '<none>'}`) } catch (e) {}
-  // If parentCandidate was provided via opts.parentCandidate and it's allowed (not the configured input root), try TMDb with parent variants
-  const parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
-  const parentPath = opts && opts.parentPath ? String(opts.parentPath).trim() : null
-  try { appendLog(`META_PARENT_INFO parentCandidate=${parentCandidate || '<none>'} parentPath=${parentPath || '<none>'}`) } catch (e) {}
-  // Extra flush log: ensure any parent info is persisted before we attempt the parent lookup IIFE
-  try { appendLog(`META_PARENT_INFO_FLUSHED parentCandidate=${parentCandidate || '<none>'} parentPath=${parentPath || '<none>'}`) } catch (e) {}
-  const tryParentTmdb = async () => {
-        // Compute an effective parent candidate but never inherit season/episode
-        // parsed from a parent folder. Preference: opts.parentCandidate -> parentPath parse -> strip from title.
-  let effectiveParent = parentCandidate || null
-  try { appendLog(`META_PARENT_DEBUG initialEffective=${effectiveParent || '<none>'}`) } catch (e) {}
-        if (!effectiveParent) {
-          try {
-            if (opts && opts.parentPath) {
-              const pbase = path.basename(String(opts.parentPath || ''))
-              const parseFilename = require('./lib/filename-parser')
-              const pp = parseFilename(pbase)
-              if (pp && pp.title) effectiveParent = String(pp.title).trim()
-              try { appendLog(`META_PARENT_DEBUG parsedParentTitle=${pp && pp.title ? String(pp.title).trim() : '<none>'}`) } catch (e) {}
-            }
-          } catch (e) {}
-        }
-        if (!effectiveParent) {
-          try {
-            const stripEpisodeTokensLocal = (s) => {
-              if (!s) return s
-              let out = String(s)
-              out = out.replace(/^\s*(?:S0*\d{1,2}[EPp]0*\d{1,3}(?:\.\d+)?|S0*\d{1,2}|E0*\d{1,3}|0*\d{1,3})[\s\-_:]+/i, '')
-              out = out.replace(/[\s\-_:]+(?:S0*\d{1,2}[EPp]0*\d{1,3}(?:\.\d+)?|S0*\d{1,2}|E0*\d{1,3}|0*\d{1,3})\s*$/i, '')
-              out = out.replace(/[_\.\-\s]+/g, ' ').trim()
-              return out
-            }
-      const derived = stripEpisodeTokensLocal(title)
-      if (derived && derived.length && derived !== title) effectiveParent = derived
-      try { appendLog(`META_PARENT_DEBUG derivedFromTitle=${derived || '<none>'}`) } catch (e) {}
-          } catch (e) {}
-        }
-    try { appendLog(`META_PARENT_DEBUG effectiveParent_now=${effectiveParent || '<none>'}`) } catch (e) {}
-    if (!effectiveParent) return null
-          try {
-            if (configuredInput && parentPath) {
-              try {
-                // Use realpath where possible to avoid mismatches due to symlinks or
-                // trailing slashes. If the parent's realpath equals the configured
-                // input realpath, treat it as the input root and skip parent lookup.
-                let resolvedConfigured = null
-                let resolvedParent = null
-                try {
-                  resolvedConfigured = fs.realpathSync(path.resolve(configuredInput))
-                } catch (e) { resolvedConfigured = path.resolve(configuredInput) }
-                try {
-                  resolvedParent = fs.realpathSync(path.resolve(parentPath))
-                } catch (e) { resolvedParent = path.resolve(parentPath) }
-                try { appendLog(`META_PARENT_DEBUG resolvedConfigured=${resolvedConfigured} resolvedParent=${resolvedParent}`) } catch (e) {}
-                if (resolvedConfigured === resolvedParent) {
-                  try { appendLog(`META_PARENT_DEBUG resolvedConfigured=${resolvedConfigured} resolvedParent=${resolvedParent} (input_root_match)`) } catch (e) {}
-                  // Previously we skipped parent lookup when the parent folder equalled
-                  // the configured input root unless opts.force was set. That prevented
-                  // legitimate parent-folder lookups in many rescans. Always attempt the
-                  // parent lookup here so callers that provide a parentCandidate get a
-                  // true fallback search; keep the diagnostic log to aid troubleshooting.
-                }
-              } catch (e) { /* ignore resolution errors */ }
-            }
-          } catch (e) {}
-      try { appendLog(`META_PARENT_DEBUG willSearch=${effectiveParent}`) } catch (e) {}
-    return new Promise((resParent) => {
-          try {
-            // Aggressive diagnostics: force a top-level metaLookup using the
-            // effectiveParent as the title so we can guarantee the parent title
-            // is sent to providers and logged. Clear parentCandidate/parentPath to
-            // avoid recursive parent fallbacks inside the child call.
-            try { appendLog(`META_PARENT_VARIANTS parent=${effectiveParent} variants=${JSON.stringify(makeVariants(effectiveParent)).slice(0,1000)}`) } catch (e) {}
-            try {
-              // Instead of recursively calling metaLookup (which can cause
-              // unexpected short-circuiting or options inheritance), call the
-              // TMDb-specific variant search directly so the parent title is
-              // guaranteed to be queried against TMDb.
-              try { appendLog(`META_PARENT_WILL_CALL_TMDB parent=${effectiveParent}`) } catch (e) {}
-              // Build variants from both the parsed effectiveParent and the raw parent folder basename.
-              // Many release folders include the English title in parentheses; using the raw basename
-              // ensures those variants are tried (improves match chance for localized titles).
-              let parentVariants = makeVariants(effectiveParent || '');
-              try {
-                if (parentPath) {
-                  const rawParentBase = String(path.basename(parentPath || '') || '').trim();
-                  if (rawParentBase && rawParentBase !== effectiveParent) {
-                    const rawVariants = makeVariants(rawParentBase);
-                    parentVariants = [...new Set((parentVariants || []).concat(rawVariants || []))];
-                    try { appendLog(`META_PARENT_VARIANTS_COMBINED parent=${effectiveParent} rawBase=${rawParentBase} combinedCount=${parentVariants.length}`) } catch (e) {}
-                  }
-                }
-              } catch (e) {}
-              tryTmdbVariants(parentVariants, (tResParent) => {
-                try { appendLog(`META_PARENT_TMDB_RESULT parent=${effectiveParent} found=${tResParent ? 'yes' : 'no'}`) } catch (e) {}
-                if (tResParent) return resParent({ name: tResParent.name, raw: Object.assign({}, tResParent.raw, { id: tResParent.id, type: tResParent.type || tResParent.mediaType || 'tv', source: 'tmdb' }), episode: tResParent.episode || null })
-                // If the variants call didn't accept a hit, we'll perform a direct
-                // TMDb search for the parent and accept the top hit (with episode
-                // details fetched when applicable).
-                const directSearch = (cb) => {
-                  if (!apiKey) return cb(null)
-                  try { appendLog(`META_PARENT_DIRECTSEARCH_START parent=${effectiveParent}`) } catch (e) {}
-                  const q = encodeURIComponent(effectiveParent)
-                  const searchPath = `/3/search/tv?api_key=${encodeURIComponent(apiKey)}&query=${q}`
-                  try { appendLog(`META_PARENT_DIRECTSEARCH_HTTP_REQ host=${baseHost} path=${searchPath}`) } catch (e) {}
-                  const req2 = https.request({ hostname: baseHost, path: searchPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (res2) => {
-                    let sb2 = '';
-                    res2.on('data', d => sb2 += d);
-                    res2.on('end', () => {
-                      try {
-                        const j2 = JSON.parse(sb2 || '{}')
-                        const hits2 = j2 && j2.results ? j2.results : [];
-                        if (hits2 && hits2.length > 0) return cb(hits2[0]);
-                      } catch (e) {}
-                      return cb(null)
-                    })
-                  })
-                  req2.on('error', () => cb(null))
-                  req2.on('timeout', () => { try { req2.destroy(); } catch (e) {} ; cb(null) })
-                  req2.end()
-                }
-                directSearch((topHit) => {
-                  if (!topHit) return resParent(null)
-                  try {
-                    const id = topHit.id
-                    const mediaType = topHit.media_type || (topHit.name ? 'tv' : 'movie')
-                    if (mediaType === 'tv' && opts && opts.season != null && opts.episode != null) {
-                      const epPath = `/3/tv/${id}/season/${encodeURIComponent(opts.season)}/episode/${encodeURIComponent(opts.episode)}?api_key=${encodeURIComponent(apiKey)}`
-                      const er2 = https.request({ hostname: baseHost, path: epPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 5000 }, (res3) => {
-                        let eb = '';
-                        res3.on('data', d => eb += d);
-                        res3.on('end', () => {
-                          try {
-                            const ej = JSON.parse(eb || '{}')
-                            if (ej && ej.name) return resParent({ name: topHit.name || topHit.original_name || topHit.title, raw: Object.assign({}, topHit, { id: topHit.id, type: 'tv', source: 'tmdb' }), episode: ej })
-                          } catch (e) {}
-                          return resParent({ name: topHit.name || topHit.original_name || topHit.title, raw: Object.assign({}, topHit, { id: topHit.id, type: 'tv', source: 'tmdb' }), episode: null })
-                        })
-                      })
-                      er2.on('error', () => resParent({ name: topHit.name || topHit.original_name || topHit.title, raw: Object.assign({}, topHit, { id: topHit.id, type: 'tv', source: 'tmdb' }), episode: null }))
-                      er2.on('timeout', () => { try { er2.destroy(); } catch (e) {} ; resParent({ name: topHit.name || topHit.original_name || topHit.title, raw: Object.assign({}, topHit, { id: topHit.id, type: 'tv', source: 'tmdb' }), episode: null }) })
-                      er2.end()
-                      return
-                    }
-                  } catch (e) {}
-                  return resParent({ name: topHit.name || topHit.original_name || topHit.title, raw: Object.assign({}, topHit, { id: topHit.id, type: topHit.media_type || 'tv', source: 'tmdb' }), episode: null })
-                })
-              }, effectiveParent, { maxVariants: 3, tmdbRequestTimeout: 3000, relaxed: true, acceptTopHit: true })
-            } catch (e) {
-              try { appendLog(`META_PARENT_ERROR parent=${effectiveParent} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
-              return resParent(null)
-            }
-
-          } catch (e) {
-            try { appendLog(`META_PARENT_ERROR parent=${effectiveParent} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
-            return resParent(null)
-          }
-        })
+  // Try AniList variants, then parent, then TMDb fallback
+  try {
+    const variants = makeVariants(title)
+    // try filename-derived variants first
+    for (let i=0;i<Math.min(variants.length,3);i++) {
+      const v = variants[i]
+      const a = await searchAniList(v)
+      try { appendLog(`META_ANILIST_SEARCH q=${v} found=${a ? 'yes' : 'no'}`) } catch (e) {}
+      if (a) {
+        // fetch episode name via Kitsu using filename episode number (always)
+        let ep = null
+        try { ep = await fetchKitsuEpisode(a.name || v, opts && opts.episode != null ? opts.episode : null) } catch (e) { ep = null }
+        return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
       }
+    }
 
-      (async () => {
-        try { appendLog(`META_PARENT_INVOCATION attempting tryParentTmdb parentCandidate=${parentCandidate || '<none>'} parentPath=${parentPath || '<none>'}`) } catch (e) {}
-        const pTry = await tryParentTmdb()
-        try { appendLog(`META_PARENT_INVOCATION result=${pTry ? 'found' : 'none'}`) } catch (e) {}
-        if (pTry) return resolve(pTry)
-        // No Kitsu fallback in the fast, simplified flow - return null quickly
-        return resolve(null)
-      })
-    })
-  })
+    // try parent-derived candidate if provided or derivable
+    let parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
+    if (!parentCandidate && opts && opts.parentPath) {
+      try { const pp = require('./lib/filename-parser')(path.basename(opts.parentPath)); if (pp && pp.title) parentCandidate = pp.title } catch (e) {}
+    }
+    if (parentCandidate) {
+      const pvars = makeVariants(parentCandidate)
+      for (let i=0;i<Math.min(pvars.length,3);i++) {
+        const a = await searchAniList(pvars[i])
+        try { appendLog(`META_ANILIST_PARENT_SEARCH q=${pvars[i]} found=${a ? 'yes' : 'no'}`) } catch (e) {}
+        if (a) {
+          let ep = null
+          try { ep = await fetchKitsuEpisode(a.name || parentCandidate, opts && opts.episode != null ? opts.episode : null) } catch (e) { ep = null }
+          return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
+        }
+      }
+    }
 
-  // Allow caller to request extra time for parent-driven lookups by setting
-  // opts._parentDirect = true. Parent lookups often require extra requests
-  // (episode endpoint, season lookups) so give them a larger window.
-  const lookupTimeoutMs = (opts && opts._parentDirect) ? Math.max(META_LOOKUP_TIMEOUT_MS, 30000) : META_LOOKUP_TIMEOUT_MS;
-  const timeoutPromise = new Promise(res => setTimeout(() => { try { appendLog(`META_LOOKUP_TIMEOUT title=${title}`) } catch (e) {} ; res(null); }, lookupTimeoutMs));
+    // AniList didn't find anything; try TMDb fallback (filename then parent)
+    if (apiKey) {
+      for (let i=0;i<Math.min(variants.length,3);i++) {
+        const t = await searchTmdbAndEpisode(variants[i], apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+        try { appendLog(`META_TMDB_SEARCH q=${variants[i]} found=${t ? 'yes' : 'no'}`) } catch (e) {}
+        if (t) return { name: t.name, raw: Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' }), episode: t.episode || null }
+      }
+      if (parentCandidate) {
+        for (let i=0;i<Math.min(makeVariants(parentCandidate).length,3);i++) {
+          const pv = makeVariants(parentCandidate)[i]
+          const t = await searchTmdbAndEpisode(pv, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+          try { appendLog(`META_TMDB_PARENT_SEARCH q=${pv} found=${t ? 'yes' : 'no'}`) } catch (e) {}
+          if (t) return { name: t.name, raw: Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' }), episode: t.episode || null }
+        }
+      }
+    }
+  } catch (e) {
+    try { appendLog(`META_LOOKUP_ERROR title=${String(title).slice(0,100)} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+  }
 
-  return Promise.race([inner, timeoutPromise]);
+  return null
 }
 
 async function externalEnrich(canonicalPath, providedKey, opts = {}) {
@@ -1067,6 +406,8 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // keep the parsed episode/season locally so the UI and hardlink names still
   // reflect the filename-derived numbers.
   const metaOpts = { year: parsed.year, preferredProvider, parsedEpisodeTitle: episodeTitle, parentCandidate: parentCandidate, parentPath, force: (opts && opts.force) ? true : false };
+  // include requesting username so metaLookup may use per-user keys
+  if (opts && opts.username) metaOpts.username = opts.username
   if (!isSpecialCandidate) {
     metaOpts.season = normSeason;
     metaOpts.episode = normEpisode;
@@ -1205,14 +546,18 @@ app.get('/api/meta/status', (req, res) => {
   try {
     // check server and user keys (mask)
     const serverKey = serverSettings && serverSettings.tmdb_api_key ? String(serverSettings.tmdb_api_key) : null
+    const serverAnilistKey = serverSettings && serverSettings.anilist_api_key ? String(serverSettings.anilist_api_key) : null
     const serverMask = serverKey ? (serverKey.slice(0,6) + '...' + serverKey.slice(-4)) : null
     let userKey = null
+    let userAnilistKey = null
   try { const u = req.session && req.session.username && users[req.session.username]; if (u && u.settings && u.settings.tmdb_api_key) userKey = String(u.settings.tmdb_api_key) } catch (e) {}
+  try { const u = req.session && req.session.username && users[req.session.username]; if (u && u.settings && u.settings.anilist_api_key) userAnilistKey = String(u.settings.anilist_api_key) } catch (e) {}
     const userMask = userKey ? (userKey.slice(0,6) + '...' + userKey.slice(-4)) : null
+    const userAnilistMask = userAnilistKey ? (userAnilistKey.slice(0,6) + '...' + userAnilistKey.slice(-4)) : null
   // recent META_LOOKUP logs (TMDb attempts and lookup requests)
   let recent = ''
-  try { recent = fs.readFileSync(logsFile, 'utf8').split('\n').filter(l => l.indexOf('META_LOOKUP_REQUEST') !== -1 || l.indexOf('META_TMDB_SEARCH') !== -1 || l.indexOf('META_TMDB_ATTEMPT') !== -1).slice(-200).join('\n') } catch (e) { recent = '' }
-    res.json({ serverKeyPresent: !!serverKey, userKeyPresent: !!userKey, serverKeyMask: serverMask, userKeyMask: userMask, logs: recent })
+  try { recent = fs.readFileSync(logsFile, 'utf8').split('\n').filter(l => l.indexOf('META_LOOKUP_REQUEST') !== -1 || l.indexOf('META_TMDB_SEARCH') !== -1 || l.indexOf('META_TMDB_ATTEMPT') !== -1 || l.indexOf('META_ANILIST_SEARCH') !== -1).slice(-200).join('\n') } catch (e) { recent = '' }
+    res.json({ serverKeyPresent: !!serverKey, userKeyPresent: !!userKey, serverKeyMask: serverMask, userKeyMask: userMask, serverAnilistPresent: !!serverAnilistKey, userAnilistPresent: !!userAnilistKey, serverAnilistMask: serverAnilistKey ? (serverAnilistKey.slice(0,6) + '...' + serverAnilistKey.slice(-4)) : null, userAnilistMask: userAnilistMask, logs: recent })
   } catch (e) { res.json({ error: e.message }) }
 })
 
@@ -1568,7 +913,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'scan_output_path', 'rename_template', 'default_meta_provider'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_output_path', 'rename_template', 'default_meta_provider'];
       for (const k of allowed) if (body[k] !== undefined) serverSettings[k] = body[k];
       writeJson(settingsFile, serverSettings);
       appendLog(`SETTINGS_SAVED_GLOBAL by=${username} keys=${Object.keys(body).join(',')}`);
@@ -1579,7 +924,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider'];
     for (const k of allowed) { if (body[k] !== undefined) users[username].settings[k] = body[k]; }
     writeJson(usersFile, users);
     appendLog(`SETTINGS_SAVED_USER user=${username} keys=${Object.keys(body).join(',')}`);
