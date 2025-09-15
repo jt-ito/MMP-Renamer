@@ -1361,8 +1361,9 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
       results.push({ path: key, ok: true, parsedName: data.parsedName, title: data.title });
       appendLog(`REFRESH_ITEM_OK path=${key} parsedName=${data.parsedName}`);
     } catch (err) {
-      appendLog(`REFRESH_ITEM_FAIL path=${it.canonicalPath} err=${err.message}`);
-      results.push({ path: it.canonicalPath, ok: false, error: err.message });
+      try { appendLog(`REFRESH_ITEM_FAIL path=${it.canonicalPath} err=${err && err.message ? err.message : String(err)}`); } catch (e) {}
+      try { appendLog(`REFRESH_ITEM_FAIL_STACK path=${it.canonicalPath} stack=${err && err.stack ? err.stack.replace(/\n/g,' | ') : ''}`); } catch (e) {}
+      results.push({ path: it.canonicalPath, ok: false, error: err && err.message ? err.message : String(err) });
     }
   }
   writeJson(enrichStoreFile, enrichCache);
@@ -1371,7 +1372,8 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
   try { const removed2 = sweepEnrichCache(); if (removed2 && removed2.length) appendLog(`AUTOSWEEP_AFTER_REFRESH removed=${removed2.length}`); } catch (e) {}
   res.json({ ok: true, results });
   } catch (e) {
-    appendLog(`REFRESH_SCAN_FAIL scan=${req.params.scanId} err=${e && e.message ? e.message : String(e)}`);
+    try { appendLog(`REFRESH_SCAN_FAIL scan=${req.params.scanId} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
+    try { appendLog(`REFRESH_SCAN_FAIL_STACK scan=${req.params.scanId} stack=${e && e.stack ? e.stack.replace(/\n/g,' | ') : ''}`); } catch (ee) {}
     return res.status(500).json({ error: e && e.message ? e.message : String(e) });
   } finally {
     try { activeScans.delete(refreshLockKey); appendLog(`SCAN_LOCK_RELEASED refresh=${req.params.scanId}`); } catch (ee) {}
