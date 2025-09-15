@@ -721,24 +721,26 @@ export default function App() {
   <div className={"app" + (selectMode && selectedCount ? ' select-mode-shrink' : '')}>
       <header>
         <h1 style={{cursor:'pointer'}} onClick={() => (window.location.hash = '#/')} title="Go to dashboard">MMP Renamer</h1>
-  {/* Header search: placed between title and header actions so it doesn't overlap buttons */}
-  <div className="header-search">
-          <input
-            className="form-input"
-            placeholder="Search files (server-side)"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-          />
-          <button className='btn-ghost btn-search' onClick={() => doSearch(searchQuery)} disabled={searching}>{searching ? <Spinner/> : 'Search'}</button>
-          <button className='btn-ghost btn-clear' onClick={() => doSearch('')} title='Clear search'>Clear</button>
-        </div>
+  {/* Header search: only show when authenticated */}
+  {auth ? (
+    <div className="header-search">
+      <input
+        className="form-input"
+        placeholder="Search files (server-side)"
+        value={searchQuery}
+        onChange={e => setSearchQuery(e.target.value)}
+      />
+      <button className='btn-ghost btn-search' onClick={() => doSearch(searchQuery)} disabled={searching}>{searching ? <Spinner/> : 'Search'}</button>
+      <button className='btn-ghost btn-clear' onClick={() => doSearch('')} title='Clear search'>Clear</button>
+    </div>
+  ) : null}
         {/* Global bulk-enrich indicator (shown when many enrich operations are running) */}
-  {visibleGlobalEnrichPending ? (
-          <div className="bulk-enrich" title="Bulk metadata refresh in progress">
-            <Spinner />
-            <span className="bulk-enrich-label">{metaPhase ? `Refreshing metadata ${metaProgress}%` : `Updating ${enrichPendingCount} item${enrichPendingCount === 1 ? '' : 's'}`}</span>
-          </div>
-        ) : null}
+  {auth && visibleGlobalEnrichPending ? (
+    <div className="bulk-enrich" title="Bulk metadata refresh in progress">
+      <Spinner />
+      <span className="bulk-enrich-label">{metaPhase ? `Refreshing metadata ${metaProgress}%` : `Updating ${enrichPendingCount} item${enrichPendingCount === 1 ? '' : 's'}`}</span>
+    </div>
+  ) : null}
 
         {auth ? (
             <div className="header-actions">
