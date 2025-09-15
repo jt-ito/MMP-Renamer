@@ -1390,6 +1390,23 @@ app.get('/api/enrich/debug', async (req, res) => { const p = req.query.path || '
   res.json({ key, cached, forced });
 });
 
+// Debug: return in-memory locks and last-modified times for key data files
+app.get('/api/debug/locks', requireAuth, (req, res) => {
+  try {
+    const locks = Array.from(activeScans || []);
+    const statFor = (p) => {
+      try { const s = fs.statSync(p); return { exists: true, mtime: s.mtimeMs, size: s.size } } catch (e) { return { exists: false } }
+    }
+    const files = {
+      enrichStoreFile: statFor(enrichStoreFile),
+      parsedCacheFile: statFor(parsedCacheFile),
+      renderedIndexFile: statFor(renderedIndexFile),
+      scansFile: statFor(scansFile)
+    }
+    return res.json({ locks, files });
+  } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }) }
+})
+
 // Rename preview (generate plan)
 app.post('/api/rename/preview', (req, res) => {
   const { items, template, outputPath } = req.body || {};
