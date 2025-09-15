@@ -1308,10 +1308,17 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
       // and, for episode items, an episodeTitle is present. Otherwise perform an external lookup.
       const provEx = existing && existing.provider ? existing.provider : null;
       const providerCompleteEx = provEx && provEx.matched && provEx.renderedName && (provEx.episode == null || (provEx.episodeTitle && String(provEx.episodeTitle).trim()));
-      if (providerCompleteEx && (!provEx.provider || String(provEx.provider).toLowerCase() === 'tmdb')) {
-        data = existing
-  } else {
-  data = await externalEnrich(key, tmdbKey, { username });
+      // If we already have a complete provider block cached, reuse it regardless of which provider produced it.
+      // This prevents unnecessary external API calls and preserves the previously-rendered name.
+      if (providerCompleteEx) {
+        // build a data object compatible with downstream rendering logic
+        data = Object.assign({}, provEx);
+        // carry forward any parsed name stored on the cached entry
+        try { if (existing && existing.parsed && existing.parsed.title) data.parsedName = existing.parsed.title } catch (e) {}
+        try { appendLog(`REFRESH_ITEM_SKIP_EXTERNAL path=${key} reason=providerCached`); } catch (e) {}
+      } else {
+        try { appendLog(`REFRESH_ITEM_WILL_LOOKUP path=${key}`); } catch (e) {}
+        data = await externalEnrich(key, tmdbKey, { username });
       }
       // compute provider-rendered name and store normalized provider block when we have provider data
       try {
