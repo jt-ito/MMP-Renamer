@@ -127,8 +127,8 @@ select.form-input:focus {
 /* When select mode is active, shrink the search and allow header actions to wrap beneath.
 	The approve button appears without reserving space; other controls maintain the same gap
 	defined by --header-button-gap and will wrap naturally to the next line if needed. */
-.app.select-mode-shrink .header-search { flex: 1 1 160px; max-width: 60%; margin-bottom: 8px }
-.app.select-mode-shrink .header-search .form-input { width: 160px; max-width: 40vw }
+.app.select-mode-shrink .header-search { /* keep search from growing and pushing header actions apart */ flex: 0 0 160px; max-width: 360px; margin-bottom: 8px }
+.app.select-mode-shrink .header-search .form-input { width: 160px; max-width: 100% }
 
 /* Make all settings/page buttons slightly more rounded to match modern look */
 .btn-ghost, .btn-cta, button { border-radius:12px }
