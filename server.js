@@ -293,6 +293,13 @@ async function metaLookup(title, apiKey, opts = {}) {
         // fetch episode name via Kitsu using filename episode number (always)
         let ep = null
         try { ep = await fetchKitsuEpisode(a.name || v, opts && opts.episode != null ? opts.episode : null) } catch (e) { ep = null }
+        // If Kitsu didn't return an episode title and we have a TMDb key, try TMDb episode endpoint as a fallback
+        try {
+          if (!ep && apiKey) {
+            const tmEp = await searchTmdbAndEpisode(a.name || v, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+            if (tmEp && tmEp.episode) ep = tmEp.episode
+          }
+        } catch (e) { /* ignore fallback errors */ }
         return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
       }
     }
