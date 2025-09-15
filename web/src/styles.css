@@ -29,8 +29,9 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .app header button:active { transform: translateY(1px) }
 
 /* Header search box styling: match theme and shrink responsively */
-.header-search { display:flex; align-items:center; gap: var(--header-button-gap); /* allow search to flex but cap width so it doesn't push header actions */ flex: 0 1 360px; margin-left: var(--header-button-gap); margin-right: var(--header-button-gap); min-width:120px; max-width:60% }
+.header-search { display:flex; align-items:center; gap: var(--header-button-gap); /* allow search to flex but cap width so it doesn't push header actions */ flex: 1 1 480px; margin-left: var(--header-button-gap); margin-right: var(--header-button-gap); min-width:140px; max-width:calc(100% - 360px) }
 .header-search .form-input { height:36px; padding:6px 10px; border-radius:10px; border:1px solid var(--bg-600); background:var(--bg-700); color:var(--accent); min-width:0; box-sizing:border-box; flex: 1 1 auto; width: 100% }
+.header-search .btn-ghost { flex: 0 0 auto; }
 .header-search .btn-ghost { height:36px }
 .header-search .form-input:focus { outline: 2px solid rgba(96,165,250,0.12); outline-offset:2px }
 
@@ -49,7 +50,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .bulk-enrich .bulk-enrich-label { opacity:0.9 }
 .bulk-enrich .icon.spinner { width:18px; height:18px }
 
-.select-approve-wrap { display:flex; align-items:center; gap: var(--header-button-gap) }
+.select-approve-wrap { display:flex; align-items:center; gap: var(--header-button-gap); flex: 0 0 auto }
 
 .btn-cta { background: var(--accent-cta); color: #021014; border: none; box-shadow: 0 6px 18px rgba(16,24,40,0.08) }
 .btn-ghost { background: transparent; border: 1px solid var(--bg-600); color: var(--accent); display:inline-flex; align-items:center; justify-content:center }
@@ -122,6 +123,10 @@ select.form-input:focus {
 /* Allow header to wrap and controls to flow only when select mode is active so the approve button can appear
 	without reserving width in the normal state. In select mode the search shrinks and controls may wrap. */
 .app.select-mode-shrink header { flex-wrap: wrap; align-items: center }
+/* When select mode is active, shrink the search and allow header actions to wrap beneath.
+	The approve button appears without reserving space; other controls maintain the same gap
+	defined by --header-button-gap and will wrap naturally to the next line if needed. */
+.app.select-mode-shrink .header-search { flex: 1 1 160px; max-width: 60%; margin-bottom: 8px }
 .app.select-mode-shrink .header-search .form-input { width: 160px; max-width: 40vw }
 
 /* Make all settings/page buttons slightly more rounded to match modern look */
