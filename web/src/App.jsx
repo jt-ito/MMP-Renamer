@@ -674,27 +674,66 @@ export default function App() {
   async function refreshScan(scanId) {
     if (!scanId) throw new Error('no scan id')
     try {
-  const r = await axios.post(API(`/scan/${scanId}/refresh`), { tmdb_api_key: providerKey || undefined })
-       // update enrichCache for items that were refreshed
-       if (r.data && r.data.results) {
-         // fetch each updated enrichment from server.cache
-         for (const res of r.data.results) {
-           try {
-             const er = await axios.get(API('/enrich'), { params: { path: res.path } })
-             if (er.data) {
-               if (er.data.missing) {
-                 setEnrichCache(prev => { const n = { ...prev }; delete n[res.path]; return n })
-               } else if (er.data.cached || er.data.enrichment) {
-                 const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
-                 setEnrichCache(prev => ({ ...prev, [res.path]: norm }))
-               }
-             }
-           } catch (e) {}
-         }
-       }
-       return r.data
+      const r = await axios.post(API(`/scan/${scanId}/refresh`), { tmdb_api_key: providerKey || undefined })
+      // If server started background work, poll for progress
+      if (r.status === 202 && r.data && r.data.background) {
+        const toastId = pushToast && pushToast('Refresh','Refresh started on server', { sticky: true, spinner: true })
+        try {
+          await pollRefreshProgress(scanId, (prog) => {
+            // update toast with percent
+            if (pushToast) pushToast('Refresh', `Refreshing metadata: ${Math.round((prog.processed / Math.max(1, prog.total)) * 100)}% (${prog.processed}/${prog.total})`, { id: toastId, sticky: true, spinner: true })
+          })
+          if (pushToast) pushToast('Refresh','Server-side refresh complete')
+        } catch (e) {
+          if (pushToast) pushToast('Refresh','Server-side refresh failed')
+        }
+        // after background run completes, fetch latest enrich entries for items
+        try {
+          const logs = await axios.get(API('/logs/recent'))
+        } catch(e){}
+        return { ok: true, background: true }
+      }
+      // otherwise behave as before: synchronous response may include results
+      if (r.data && r.data.results) {
+        for (const res of r.data.results) {
+          try {
+            const er = await axios.get(API('/enrich'), { params: { path: res.path } })
+            if (er.data) {
+              if (er.data.missing) {
+                setEnrichCache(prev => { const n = { ...prev }; delete n[res.path]; return n })
+              } else if (er.data.cached || er.data.enrichment) {
+                const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
+                setEnrichCache(prev => ({ ...prev, [res.path]: norm }))
+              }
+            }
+          } catch (e) {}
+        }
+      }
+      return r.data
      } catch (err) { throw err }
    }
+
+  // Poll the server progress endpoint until completion or failure
+  async function pollRefreshProgress(scanId, onProgress) {
+    const endpoint = API(`/scan/${scanId}/progress`)
+    return new Promise((resolve, reject) => {
+      let stopped = false
+      const id = setInterval(async () => {
+        try {
+          const r = await axios.get(endpoint)
+          if (!r.data || !r.data.progress) return
+          const prog = r.data.progress
+          if (onProgress) onProgress(prog)
+          if (prog.status === 'complete') { clearInterval(id); stopped = true; resolve(prog) }
+          else if (prog.status === 'failed') { clearInterval(id); stopped = true; reject(new Error('refresh failed')); }
+        } catch (e) {
+          // transient network or auth error: keep polling a few times
+        }
+      }, 1000)
+      // safety timeout after 30 minutes
+      setTimeout(() => { if (!stopped) { clearInterval(id); reject(new Error('timeout')) } }, 30*60*1000)
+    })
+  }
 
   async function fetchLogs() { try { const r = await axios.get(API('/logs/recent')); setLogs(r.data.logs) } catch(e){} }
   useEffect(() => { fetchLogs(); const t = setInterval(fetchLogs, 3000); return () => clearInterval(t) }, [])
