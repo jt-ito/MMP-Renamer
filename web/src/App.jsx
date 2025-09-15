@@ -742,16 +742,15 @@ export default function App() {
 
         {auth ? (
             <div className="header-actions">
-            <button className={"btn-save" + (selectMode && selectedCount ? ' shifted' : '')} onClick={async () => {
+            <button className={"btn-save" + (selectMode && selectedCount ? ' shifted' : '')} onClick={() => {
                 try {
                   if (scanning) { pushToast && pushToast('Scan','Scan already in progress'); return }
-                  // Provide immediate feedback and prevent duplicate clicks
+                  // Provide immediate feedback and prevent duplicate clicks by setting scanning now
                   setScanning(true)
-                  await triggerScan(libraries[0])
+                  // Start the scan asynchronously; triggerScan manages its own scanning state during metadata phases
+                  void triggerScan(libraries[0]).catch(e => { pushToast && pushToast('Scan','Scan failed to start') })
                 } catch (e) {
                   pushToast && pushToast('Scan','Scan failed to start')
-                } finally {
-                  // triggerScan itself will set scanning state while running metadata phases; but ensure we clear if it errored early
                   setScanning(false)
                 }
               }} disabled={scanning}><span>{scanning ? <Spinner/> : 'Scan'}</span></button>
