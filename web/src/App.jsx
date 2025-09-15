@@ -742,7 +742,19 @@ export default function App() {
 
         {auth ? (
             <div className="header-actions">
-            <button className={"btn-save" + (selectMode && selectedCount ? ' shifted' : '')} onClick={() => triggerScan(libraries[0])}><span>Scan</span></button>
+            <button className={"btn-save" + (selectMode && selectedCount ? ' shifted' : '')} onClick={async () => {
+                try {
+                  if (scanning) { pushToast && pushToast('Scan','Scan already in progress'); return }
+                  // Provide immediate feedback and prevent duplicate clicks
+                  setScanning(true)
+                  await triggerScan(libraries[0])
+                } catch (e) {
+                  pushToast && pushToast('Scan','Scan failed to start')
+                } finally {
+                  // triggerScan itself will set scanning state while running metadata phases; but ensure we clear if it errored early
+                  setScanning(false)
+                }
+              }} disabled={scanning}><span>{scanning ? <Spinner/> : 'Scan'}</span></button>
             {/* Select + Approve wrapper: Approve is absolutely positioned so it doesn't reserve space when hidden */}
             <div className="select-approve-wrap">
               <button

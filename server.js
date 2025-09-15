@@ -106,6 +106,9 @@ try { parsedCache = JSON.parse(fs.readFileSync(parsedCacheFile, 'utf8') || '{}')
 try { scans = JSON.parse(fs.readFileSync(scanStoreFile, 'utf8') || '{}') } catch (e) { scans = {} }
 try { renderedIndex = JSON.parse(fs.readFileSync(renderedIndexFile, 'utf8') || '{}') } catch (e) { renderedIndex = {} }
 
+// Track in-flight scans to prevent concurrent runs for same path/scanId
+const activeScans = new Set();
+
 // Lightweight logging helper: append a timestamped line to data/logs.txt
 function appendLog(line) {
   try {
@@ -759,9 +762,18 @@ app.post('/api/scan', async (req, res) => {
     appendLog(`SCAN_ERROR ${err.message}`);
     return res.status(500).json({ error: err.message });
   }
+  // Prevent concurrent scans for the same resolved path
+  const lockKey = `scanPath:${libPath}`;
+  if (activeScans.has(lockKey)) {
+    appendLog(`SCAN_CONFLICT path=${libPath}`);
+    return res.status(409).json({ error: 'scan already in progress for this path' });
+  }
+  activeScans.add(lockKey);
+  appendLog(`SCAN_LOCK_ACQUIRED path=${libPath}`);
 
   const scanId = uuidv4();
   // Run quick local parsing for each discovered item so the UI shows cleaned parsed names immediately
+  let backgroundStarted = false;
   try {
     const parseFilename = require('./lib/filename-parser');
     let userHasAuthoritativeProviderKey = false;
@@ -839,6 +851,8 @@ app.post('/api/scan', async (req, res) => {
     try { writeJson(parsedCacheFile, parsedCache) } catch (e) {}
     writeJson(enrichStoreFile, enrichCache);
   } catch (e) { appendLog(`PARSE_MODULE_FAIL err=${e.message}`); }
+  // Wrap the remainder of the request flow so we can release the lock if something fails
+  try {
 
   const artifact = { id: scanId, libraryId: libraryId || 'local', totalCount: items.length, items, generatedAt: Date.now() };
   scans[scanId] = artifact;
@@ -847,11 +861,12 @@ app.post('/api/scan', async (req, res) => {
   // Auto-sweep stale enrich cache entries after a scan completes
   try { const removed = sweepEnrichCache(); if (removed && removed.length) appendLog(`AUTOSWEEP_AFTER_SCAN removed=${removed.length}`); } catch (e) {}
   res.json({ scanId, totalCount: items.length });
-
   // Kick off a background enrichment pass for the first N items (non-blocking).
   // This will call the external provider for up to the first 12 items and cache provider-rendered names
+  // The activeScans lock will be released when this background pass completes.
   (async function backgroundFirstNEnrich() {
     try {
+      backgroundStarted = true;
       const N = 12;
       const first = artifact.items.slice(0, N);
   // pick tmdb key similar to other endpoints (prefer session user's key, then server)
@@ -921,7 +936,18 @@ app.post('/api/scan', async (req, res) => {
         } catch (e) { appendLog(`BACKGROUND_ENRICH_FAIL path=${it.canonicalPath} err=${e.message}`); }
       }
     } catch (e) { appendLog(`BACKGROUND_FIRSTN_ENRICH_FAIL scan=${scanId} err=${e.message}`); }
+    finally {
+      try {
+        activeScans.delete(lockKey);
+        appendLog(`SCAN_LOCK_RELEASED path=${libPath}`);
+      } catch (ee) {}
+    }
   })();
+  } catch (err) {
+    try { appendLog(`SCAN_HANDLER_FAIL scan=${scanId} err=${err && err.message ? err.message : String(err)}`); } catch (e) {}
+    try { if (!backgroundStarted) { activeScans.delete(lockKey); appendLog(`SCAN_LOCK_RELEASED path=${libPath}`); } } catch (ee) {}
+    return res.status(500).json({ error: err && err.message ? err.message : String(err) });
+  }
 });
 
 app.get('/api/scan/:scanId', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
@@ -1248,22 +1274,30 @@ app.post('/api/enrich/sweep', requireAuth, requireAdmin, (req, res) => {
     return res.status(500).json({ error: e && e.message ? e.message : String(e) });
   }
 });
-
 // Force-refresh metadata for all items in a completed scan (server-side enrichment)
 app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
   const s = scans[req.params.scanId];
   if (!s) return res.status(404).json({ error: 'scan not found' });
   const username = req.session && req.session.username;
   appendLog(`REFRESH_SCAN_REQUEST scan=${req.params.scanId} by=${username}`);
+  // Prevent concurrent refreshes for the same scanId
+  const refreshLockKey = `refreshScan:${req.params.scanId}`;
+  if (activeScans.has(refreshLockKey)) {
+    appendLog(`SCAN_CONFLICT refresh=${req.params.scanId}`);
+    return res.status(409).json({ error: 'refresh already in progress for this scan' });
+  }
+  activeScans.add(refreshLockKey);
+  appendLog(`SCAN_LOCK_ACQUIRED refresh=${req.params.scanId}`);
   // pick tmdb key if available
   const { tmdb_api_key: tmdb_override } = req.body || {};
   let tmdbKey = null
   try {
-  if (tmdb_override) tmdbKey = tmdb_override;
+    if (tmdb_override) tmdbKey = tmdb_override;
     else if (username && users[username] && users[username].settings && users[username].settings.tmdb_api_key) tmdbKey = users[username].settings.tmdb_api_key;
     else if (serverSettings && serverSettings.tmdb_api_key) tmdbKey = serverSettings.tmdb_api_key;
   } catch (e) { tmdbKey = null }
   const results = [];
+  try {
   for (const it of s.items) {
     try {
       const key = canonicalize(it.canonicalPath);
@@ -1329,6 +1363,12 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
   // Auto-sweep stale enrich cache entries after a refresh completes
   try { const removed2 = sweepEnrichCache(); if (removed2 && removed2.length) appendLog(`AUTOSWEEP_AFTER_REFRESH removed=${removed2.length}`); } catch (e) {}
   res.json({ ok: true, results });
+  } catch (e) {
+    appendLog(`REFRESH_SCAN_FAIL scan=${req.params.scanId} err=${e && e.message ? e.message : String(e)}`);
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  } finally {
+    try { activeScans.delete(refreshLockKey); appendLog(`SCAN_LOCK_RELEASED refresh=${req.params.scanId}`); } catch (ee) {}
+  }
 });
 
 // Debug enrich: return cached enrichment and what externalEnrich would produce now
@@ -1969,3 +2009,7 @@ if (require.main === module) {
     console.log(`Server listening on ${PORT}`);
   });
 }
+
+
+
+
