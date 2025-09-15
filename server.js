@@ -39,6 +39,31 @@ function requireAdmin(req, res, next) {
 const DATA_DIR = path.resolve(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
+// ensure we have a persistent session signing key
+const sessionKeyFile = path.join(DATA_DIR, 'session.key');
+function ensureSessionKey() {
+  try {
+    if (!fs.existsSync(sessionKeyFile)) {
+      const k = require('crypto').randomBytes(32).toString('hex');
+      fs.writeFileSync(sessionKeyFile, k, { encoding: 'utf8' });
+    }
+    const key = fs.readFileSync(sessionKeyFile, 'utf8').trim();
+    return key;
+  } catch (e) {
+    console.error('session key ensure failed', e && e.message);
+    return null;
+  }
+}
+const SESSION_KEY = ensureSessionKey();
+// initialize cookie-session middleware now that SESSION_KEY is present
+if (SESSION_KEY) {
+  app.use(cookieSession({ name: 'mmp_sess', keys: [SESSION_KEY], maxAge: 7 * 24 * 60 * 60 * 1000 }));
+} else {
+  // fallback to unsigned session (best-effort) but warn
+  console.warn('No SESSION_KEY available; sessions will not be signed');
+  app.use(cookieSession({ name: 'mmp_sess', keys: [] }));
+}
+
 const scanStoreFile = path.join(DATA_DIR, 'scans.json');
 const enrichStoreFile = path.join(DATA_DIR, 'enrich.json');
 const logsFile = path.join(DATA_DIR, 'logs.txt');
@@ -58,6 +83,66 @@ function ensureFile(filePath, defaultContent) {
     console.error('ensureFile error', filePath, e && e.message);
   }
 }
+
+// load or initialize settings and users into memory
+let serverSettings = {};
+let users = {};
+try { ensureFile(settingsFile, {}); serverSettings = JSON.parse(fs.readFileSync(settingsFile, 'utf8') || '{}') } catch (e) { serverSettings = {} }
+try { ensureFile(usersFile, { admin: { username: 'admin', role: 'admin', passwordHash: null, settings: {} } }); users = JSON.parse(fs.readFileSync(usersFile, 'utf8') || '{}') } catch (e) { users = {} }
+
+// Ensure basic persistent store files exist and load them into memory
+try { ensureFile(enrichStoreFile, {}); } catch (e) {}
+try { ensureFile(parsedCacheFile, {}); } catch (e) {}
+try { ensureFile(scanStoreFile, {}); } catch (e) {}
+try { ensureFile(renderedIndexFile, {}); } catch (e) {}
+try { ensureFile(logsFile, ''); } catch (e) {}
+
+let enrichCache = {};
+let parsedCache = {};
+let scans = {};
+let renderedIndex = {};
+try { enrichCache = JSON.parse(fs.readFileSync(enrichStoreFile, 'utf8') || '{}') } catch (e) { enrichCache = {} }
+try { parsedCache = JSON.parse(fs.readFileSync(parsedCacheFile, 'utf8') || '{}') } catch (e) { parsedCache = {} }
+try { scans = JSON.parse(fs.readFileSync(scanStoreFile, 'utf8') || '{}') } catch (e) { scans = {} }
+try { renderedIndex = JSON.parse(fs.readFileSync(renderedIndexFile, 'utf8') || '{}') } catch (e) { renderedIndex = {} }
+
+// Lightweight logging helper: append a timestamped line to data/logs.txt
+function appendLog(line) {
+  try {
+    const ts = (new Date()).toISOString();
+    fs.appendFileSync(logsFile, ts + ' ' + String(line) + '\n', { encoding: 'utf8' });
+  } catch (e) {
+    try { console.error('appendLog failed', e && e.message ? e.message : e); } catch (ee) {}
+  }
+}
+
+// Simple atomic JSON writer used throughout the server
+function writeJson(filePath, obj) {
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(obj, null, 2), { encoding: 'utf8' });
+  } catch (e) {
+    try { console.error('writeJson failed', filePath, e && e.message ? e.message : e); } catch (ee) {}
+  }
+}
+
+// Normalizer to ensure enrich entries have consistent shape used by the UI
+function normalizeEnrichEntry(entry) {
+  try {
+    entry = entry || {};
+    const out = Object.assign({}, entry);
+    out.parsed = entry.parsed || (entry.parsedName || entry.title ? { title: entry.title || null, parsedName: entry.parsedName || null, season: entry.season != null ? entry.season : null, episode: entry.episode != null ? entry.episode : null } : null);
+    out.provider = entry.provider || null;
+    out.title = out.title || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
+    out.parsedName = out.parsedName || (out.parsed && out.parsed.parsedName) || null;
+    out.season = (typeof out.season !== 'undefined' && out.season !== null) ? out.season : (out.parsed && typeof out.parsed.season !== 'undefined' ? out.parsed.season : null);
+    out.episode = (typeof out.episode !== 'undefined' && out.episode !== null) ? out.episode : (out.parsed && typeof out.parsed.episode !== 'undefined' ? out.parsed.episode : null);
+    out.timestamp = out.timestamp || Date.now();
+    return out;
+  } catch (e) {
+    return entry || {};
+  }
+}
+
 
 async function metaLookup(title, apiKey, opts = {}) {
   // Lightweight, rate-limited meta lookup using AniList -> Kitsu -> TMDb fallback.
@@ -922,6 +1007,28 @@ app.get('/api/debug/session', (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: e && e.message ? e.message : String(e) });
   }
+});
+// Simple login endpoint used by the web client. Sets req.session.username on success.
+app.post('/api/login', (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username) return res.status(400).json({ error: 'username required' });
+    const user = users[username];
+    if (!user) return res.status(401).json({ error: 'invalid credentials' });
+    // If no passwordHash is configured, allow login with empty password (bootstrap convenience)
+    if (!user.passwordHash) {
+      if (password && String(password).length) return res.status(401).json({ error: 'invalid credentials' });
+      req.session.username = username;
+      return res.json({ ok: true, username });
+    }
+    // compare hashed password
+    bcrypt.compare(String(password || ''), String(user.passwordHash || ''), (err, same) => {
+      if (err) return res.status(500).json({ error: 'compare error' });
+      if (!same) return res.status(401).json({ error: 'invalid credentials' });
+      req.session.username = username;
+      return res.json({ ok: true, username });
+    });
+  } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }); }
 });
 app.post('/api/settings', requireAuth, (req, res) => {
   const body = req.body || {};
