@@ -756,26 +756,25 @@ export default function App() {
               }} disabled={scanning}><span>{scanning ? <Spinner/> : 'Scan'}</span></button>
             {/* Select + Approve wrapper: Approve is absolutely positioned so it doesn't reserve space when hidden */}
             <div className="select-approve-wrap">
-              <button
-                className={"btn-save approve-button" + ((selectMode && Object.keys(selected).length) ? ' visible' : '')}
-                aria-hidden={!(selectMode && Object.keys(selected).length)}
-                onClick={async () => {
-                try {
-                  const selectedPaths = Object.keys(selected).filter(Boolean)
-                  if (!selectedPaths.length) return
-                  // build item objects for selected paths for loaded items
-                  const selItems = items.filter(it => selectedPaths.includes(it.canonicalPath))
-                  if (!selItems.length) return
-                  pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
-                  const plans = await previewRename(selItems)
-                  await applyRename(plans)
-                  // clear selection but stay in select mode
-                  setSelected({})
-                  pushToast && pushToast('Approve', 'Approve completed')
-                } catch (e) { pushToast && pushToast('Approve', 'Approve failed') }
-              }}
-              title="Approve selected"
-              >Approve selected</button>
+                {selectMode && Object.keys(selected).length ? (
+                  <button
+                    className={"btn-save approve-button visible"}
+                    onClick={async () => {
+                      try {
+                        const selectedPaths = Object.keys(selected).filter(Boolean)
+                        if (!selectedPaths.length) return
+                        const selItems = items.filter(it => selectedPaths.includes(it.canonicalPath))
+                        if (!selItems.length) return
+                        pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
+                        const plans = await previewRename(selItems)
+                        await applyRename(plans)
+                        setSelected({})
+                        pushToast && pushToast('Approve', 'Approve completed')
+                      } catch (e) { pushToast && pushToast('Approve', 'Approve failed') }
+                    }}
+                    title="Approve selected"
+                  >Approve selected</button>
+                ) : null}
               <button className={"btn-ghost" + (selectMode ? ' active' : '')} onClick={() => { setSelectMode(s => { if (s) setSelected({}); return !s }) }} title={selectMode ? 'Exit select mode' : 'Select items'}>Select</button>
             </div>
             <button className={"btn-ghost" + (!(lastLibraryId || (scanMeta && scanMeta.libraryId)) ? ' disabled' : '')} onClick={rescan} title={!(lastLibraryId || (scanMeta && scanMeta.libraryId)) ? 'No previous scan' : 'Rescan last library'} disabled={!(lastLibraryId || (scanMeta && scanMeta.libraryId))}><IconRefresh/> <span>Rescan</span></button>

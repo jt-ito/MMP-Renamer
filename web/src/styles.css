@@ -12,6 +12,7 @@
 	--hunter-green: #355E3B; /* hunter green for Save actions */
  	--radius: 10px;
 	--danger-dark: #8B1E1E; /* dark modern red for clear button */
+	--header-button-gap: 12px;
 }
 
 body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 0; background: var(--bg-900); color: var(--accent); -webkit-font-smoothing:antialiased }
@@ -22,14 +23,14 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 	button { transition: background-color 160ms ease, color 160ms ease, transform 120ms ease, box-shadow 160ms ease }
 	.theme-fade { transition: background-color 240ms ease, color 240ms ease }
 }
-.app header { display:flex; justify-content:flex-start; align-items:center; padding:16px 20px; background: var(--bg-800); border-bottom:1px solid var(--bg-600); --header-button-gap:12px; flex-wrap:nowrap }
+.app header { display:flex; justify-content:flex-start; align-items:center; padding:16px 20px; background: var(--bg-800); border-bottom:1px solid var(--bg-600); gap: var(--header-button-gap); flex-wrap:nowrap }
 .app header h1 { margin:0; font-size:1.1rem; letter-spacing:0.4px }
 .app header button { background: transparent; color: var(--accent); border: 1px solid var(--bg-600); padding:6px 10px; border-radius:8px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; height:36px; box-sizing:border-box }
 .app header button:hover { background: rgba(255,255,255,0.02) }
 .app header button:active { transform: translateY(1px) }
 
 /* Header search box styling: match theme and shrink responsively */
-.header-search { display:flex; align-items:center; gap: var(--header-button-gap); /* allow search to flex but cap width so it doesn't push header actions */ flex: 1 1 480px; margin-left: var(--header-button-gap); margin-right: var(--header-button-gap); min-width:140px; max-width:calc(100% - 360px) }
+.header-search { display:flex; align-items:center; gap: var(--header-button-gap); /* allow search to flex but cap width so it doesn't push header actions */ flex: 1 1 480px; min-width:140px; max-width:calc(100% - 360px) }
 .header-search .form-input { height:36px; padding:6px 10px; border-radius:10px; border:1px solid var(--bg-600); background:var(--bg-700); color:var(--accent); min-width:0; box-sizing:border-box; flex: 1 1 auto; width: 100% }
 .header-search .btn-ghost { flex: 0 0 auto; }
 .header-search .btn-ghost { height:36px }
@@ -46,7 +47,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .app header .header-actions .icon-only .icon { display:block; margin:0 }
 
 /* Global bulk-enrich indicator shown in header when many enrich operations are running */
-.bulk-enrich { display:inline-flex; align-items:center; gap:8px; margin-right: calc(var(--header-button-gap)); color: var(--muted); font-size:13px }
+.bulk-enrich { display:inline-flex; align-items:center; gap:8px; color: var(--muted); font-size:13px }
 .bulk-enrich .bulk-enrich-label { opacity:0.9 }
 .bulk-enrich .icon.spinner { width:18px; height:18px }
 
