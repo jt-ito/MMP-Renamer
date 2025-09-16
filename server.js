@@ -27,28 +27,136 @@ function requireAuth(req, res, next) {
   } catch (e) { return res.status(401).json({ error: 'unauthenticated' }) }
 }
 
-// simple admin check middleware
 function requireAdmin(req, res, next) {
   try {
-    const username = req && req.session && req.session.username ? req.session.username : null
-    if (!username) return res.status(401).json({ error: 'unauthenticated' })
-    try {
-      if (users && users[username] && (users[username].is_admin || users[username].role === 'admin')) return next()
-      // keep backward-compatible admin user named 'admin'
-      if (username === 'admin') return next()
-    } catch (e) { /* ignore */ }
-    return res.status(403).json({ error: 'forbidden' })
+    const username = req && req.session && req.session.username;
+    if (!username) return res.status(401).json({ error: 'unauthenticated' });
+    if (users && users[username] && users[username].role === 'admin') return next();
+    return res.status(403).json({ error: 'forbidden' });
   } catch (e) { return res.status(403).json({ error: 'forbidden' }) }
 }
 
-// Top-level metaLookup function (moved out of requireAuth)
-async function metaLookup(title, apiKey, opts = {}) {
-  // Robust meta lookup that can honor a preferred provider order.
-  // Inputs: title (string), apiKey (tmdb key, optional), opts may include season, episode, parentCandidate, parentPath, _parentDirect, username, preferredProvider
-  if (!title) return null
+const DATA_DIR = path.resolve(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
-  // pacing and helpers (kept small and synchronous where possible)
-  const hostPace = { 'graphql.anilist.co': 250, 'kitsu.io': 250, 'api.themoviedb.org': 300 }
+// ensure we have a persistent session signing key
+const sessionKeyFile = path.join(DATA_DIR, 'session.key');
+function ensureSessionKey() {
+  try {
+    if (!fs.existsSync(sessionKeyFile)) {
+      const k = require('crypto').randomBytes(32).toString('hex');
+      fs.writeFileSync(sessionKeyFile, k, { encoding: 'utf8' });
+    }
+    const key = fs.readFileSync(sessionKeyFile, 'utf8').trim();
+    return key;
+  } catch (e) {
+    console.error('session key ensure failed', e && e.message);
+    return null;
+  }
+}
+const SESSION_KEY = ensureSessionKey();
+// initialize cookie-session middleware now that SESSION_KEY is present
+if (SESSION_KEY) {
+  app.use(cookieSession({ name: 'mmp_sess', keys: [SESSION_KEY], maxAge: 7 * 24 * 60 * 60 * 1000 }));
+} else {
+  // fallback to unsigned session (best-effort) but warn
+  console.warn('No SESSION_KEY available; sessions will not be signed');
+  app.use(cookieSession({ name: 'mmp_sess', keys: [] }));
+}
+
+const scanStoreFile = path.join(DATA_DIR, 'scans.json');
+const enrichStoreFile = path.join(DATA_DIR, 'enrich.json');
+const logsFile = path.join(DATA_DIR, 'logs.txt');
+const settingsFile = path.join(DATA_DIR, 'settings.json');
+const usersFile = path.join(DATA_DIR, 'users.json');
+const renderedIndexFile = path.join(DATA_DIR, 'rendered-index.json');
+const parsedCacheFile = path.join(DATA_DIR, 'parsed-cache.json');
+
+// Ensure essential data files exist so server can write to them even when they're not in repo
+function ensureFile(filePath, defaultContent) {
+  try {
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, typeof defaultContent === 'string' ? defaultContent : JSON.stringify(defaultContent, null, 2), { encoding: 'utf8' });
+    }
+  } catch (e) {
+    // best-effort
+    console.error('ensureFile error', filePath, e && e.message);
+  }
+}
+
+// load or initialize settings and users into memory
+let serverSettings = {};
+let users = {};
+try { ensureFile(settingsFile, {}); serverSettings = JSON.parse(fs.readFileSync(settingsFile, 'utf8') || '{}') } catch (e) { serverSettings = {} }
+try { ensureFile(usersFile, { admin: { username: 'admin', role: 'admin', passwordHash: null, settings: {} } }); users = JSON.parse(fs.readFileSync(usersFile, 'utf8') || '{}') } catch (e) { users = {} }
+
+// Ensure basic persistent store files exist and load them into memory
+try { ensureFile(enrichStoreFile, {}); } catch (e) {}
+try { ensureFile(parsedCacheFile, {}); } catch (e) {}
+try { ensureFile(scanStoreFile, {}); } catch (e) {}
+try { ensureFile(renderedIndexFile, {}); } catch (e) {}
+try { ensureFile(logsFile, ''); } catch (e) {}
+
+let enrichCache = {};
+let parsedCache = {};
+let scans = {};
+let renderedIndex = {};
+try { enrichCache = JSON.parse(fs.readFileSync(enrichStoreFile, 'utf8') || '{}') } catch (e) { enrichCache = {} }
+try { parsedCache = JSON.parse(fs.readFileSync(parsedCacheFile, 'utf8') || '{}') } catch (e) { parsedCache = {} }
+try { scans = JSON.parse(fs.readFileSync(scanStoreFile, 'utf8') || '{}') } catch (e) { scans = {} }
+try { renderedIndex = JSON.parse(fs.readFileSync(renderedIndexFile, 'utf8') || '{}') } catch (e) { renderedIndex = {} }
+
+// Track in-flight scans to prevent concurrent runs for same path/scanId
+const activeScans = new Set();
+// In-memory progress tracker for background refresh operations
+const refreshProgress = {};
+
+// Lightweight logging helper: append a timestamped line to data/logs.txt
+function appendLog(line) {
+  try {
+    const ts = (new Date()).toISOString();
+    fs.appendFileSync(logsFile, ts + ' ' + String(line) + '\n', { encoding: 'utf8' });
+  } catch (e) {
+    try { console.error('appendLog failed', e && e.message ? e.message : e); } catch (ee) {}
+  }
+}
+
+// Simple atomic JSON writer used throughout the server
+function writeJson(filePath, obj) {
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(obj, null, 2), { encoding: 'utf8' });
+  } catch (e) {
+    try { console.error('writeJson failed', filePath, e && e.message ? e.message : e); } catch (ee) {}
+  }
+}
+
+// Normalizer to ensure enrich entries have consistent shape used by the UI
+function normalizeEnrichEntry(entry) {
+  try {
+    entry = entry || {};
+    const out = Object.assign({}, entry);
+    out.parsed = entry.parsed || (entry.parsedName || entry.title ? { title: entry.title || null, parsedName: entry.parsedName || null, season: entry.season != null ? entry.season : null, episode: entry.episode != null ? entry.episode : null } : null);
+    out.provider = entry.provider || null;
+    out.title = out.title || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
+    out.parsedName = out.parsedName || (out.parsed && out.parsed.parsedName) || null;
+    out.season = (typeof out.season !== 'undefined' && out.season !== null) ? out.season : (out.parsed && typeof out.parsed.season !== 'undefined' ? out.parsed.season : null);
+    out.episode = (typeof out.episode !== 'undefined' && out.episode !== null) ? out.episode : (out.parsed && typeof out.parsed.episode !== 'undefined' ? out.parsed.episode : null);
+    out.timestamp = out.timestamp || Date.now();
+    return out;
+  } catch (e) {
+    return entry || {};
+  }
+}
+
+
+async function metaLookup(title, apiKey, opts = {}) {
+  // Lightweight, rate-limited meta lookup using AniList -> Kitsu -> TMDb fallback.
+  // Inputs: title (string), apiKey (tmdb key, optional), opts may include season, episode, parentCandidate, parentPath, _parentDirect
+  // Output: Promise resolving to { name, raw, episode } or null
+  if (!title) return Promise.resolve(null)
+
+  // Minimal per-host pacing to avoid hammering external APIs
+  const hostPace = { 'graphql.anilist.co': 250, 'kitsu.io': 250, 'api.themoviedb.org': 300 } // ms
   const lastRequestAt = metaLookup._lastRequestAt = metaLookup._lastRequestAt || {}
   async function pace(host) {
     const now = Date.now()
@@ -58,207 +166,6 @@ async function metaLookup(title, apiKey, opts = {}) {
     lastRequestAt[host] = Date.now()
   }
 
-  function normalize(s) { try { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim() } catch (e) { return String(s || '') } }
-  function wordOverlap(a,b){ try { const wa = normalize(a).split(' ').filter(Boolean); const wb = normalize(b).split(' ').filter(Boolean); if (!wa.length || !wb.length) return 0; const common = wa.filter(x=>wb.indexOf(x)!==-1); return common.length/Math.max(wa.length, wb.length); } catch (e){ return 0 } }
-  function makeVariants(t){ const s = String(t || '').trim(); const variants = []; if (!s) return variants; variants.push(s); const cleaned = s.replace(/[._\-:]+/g,' ').replace(/\s+/g,' ').trim(); variants.push(cleaned); const stripped = cleaned.replace(/\s*[\[(].*?[\])]/g, '').replace(/\s+/g,' ').trim(); if (stripped && stripped !== cleaned) variants.push(stripped); variants.push(stripped.toLowerCase()); return [...new Set(variants)].slice(0,5) }
-
-  const https = require('https')
-  function httpRequest(options, body, timeoutMs = 4000) {
-    return new Promise((resolve, reject) => {
-      let timed = false
-      const req = https.request(options, (res) => {
-        let sb = ''
-        res.on('data', d => sb += d)
-        res.on('end', () => { if (timed) return; resolve({ statusCode: res.statusCode, headers: res.headers, body: sb }) })
-      })
-      req.on('error', (err) => { if (timed) return; reject(err) })
-      req.setTimeout(timeoutMs, () => { timed = true; try{ req.destroy() }catch(e){}; reject(new Error('timeout')) })
-      if (body) req.write(body)
-      req.end()
-    })
-  }
-
-  // AniList search (series-level only)
-  async function searchAniList(q) {
-    try {
-      await pace('graphql.anilist.co')
-      const query = `query ($search: String) { Page(page:1, perPage:5) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } } } }`;
-      const vars = JSON.stringify({ search: String(q || '') })
-      const body = JSON.stringify({ query, variables: JSON.parse(vars) })
-      let anilistKey = null
-      try {
-        if (opts && opts.anilist_key) anilistKey = opts.anilist_key
-        else if (opts && opts.username && users && users[opts.username] && users[opts.username].settings && users[opts.username].settings.anilist_api_key) anilistKey = users[opts.username].settings.anilist_api_key
-        else if (serverSettings && serverSettings.anilist_api_key) anilistKey = serverSettings.anilist_api_key
-      } catch (e) { anilistKey = null }
-      const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' }
-      if (anilistKey) headers['Authorization'] = `Bearer ${String(anilistKey)}`
-      const opt = { hostname: 'graphql.anilist.co', path: '/', method: 'POST', headers }
-      const res = await httpRequest(opt, body, 3500)
-      if (!res || !res.body) return null
-      let j = null
-      try { j = JSON.parse(res.body) } catch (e) { return null }
-      const items = j && j.data && j.data.Page && Array.isArray(j.data.Page.media) ? j.data.Page.media : []
-      if (!items || !items.length) return null
-      items.sort((a,b)=> (wordOverlap(String(b.title.english||b.title.romaji||b.title.native||''), String(q)) - wordOverlap(String(a.title.english||a.title.romaji||a.title.native||''), String(q))));
-      const pick = items[0]
-      if (!pick) return null
-      const name = (pick.title && (pick.title.english || pick.title.romaji || pick.title.native)) ? (pick.title.english || pick.title.romaji || pick.title.native) : null
-      return { provider: 'anilist', id: pick.id, name: name, raw: pick }
-    } catch (e) { return null }
-  }
-
-  // Kitsu: find anime and episode
-  async function fetchKitsuEpisode(seriesTitle, episodeNumber) {
-    try {
-      if (episodeNumber == null) return null
-      await pace('kitsu.io')
-      const q = encodeURIComponent(String(seriesTitle || '').slice(0,200))
-      const searchPath = `/api/edge/anime?filter[text]=${q}&page[limit]=1`
-      const sres = await httpRequest({ hostname: 'kitsu.io', path: searchPath, method: 'GET', headers: { 'Accept': 'application/vnd.api+json' } }, null, 3000)
-      if (!sres || !sres.body) return null
-      let sj = null
-      try { sj = JSON.parse(sres.body) } catch (e) { sj = null }
-      const an = sj && sj.data && Array.isArray(sj.data) && sj.data.length ? sj.data[0] : null
-      if (!an) return null
-      const animeId = an.id
-      await pace('kitsu.io')
-      const epPath = `/api/edge/anime/${encodeURIComponent(animeId)}/episodes?filter[number]=${encodeURIComponent(String(episodeNumber))}&page[limit]=1`
-      const eres = await httpRequest({ hostname: 'kitsu.io', path: epPath, method: 'GET', headers: { 'Accept': 'application/vnd.api+json' } }, null, 3000)
-      if (!eres || !eres.body) return null
-      let ej = null
-      try { ej = JSON.parse(eres.body) } catch (e) { ej = null }
-      const ep = ej && ej.data && Array.isArray(ej.data) && ej.data.length ? ej.data[0] : null
-      if (!ep) return null
-      const epTitle = ep && ep.attributes && (ep.attributes.canonicalTitle || ep.attributes.titles && (ep.attributes.titles.en || ep.attributes.titles.en_jp)) ? (ep.attributes.canonicalTitle || ep.attributes.titles.en || ep.attributes.titles.en_jp) : null
-      return { name: epTitle, raw: ep }
-    } catch (e) { return null }
-  }
-
-  // TMDb search + optional episode fetch
-  async function searchTmdbAndEpisode(q, tmdbKey, season, episode) {
-    if (!tmdbKey) return null
-    try {
-      await pace('api.themoviedb.org')
-      const qenc = encodeURIComponent(String(q || '').slice(0,200))
-      const opt = { hostname: 'api.themoviedb.org', path: `/3/search/tv?api_key=${encodeURIComponent(tmdbKey)}&query=${qenc}&page=1`, method: 'GET', headers: { 'Accept': 'application/json' } }
-      const sres = await httpRequest(opt, null, 3500)
-      if (!sres || !sres.body) return null
-      let sj = null
-      try { sj = JSON.parse(sres.body) } catch (e) { sj = null }
-      const results = sj && Array.isArray(sj.results) ? sj.results : []
-      if (!results || !results.length) return null
-      // pick best by title overlap
-      results.sort((a,b)=> (wordOverlap(b.name || b.original_name || '', q) - wordOverlap(a.name || a.original_name || '', q)) )
-      const pick = results[0]
-      if (!pick) return null
-      const out = { name: pick.name || pick.original_name || null, raw: Object.assign({}, pick, { id: pick.id, source: 'tmdb' }), episode: null }
-      // if episode info requested and season/episode present, fetch episode details
-      if (episode != null && season != null) {
-        try {
-          await pace('api.themoviedb.org')
-          const epOpt = { hostname: 'api.themoviedb.org', path: `/3/tv/${encodeURIComponent(String(pick.id))}/season/${encodeURIComponent(String(season))}/episode/${encodeURIComponent(String(episode))}?api_key=${encodeURIComponent(tmdbKey)}`, method: 'GET', headers: { 'Accept': 'application/json' } }
-          const eres = await httpRequest(epOpt, null, 3500)
-          if (eres && eres.body) {
-            try { const ej = JSON.parse(eres.body); if (ej) out.episode = { name: ej.name || ej.title || null, raw: ej } } catch (e) {}
-          }
-        } catch (e) { /* ignore episode fetch errors */ }
-      }
-      return out
-    } catch (e) { return null }
-  }
-
-  // Start lookup sequence honoring preferred provider when requested
-  try {
-    try { appendLog(`META_LOOKUP_REQUEST title=${String(title).slice(0,200)} optsPref=${opts && opts.preferredProvider ? String(opts.preferredProvider) : '<none>'}`) } catch (e) {}
-    const preferred = opts && opts.preferredProvider ? String(opts.preferredProvider).toLowerCase() : null
-    const variants = makeVariants(title)
-
-    async function tryTmdbFirst() {
-      try {
-        for (let i=0;i<Math.min(variants.length,3);i++) {
-          const v = variants[i]
-          const t = await searchTmdbAndEpisode(v, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-          try { appendLog(`META_TMDB_PREF_FIRST q=${v} found=${t ? 'yes' : 'no'}`) } catch (e) {}
-          if (t) return { name: t.name, raw: t.raw, episode: t.episode || null }
-        }
-        if (opts && opts.parentCandidate) {
-          const pvars = makeVariants(opts.parentCandidate)
-          for (let i=0;i<Math.min(pvars.length,3);i++) {
-            const pv = pvars[i]
-            const t = await searchTmdbAndEpisode(pv, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-            try { appendLog(`META_TMDB_PREF_PARENT q=${pv} found=${t ? 'yes' : 'no'}`) } catch (e) {}
-            if (t) return { name: t.name, raw: t.raw, episode: t.episode || null }
-          }
-        }
-      } catch (e) { try { appendLog(`META_TMDB_PREF_ERROR err=${e && e.message}`) } catch (e) {} }
-      return null
-    }
-
-    async function tryAniListThenEpisode() {
-      try {
-        for (let i=0;i<Math.min(variants.length,3);i++) {
-          const v = variants[i]
-          const a = await searchAniList(v)
-          try { appendLog(`META_ANILIST_SEARCH q=${v} found=${a ? 'yes' : 'no'}`) } catch (e) {}
-          if (a) {
-            // AniList is series-only; if episode requested, prefer TMDb episode lookup when possible
-            if (opts && (opts.season != null || opts.episode != null) && apiKey) {
-              const t = await searchTmdbAndEpisode(a.name, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-              try { appendLog(`META_TMDB_EP_AFTER_ANILIST q=${a.name} found=${t ? 'yes' : 'no'}`) } catch (e) {}
-              if (t) return { name: t.name || a.name, raw: Object.assign({}, a.raw || {}, t.raw || {}, { source: t.raw && t.raw.source ? t.raw.source : 'tmdb' }), episode: t.episode || null }
-            }
-            return { name: a.name, raw: Object.assign({}, a.raw || {}, { id: a.id, source: 'anilist' }), episode: null }
-          }
-        }
-      } catch (e) { try { appendLog(`META_ANILIST_ERROR err=${e && e.message}`) } catch (e) {} }
-      return null
-    }
-
-    async function tryKitsuFirst() {
-      try {
-        // Kitsu is episode-centric; only useful when episode number is present
-        if (opts && opts.episode != null) {
-          for (let i=0;i<Math.min(variants.length,3);i++) {
-            const v = variants[i]
-            const k = await fetchKitsuEpisode(v, opts.episode)
-            try { appendLog(`META_KITSU_PREF_SEARCH q=${v} ep=${opts.episode} found=${k ? 'yes' : 'no'}`) } catch (e) {}
-            if (k) return { name: k.name, raw: k.raw, episode: { name: k.name, raw: k.raw } }
-          }
-        }
-      } catch (e) { try { appendLog(`META_KITSU_PREF_ERROR err=${e && e.message}`) } catch (e) {} }
-      return null
-    }
-
-    // Determine lookup order
-    if (preferred === 'tmdb') {
-      try { appendLog(`META_PREF_TRY pref=tmdb title=${String(title).slice(0,200)}`) } catch (e) {}
-      let r = await tryTmdbFirst(); if (r) { try { appendLog(`META_PREF_FOUND provider=tmdb name=${r.name}`) } catch (e) {} ; return r }
-      r = await tryAniListThenEpisode(); if (r) { try { appendLog(`META_PREF_FOUND provider=anilist name=${r.name}`) } catch (e) {} ; return r }
-      r = await tryKitsuFirst(); if (r) { try { appendLog(`META_PREF_FOUND provider=kitsu name=${r.name}`) } catch (e) {} ; return r }
-      try { appendLog(`META_PREF_NONE pref=tmdb title=${String(title).slice(0,200)}`) } catch (e) {}
-      return null
-    } else if (preferred === 'kitsu') {
-      try { appendLog(`META_PREF_TRY pref=kitsu title=${String(title).slice(0,200)}`) } catch (e) {}
-      let r = await tryKitsuFirst(); if (r) { try { appendLog(`META_PREF_FOUND provider=kitsu name=${r.name}`) } catch (e) {} ; return r }
-      r = await tryAniListThenEpisode(); if (r) { try { appendLog(`META_PREF_FOUND provider=anilist name=${r.name}`) } catch (e) {} ; return r }
-      r = await tryTmdbFirst(); if (r) { try { appendLog(`META_PREF_FOUND provider=tmdb name=${r.name}`) } catch (e) {} ; return r }
-      try { appendLog(`META_PREF_NONE pref=kitsu title=${String(title).slice(0,200)}`) } catch (e) {}
-      return null
-    } else {
-      // Default: AniList-first legacy behavior
-      try { appendLog(`META_PREF_TRY pref=anilist title=${String(title).slice(0,200)}`) } catch (e) {}
-      let r = await tryAniListThenEpisode(); if (r) { try { appendLog(`META_PREF_FOUND provider=anilist name=${r.name}`) } catch (e) {} ; return r }
-      r = await tryTmdbFirst(); if (r) { try { appendLog(`META_PREF_FOUND provider=tmdb name=${r.name}`) } catch (e) {} ; return r }
-      r = await tryKitsuFirst(); if (r) { try { appendLog(`META_PREF_FOUND provider=kitsu name=${r.name}`) } catch (e) {} ; return r }
-      try { appendLog(`META_PREF_NONE pref=anilist title=${String(title).slice(0,200)}`) } catch (e) {}
-      return null
-    }
-  } catch (e) {
-    try { appendLog(`META_LOOKUP_ERROR title=${String(title).slice(0,100)} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
-    return null
-  }
-}
   function normalize(s) { try { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim() } catch (e) { return String(s || '') } }
   function wordOverlap(a,b){ try { const wa = normalize(a).split(' ').filter(Boolean); const wb = normalize(b).split(' ').filter(Boolean); if (!wa.length || !wb.length) return 0; const common = wa.filter(x=>wb.indexOf(x)!==-1); return common.length/Math.max(wa.length, wb.length); } catch (e){ return 0 } }
 
@@ -379,7 +286,122 @@ async function metaLookup(title, apiKey, opts = {}) {
     } catch (e) { return null }
   }
 
+  // Try AniList variants, then parent, then TMDb fallback
+  try {
+    const variants = makeVariants(title)
+    // try filename-derived variants first
+    for (let i=0;i<Math.min(variants.length,3);i++) {
+      const v = variants[i]
+      const a = await searchAniList(v)
+      try { appendLog(`META_ANILIST_SEARCH q=${v} found=${a ? 'yes' : 'no'}`) } catch (e) {}
+      if (a) {
+        // Attempt TMDb episode lookup first when a TMDb key is available; otherwise try Kitsu.
+        // This prefers TMDb episode titles when present but falls back to Kitsu for compatibility.
+        let ep = null
+        try {
+          if (apiKey) {
+            try { appendLog(`META_TMDB_EP_AFTER_ANILIST q=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+            const tmEp = await searchTmdbAndEpisode(a.name || v, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+            if (tmEp && tmEp.episode) {
+              ep = tmEp.episode
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
+            } else {
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_NONE q=${a.name || v}`) } catch (e) {}
+            }
+          }
+          if (!ep) {
+            // If no TMDb key is present, explicitly log that we will use Kitsu
+            if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY q=${a.name || v}`) } catch (e) {} }
+            ep = await fetchKitsuEpisode(a.name || v, opts && opts.episode != null ? opts.episode : null)
+            try { appendLog(`META_KITSU_EP q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
+          }
+        } catch (e) { ep = null; try { appendLog(`META_EP_AFTER_ANILIST_ERROR q=${a.name || v} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+        // If Kitsu didn't return an episode title and we have a TMDb key, try TMDb episode endpoint as a fallback
+        try {
+          if (!ep && apiKey) {
+            try { appendLog(`META_TMDB_EP_FALLBACK q=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+            const tmEp = await searchTmdbAndEpisode(a.name || v, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+            if (tmEp && tmEp.episode) {
+              ep = tmEp.episode
+              try { appendLog(`META_TMDB_EP_FALLBACK_OK q=${a.name || v} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
+            } else {
+              try { appendLog(`META_TMDB_EP_FALLBACK_NONE q=${a.name || v}`) } catch (e) {}
+            }
+          }
+        } catch (e) { try { appendLog(`META_TMDB_EP_FALLBACK_ERROR q=${a.name || v} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+        return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
+      }
+    }
 
+    // try parent-derived candidate if provided or derivable
+    let parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
+    if (!parentCandidate && opts && opts.parentPath) {
+      try { const pp = require('./lib/filename-parser')(path.basename(opts.parentPath)); if (pp && pp.title) parentCandidate = pp.title } catch (e) {}
+    }
+    if (parentCandidate) {
+      const pvars = makeVariants(parentCandidate)
+      for (let i=0;i<Math.min(pvars.length,3);i++) {
+        const a = await searchAniList(pvars[i])
+        try { appendLog(`META_ANILIST_PARENT_SEARCH q=${pvars[i]} found=${a ? 'yes' : 'no'}`) } catch (e) {}
+        if (a) {
+          let ep = null
+          try {
+            if (apiKey) {
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT q=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+              const tmEp = await searchTmdbAndEpisode(a.name || parentCandidate, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+              if (tmEp && tmEp.episode) {
+                ep = tmEp.episode
+                try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
+              } else {
+                try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_NONE q=${a.name || parentCandidate}`) } catch (e) {}
+              }
+            }
+            if (!ep) {
+              // If no TMDb key is present, explicitly log that we will use Kitsu
+              if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY_PARENT q=${a.name || parentCandidate}`) } catch (e) {} }
+              ep = await fetchKitsuEpisode(a.name || parentCandidate, opts && opts.episode != null ? opts.episode : null)
+              try { appendLog(`META_KITSU_EP_PARENT q=${a.name || parentCandidate} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
+            }
+          } catch (e) { ep = null; try { appendLog(`META_EP_AFTER_ANILIST_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+          try {
+            if (!ep && apiKey) {
+              try { appendLog(`META_TMDB_EP_FALLBACK_PARENT q=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+              const tmEp = await searchTmdbAndEpisode(a.name || parentCandidate, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+              if (tmEp && tmEp.episode) {
+                ep = tmEp.episode
+                try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_OK q=${a.name || parentCandidate} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
+              } else {
+                try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_NONE q=${a.name || parentCandidate}`) } catch (e) {}
+              }
+            }
+          } catch (e) { try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+          return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
+        }
+      }
+    }
+
+    // AniList didn't find anything; try TMDb fallback (filename then parent)
+    if (apiKey) {
+      for (let i=0;i<Math.min(variants.length,3);i++) {
+        const t = await searchTmdbAndEpisode(variants[i], apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+        try { appendLog(`META_TMDB_SEARCH q=${variants[i]} found=${t ? 'yes' : 'no'}`) } catch (e) {}
+        if (t) return { name: t.name, raw: Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' }), episode: t.episode || null }
+      }
+      if (parentCandidate) {
+        for (let i=0;i<Math.min(makeVariants(parentCandidate).length,3);i++) {
+          const pv = makeVariants(parentCandidate)[i]
+          const t = await searchTmdbAndEpisode(pv, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+          try { appendLog(`META_TMDB_PARENT_SEARCH q=${pv} found=${t ? 'yes' : 'no'}`) } catch (e) {}
+          if (t) return { name: t.name, raw: Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' }), episode: t.episode || null }
+        }
+      }
+    }
+  } catch (e) {
+    try { appendLog(`META_LOOKUP_ERROR title=${String(title).slice(0,100)} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+  }
+
+  return null
+}
 
 async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   try { console.log('DEBUG: externalEnrich START path=', canonicalPath, 'providedKeyPresent=', !!providedKey); } catch (e) {}
@@ -496,13 +518,15 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // determine username (if provided) so we can honor per-user default provider and track fallback counts
   const username = opts && opts.username ? opts.username : null
   // determine preferred provider: per-user -> server -> default to 'tmdb'
-  // default to AniList as the canonical series matcher unless overridden by user/server
-  let preferredProvider = 'anilist'
+  let preferredProvider = 'tmdb'
   try {
     if (username && users[username] && users[username].settings && users[username].settings.default_meta_provider) preferredProvider = users[username].settings.default_meta_provider
     else if (serverSettings && serverSettings.default_meta_provider) preferredProvider = serverSettings.default_meta_provider
-  } catch (e) { preferredProvider = 'anilist' }
-  try { preferredProvider = String(preferredProvider || 'anilist').toLowerCase() } catch (e) { preferredProvider = 'anilist' }
+  } catch (e) { preferredProvider = 'tmdb' }
+  // normalize preferred provider to tmdb (kitsu removed)
+  preferredProvider = 'tmdb'
+  if (tmdbKey || preferredProvider) {
+    try {
   try { console.log('DEBUG: externalEnrich will attempt metaLookup seriesLookupTitle=', seriesLookupTitle, 'tmdbKeyPresent=', !!tmdbKey); } catch (e) {}
       const parentPath = path.resolve(path.dirname(canonicalPath))
       // Ensure we search the series title first. If the parsed `seriesName` still contains
@@ -557,59 +581,115 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   }
   let res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts)
   try { console.log('DEBUG: externalEnrich metaLookup returned res=', !!res); } catch (e) {}
-
-  // Diagnostic: log a trimmed version of the metaLookup response
+  // Diagnostic: log a trimmed version of the metaLookup response so we can
+  // see whether the provider returned series/episode data before parent fallback.
   try {
     const shortRaw = (res && res.raw) ? JSON.stringify(res.raw).slice(0,400).replace(/\n/g,' ') : ''
     appendLog(`META_LOOKUP_RAW title=${seriesLookupTitle} found=${res && res.name ? 'yes' : 'no'} resName=${res && res.name ? res.name : '<none>'} raw=${shortRaw}`)
   } catch (e) { try { console.log('DEBUG: append META_LOOKUP_RAW failed', e && e.message) } catch (e) {} }
-
-  // If no result and parentCandidate available, try parent lookup
-  if (!res && parentCandidate) {
+  // If no provider result found for the filename-derived title, and we have a
+  // parent folder candidate, attempt a secondary lookup using the parent title
+  // (do not allow parent to override parsed season/episode; we still keep
+  // filename-derived numbers locally). This ensures we fall back to parent
+  // folder name when the filename title fails to match.
+    if (!res && parentCandidate) {
     try { appendLog(`META_PARENT_FALLBACK trying parentCandidate=${parentCandidate}`) } catch (e) {}
     try {
+      // Ensure we explicitly pass season/episode when invoking parent-based lookup
+      // so TMDb will perform an episode-level lookup once the series is matched.
       const parentMetaOpts = Object.assign({}, metaOpts || {}, { season: normSeason, episode: normEpisode, parentCandidate: parentCandidate, parentPath: parentPath, _parentDirect: true });
       try { appendLog(`META_PARENT_FALLBACK invoking metaLookup parentCandidate=${parentCandidate} optsSeason=${parentMetaOpts.season != null ? parentMetaOpts.season : '<none>'} optsEpisode=${parentMetaOpts.episode != null ? parentMetaOpts.episode : '<none>'}`) } catch (e) {}
       const pRes = await metaLookup(parentCandidate, tmdbKey, parentMetaOpts)
-      if (pRes) { try { appendLog(`META_PARENT_FALLBACK success parentCandidate=${parentCandidate}`) } catch (e) {} ; res = pRes }
-      else { try { appendLog(`META_PARENT_FALLBACK none parentCandidate=${parentCandidate}`) } catch (e) {} }
-    } catch (e) { try { appendLog(`META_PARENT_FALLBACK error parentCandidate=${parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (e) {} }
-  }
-
-  // Map provider response into guess
-  try {
-    if (res && res.name) {
-      const raw = res.raw || {}
-      guess.title = String(res.name || raw.name || raw.title || guess.title).trim()
-      if (res.episode) {
-        const ep = res.episode
-        const epTitle = ep.name || ep.title || (ep.attributes && ep.attributes && ep.attributes.canonicalTitle)
-        if (epTitle) guess.episodeTitle = String(epTitle).trim()
+      if (pRes) {
+        try { appendLog(`META_PARENT_FALLBACK success parentCandidate=${parentCandidate}`) } catch (e) {}
+        res = pRes
+      } else {
+        try { appendLog(`META_PARENT_FALLBACK none parentCandidate=${parentCandidate}`) } catch (e) {}
       }
-      const providerName = (raw && raw.source) ? String(raw.source).toLowerCase() : 'tmdb'
-      guess.provider = { provider: providerName, raw: raw }
-      try {
-        const ry = raw && raw.startDate && raw.startDate.year ? Number(raw.startDate.year) : null
-        if (!isNaN(ry) && ry) guess.year = String(ry)
-      } catch (e) {}
-      guess.tmdb = { matched: providerName === 'tmdb' }
-    } else {
-      guess.tmdb = { matched: false }
+    } catch (e) {
+      try { appendLog(`META_PARENT_FALLBACK error parentCandidate=${parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (e) {}
     }
-  } catch (e) {
-    guess.tmdb = { error: e && e.message ? e.message : String(e) }
+  }
+      if (res && res.name) {
+        // Map TMDb response into our guess structure explicitly
+        try {
+          const raw = res.raw || {}
+          // Title (series/movie)
+          guess.title = String(res.name || raw.name || raw.title || guess.title).trim()
+
+          // Episode-level data (when available)
+          if (res.episode) {
+            const ep = res.episode
+            const epTitle = ep.name || ep.title || (ep.attributes && ep.attributes.canonicalTitle)
+            if (epTitle) guess.episodeTitle = String(epTitle).trim()
+          }
+
+          // Provider block - set provider name based on raw.source (tmdb or kitsu)
+          const providerName = (raw && raw.source) ? String(raw.source).toLowerCase() : 'tmdb'
+          guess.provider = { matched: true, provider: providerName, id: raw.id || null, raw: raw }
+
+          // Back-compat: populate tmdb object only when provider is TMDb
+          if (providerName === 'tmdb') {
+            guess.tmdb = { matched: true, id: raw.id || null, raw: raw }
+          } else {
+            guess.tmdb = { matched: false }
+          }
+
+          // IMPORTANT: keep parsed episode/season strictly from filename.
+          // Prevent parent-folder parsing or provider results from overriding
+          // the episode/season numbers that were extracted from the filename.
+          try {
+            guess.season = normSeason;
+            guess.episode = normEpisode;
+          } catch (e) { /* best-effort */ }
+
+          // Year extraction: prefer episode air date (if episode lookup was performed),
+          // then season-level air date (seasonAirDate attached earlier), then series-level
+          // first_air_date/release_date. This ensures {year} reflects the specific season
+          // (or episode) rather than the series' initial air year.
+          let dateStr = null
+          try {
+            if (res && res.episode) {
+              dateStr = res.episode.air_date || res.episode.airDate || (res.episode.attributes && (res.episode.attributes.air_date || res.episode.attributes.airDate)) || null
+            }
+          } catch (e) { /* ignore */ }
+          if (!dateStr) {
+            dateStr = raw.seasonAirDate || raw.first_air_date || raw.release_date || raw.firstAirDate || (raw.attributes && (raw.attributes.startDate || raw.attributes.releaseDate))
+          }
+          if (dateStr) {
+            const y = new Date(String(dateStr)).getFullYear()
+            if (!isNaN(y)) guess.year = String(y)
+          } else {
+            // Some providers (AniList) return nested startDate objects like { year: 2010 }
+            try {
+              if (raw && raw.startDate && typeof raw.startDate === 'object' && raw.startDate.year) {
+                const ry = Number(raw.startDate.year)
+                if (!isNaN(ry)) guess.year = String(ry)
+              }
+            } catch (e) {}
+          }
+        } catch (mapErr) {
+          // Map error -> keep guess as-is but note tmdb not matched
+          guess.tmdb = { matched: false }
+        }
+      } else {
+  guess.tmdb = { matched: false }
+      }
+    } catch (e) {
+  guess.tmdb = { error: e.message }
+    }
   }
 
   return {
     sourceId: 'mock:1',
     title: guess.title || base,
-    year: guess.year || null,
+  year: guess.year || null,
     parsedName: guess.parsedName,
     episodeRange: parsed.episodeRange,
     season: guess.season,
     episode: guess.episode,
     episodeTitle: guess.episodeTitle,
-    tmdb: guess.tmdb || null,
+  tmdb: guess.tmdb || null,
     provider: guess.provider || null,
     language: 'en',
     timestamp: Date.now(),

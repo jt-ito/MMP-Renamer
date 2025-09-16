@@ -37,8 +37,7 @@ export default function Settings({ pushToast }){
   // keys: tmdb for TMDb (keep backward compatibility with tvdb_api_key)
   const [tmdbKey, setTmdbKey] = useState('')
   const [anilistKey, setAnilistKey] = useState('')
-  // default provider used for metadata lookups. AniList is preferred for anime.
-  const [defaultProvider, setDefaultProvider] = useState('anilist')
+  const [defaultProvider, setDefaultProvider] = useState('tmdb')
   const [renameTemplate, setRenameTemplate] = useState('{title} - {epLabel} - {episodeTitle}')
   const [showTmdbKey, setShowTmdbKey] = useState(false)
   const [showAnilistKey, setShowAnilistKey] = useState(false)
@@ -182,11 +181,9 @@ export default function Settings({ pushToast }){
           <div style={{marginTop:8}}>
             <label style={{fontSize:13, color:'var(--muted)'}}>Preferred metadata provider</label>
             <div style={{display:'flex', gap:8, marginTop:6}}>
-              <button className={defaultProvider === 'anilist' ? 'btn-save' : 'btn-ghost'} onClick={() => { setDefaultProvider('anilist'); setDirty(true) }}>AniList</button>
               <button className={defaultProvider === 'tmdb' ? 'btn-save' : 'btn-ghost'} onClick={() => { setDefaultProvider('tmdb'); setDirty(true) }}>TMDb</button>
-              <button className={defaultProvider === 'kitsu' ? 'btn-save' : 'btn-ghost'} onClick={() => { setDefaultProvider('kitsu'); setDirty(true) }}>Kitsu</button>
             </div>
-            <div style={{fontSize:12, color:'var(--muted)', marginTop:6}}>AniList is preferred for anime; TMDb and Kitsu are available fallbacks for other content. The server will still follow its lookup order but will try to respect this preference when possible.</div>
+            <div style={{fontSize:12, color:'var(--muted)', marginTop:6}}>TMDb is the only external provider used for metadata lookups.</div>
           </div>
           <input value={renameTemplate} onChange={e=>{ setRenameTemplate(e.target.value); setDirty(true) }} placeholder="e.g. {title} ({year}) - {epLabel} - {episodeTitle}" style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)', marginTop:6}} />
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>Available tokens: <code>{'{title}'}</code>, <code>{'{basename}'}</code>, <code>{'{year}'}</code>, <code>{'{epLabel}'}</code>, <code>{'{episodeTitle}'}</code>, <code>{'{season}'}</code>, <code>{'{episode}'}</code>, <code>{'{episodeRange}'}</code>, <code>{'{tmdbId}'}</code> <span style={{opacity:0.8}}>({'{tmdbId}'} contains the TMDb id)</span></div>
