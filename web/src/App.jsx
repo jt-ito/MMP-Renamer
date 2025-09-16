@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useEffect, useState } from 'react'
 import axios from 'axios'
 import { FixedSizeList as List } from 'react-window'
 import ToastContainer from './components/Toast'
@@ -348,6 +348,7 @@ export default function App() {
     try {
       pushToast && pushToast('Scan', 'Refreshing metadata (server-side) — this may take a while')
   // enter metadata phase and reset metadata progress
+  setMetaPhase(true)
   setMetaProgress(0)
   try { phaseStartRef.current.metaStart = Date.now() } catch (e) {}
       // Start a background poll to update header progress during the full refresh.
@@ -732,7 +733,7 @@ export default function App() {
       const r = await axios.post(API(`/scan/${scanId}/refresh`), { tmdb_api_key: providerKey || undefined })
       // If server started background work, poll for progress
       if (r.status === 202 && r.data && r.data.background) {
-  const toastId = pushToast && pushToast('Refresh','Refresh started on server', { sticky: true, spinner: true })
+        const toastId = pushToast && pushToast('Refresh','Refresh started on server', { sticky: true, spinner: true })
         try {
           await pollRefreshProgress(scanId, (prog) => {
             // update toast with percent
@@ -743,9 +744,6 @@ export default function App() {
           if (pushToast) pushToast('Refresh','Server-side refresh complete')
         } catch (e) {
           if (pushToast) pushToast('Refresh','Server-side refresh failed')
-        } finally {
-          // Ensure header reflects completion
-          try { setMetaProgress(100) } catch (e) {}
         }
         // after background run completes, fetch latest enrich entries for items
         try {
