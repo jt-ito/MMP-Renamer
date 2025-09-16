@@ -295,14 +295,27 @@ async function metaLookup(title, apiKey, opts = {}) {
       const a = await searchAniList(v)
       try { appendLog(`META_ANILIST_SEARCH q=${v} found=${a ? 'yes' : 'no'}`) } catch (e) {}
       if (a) {
-        // fetch episode name via Kitsu using filename episode number (always)
+        // Attempt TMDb episode lookup first when a TMDb key is available; otherwise try Kitsu.
+        // This prefers TMDb episode titles when present but falls back to Kitsu for compatibility.
         let ep = null
         try {
-          // If no TMDb key is present, explicitly log that we will use Kitsu
-          if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY q=${a.name || v}`) } catch (e) {} }
-          ep = await fetchKitsuEpisode(a.name || v, opts && opts.episode != null ? opts.episode : null)
-          try { appendLog(`META_KITSU_EP q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
-        } catch (e) { ep = null; try { appendLog(`META_KITSU_EP_ERROR q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+          if (apiKey) {
+            try { appendLog(`META_TMDB_EP_AFTER_ANILIST q=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+            const tmEp = await searchTmdbAndEpisode(a.name || v, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+            if (tmEp && tmEp.episode) {
+              ep = tmEp.episode
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
+            } else {
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_NONE q=${a.name || v}`) } catch (e) {}
+            }
+          }
+          if (!ep) {
+            // If no TMDb key is present, explicitly log that we will use Kitsu
+            if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY q=${a.name || v}`) } catch (e) {} }
+            ep = await fetchKitsuEpisode(a.name || v, opts && opts.episode != null ? opts.episode : null)
+            try { appendLog(`META_KITSU_EP q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
+          }
+        } catch (e) { ep = null; try { appendLog(`META_EP_AFTER_ANILIST_ERROR q=${a.name || v} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
         // If Kitsu didn't return an episode title and we have a TMDb key, try TMDb episode endpoint as a fallback
         try {
           if (!ep && apiKey) {
@@ -333,11 +346,23 @@ async function metaLookup(title, apiKey, opts = {}) {
         if (a) {
           let ep = null
           try {
-            // If no TMDb key is present, explicitly log that we will use Kitsu
-            if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY_PARENT q=${a.name || parentCandidate}`) } catch (e) {} }
-            ep = await fetchKitsuEpisode(a.name || parentCandidate, opts && opts.episode != null ? opts.episode : null)
-            try { appendLog(`META_KITSU_EP_PARENT q=${a.name || parentCandidate} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
-          } catch (e) { ep = null; try { appendLog(`META_KITSU_EP_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+            if (apiKey) {
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT q=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+              const tmEp = await searchTmdbAndEpisode(a.name || parentCandidate, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+              if (tmEp && tmEp.episode) {
+                ep = tmEp.episode
+                try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
+              } else {
+                try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_NONE q=${a.name || parentCandidate}`) } catch (e) {}
+              }
+            }
+            if (!ep) {
+              // If no TMDb key is present, explicitly log that we will use Kitsu
+              if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY_PARENT q=${a.name || parentCandidate}`) } catch (e) {} }
+              ep = await fetchKitsuEpisode(a.name || parentCandidate, opts && opts.episode != null ? opts.episode : null)
+              try { appendLog(`META_KITSU_EP_PARENT q=${a.name || parentCandidate} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
+            }
+          } catch (e) { ep = null; try { appendLog(`META_EP_AFTER_ANILIST_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
           try {
             if (!ep && apiKey) {
               try { appendLog(`META_TMDB_EP_FALLBACK_PARENT q=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
