@@ -130,6 +130,37 @@ function writeJson(filePath, obj) {
   }
 }
 
+// Specialized writer for enrichStoreFile that preserves applied/hidden flags
+function writeEnrichStore() {
+  try {
+    let onDisk = {};
+    try { onDisk = JSON.parse(fs.readFileSync(enrichStoreFile, 'utf8') || '{}') } catch (e) { onDisk = {} }
+    // Merge applied/hidden and related metadata from on-disk entries into current enrichCache
+      try {
+        for (const k of Object.keys(onDisk || {})) {
+        try {
+          const prev = onDisk[k] || {};
+          if (!prev) continue;
+          if (!enrichCache[k]) {
+            // preserve entries that exist on disk but not in memory
+            enrichCache[k] = prev;
+          } else {
+            // ensure applied/hidden fields persist where present on disk
+            if (prev.applied && !enrichCache[k].applied) enrichCache[k].applied = prev.applied;
+            if (prev.hidden && !enrichCache[k].hidden) enrichCache[k].hidden = prev.hidden;
+            if (typeof prev.appliedAt !== 'undefined' && typeof enrichCache[k].appliedAt === 'undefined') enrichCache[k].appliedAt = prev.appliedAt;
+            if (typeof prev.appliedTo !== 'undefined' && typeof enrichCache[k].appliedTo === 'undefined') enrichCache[k].appliedTo = prev.appliedTo;
+            if (typeof prev.metadataFilename !== 'undefined' && typeof enrichCache[k].metadataFilename === 'undefined') enrichCache[k].metadataFilename = prev.metadataFilename;
+            if (typeof prev.renderedName !== 'undefined' && typeof enrichCache[k].renderedName === 'undefined') enrichCache[k].renderedName = prev.renderedName;
+          }
+        } catch (e) { /* per-key best-effort */ }
+      }
+    } catch (e) {}
+      // finally persist the merged enrichCache to disk
+  try { writeEnrichStore(); } catch (e) { try { console.error('writeEnrichStore failed', e && e.message ? e.message : e) } catch (ee) {} }
+  } catch (e) { try { console.error('writeEnrichStore failed', e && e.message ? e.message : e) } catch (ee) {} }
+}
+
 // Normalizer to ensure enrich entries have consistent shape used by the UI
 function normalizeEnrichEntry(entry) {
   try {
@@ -903,7 +934,7 @@ app.post('/api/scan', async (req, res) => {
     }
     // persist parsed cache and enrich cache
     try { writeJson(parsedCacheFile, parsedCache) } catch (e) {}
-    writeJson(enrichStoreFile, enrichCache);
+  writeEnrichStore();
   } catch (e) { appendLog(`PARSE_MODULE_FAIL err=${e.message}`); }
   // Wrap the remainder of the request flow so we can release the lock if something fails
   try {
@@ -986,12 +1017,12 @@ app.post('/api/scan', async (req, res) => {
             } catch (e) {
               enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, data, { providerRenderedName: providerRendered, sourceId: 'provider', cachedAt: Date.now() }));
             }
-            // persist caches
-            try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
+            // persist caches (preserve applied/hidden flags)
+            try { writeEnrichStore(); } catch (e) {}
           } catch (e) {
-            // if provider render fails, still persist raw provider data
-            enrichCache[key] = Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' });
-            try { writeJson(enrichStoreFile, enrichCache) } catch (ee) {}
+            // if provider render fails, still persist raw provider data (preserve flags)
+            enrichCache[key] = preserveAppliedFlags(enrichCache[key] || {}, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
+            try { writeEnrichStore(); } catch (ee) {}
           }
             // update progress for polling clients
             try { const refreshProgressKey = `refreshScan:${scanId}`; if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].processed += 1; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch(e){}
@@ -1299,7 +1330,7 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
     const key = canonicalize(p)
     enrichCache[key] = enrichCache[key] || {}
     enrichCache[key].hidden = true
-    writeJson(enrichStoreFile, enrichCache)
+  try { writeEnrichStore(); } catch (e) { try { console.error('writeEnrichStore failed', e && e.message ? e.message : e) } catch (ee) {} }
     appendLog(`HIDE path=${p}`)
     return res.json({ ok: true, path: key })
   } catch (e) { return res.status(500).json({ error: e.message }) }
@@ -1336,7 +1367,7 @@ app.post('/api/enrich/sweep', requireAuth, requireAdmin, (req, res) => {
     } catch (e) {}
 
     // persist changes
-    try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
+  try { writeEnrichStore(); } catch (e) { try { console.error('writeEnrichStore failed', e && e.message ? e.message : e) } catch (ee) {} }
     try { writeJson(renderedIndexFile, renderedIndex) } catch (e) {}
     appendLog(`ENRICH_SWEEP removed=${removed.length}`);
     return res.json({ ok: true, removedCount: removed.length, removed });
@@ -1440,7 +1471,7 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
           try { if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].processed += 1; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch(e){}
         }
       }
-      writeJson(enrichStoreFile, enrichCache);
+  try { writeEnrichStore(); } catch (e) { try { console.error('writeEnrichStore failed', e && e.message ? e.message : e) } catch (ee) {} }
       appendLog(`REFRESH_SCAN_COMPLETE scan=${req.params.scanId} items=${results.length}`);
       // mark progress as complete
       try { if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].status = 'complete'; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch(e){}
@@ -1691,7 +1722,7 @@ function sweepEnrichCache() {
       }
     } catch (e) {}
     // persist
-    try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
+  try { writeEnrichStore(); } catch (e) { try { console.error('writeEnrichStore failed', e && e.message ? e.message : e) } catch (ee) {} }
     try { writeJson(renderedIndexFile, renderedIndex) } catch (e) {}
     if (removed.length) appendLog(`ENRICH_SWEEP_AUTO removed=${removed.length}`);
   } catch (e) { appendLog('ENRICH_SWEEP_ERR ' + (e && e.message ? e.message : String(e))) }
@@ -1983,7 +2014,7 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                   if (metaName) renderedIndex[metaName] = targetKey
                 } catch (e) {}
               } catch (e) {}
-              writeJson(enrichStoreFile, enrichCache);
+              try { writeEnrichStore(); } catch (e) { try { console.error('writeEnrichStore failed', e && e.message ? e.message : e) } catch (ee) {} }
               try { writeJson(renderedIndexFile, renderedIndex) } catch (e) {}
             } catch (e) { appendLog(`HARDLINK_MARK_FAIL from=${from} err=${e.message}`) }
           } catch (err) {
@@ -2076,7 +2107,7 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                   if (metaName) renderedIndex[metaName] = targetKey
                 } catch (e) {}
               } catch (e) {}
-              writeJson(enrichStoreFile, enrichCache);
+              try { writeEnrichStore(); } catch (e) { try { console.error('writeEnrichStore failed', e && e.message ? e.message : e) } catch (ee) {} }
               try { writeJson(renderedIndexFile, renderedIndex) } catch (e) {}
             } catch (e) { appendLog(`HARDLINK_MARK_FAIL from=${from} err=${e.message}`) }
           } catch (err) {
@@ -2131,7 +2162,7 @@ app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {
       }
     }
 
-    writeJson(enrichStoreFile, enrichCache)
+  try { writeEnrichStore(); } catch (e) { try { console.error('writeEnrichStore failed', e && e.message ? e.message : e) } catch (ee) {} }
     appendLog(`UNAPPROVE count=${changed.length}`)
     res.json({ ok: true, unapproved: changed })
   } catch (e) { res.status(500).json({ error: e.message }) }
