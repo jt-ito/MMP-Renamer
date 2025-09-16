@@ -298,6 +298,8 @@ async function metaLookup(title, apiKey, opts = {}) {
         // fetch episode name via Kitsu using filename episode number (always)
         let ep = null
         try {
+          // If no TMDb key is present, explicitly log that we will use Kitsu
+          if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY q=${a.name || v}`) } catch (e) {} }
           ep = await fetchKitsuEpisode(a.name || v, opts && opts.episode != null ? opts.episode : null)
           try { appendLog(`META_KITSU_EP q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
         } catch (e) { ep = null; try { appendLog(`META_KITSU_EP_ERROR q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
@@ -331,6 +333,8 @@ async function metaLookup(title, apiKey, opts = {}) {
         if (a) {
           let ep = null
           try {
+            // If no TMDb key is present, explicitly log that we will use Kitsu
+            if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY_PARENT q=${a.name || parentCandidate}`) } catch (e) {} }
             ep = await fetchKitsuEpisode(a.name || parentCandidate, opts && opts.episode != null ? opts.episode : null)
             try { appendLog(`META_KITSU_EP_PARENT q=${a.name || parentCandidate} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
           } catch (e) { ep = null; try { appendLog(`META_KITSU_EP_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
@@ -1164,6 +1168,9 @@ app.post('/api/enrich', async (req, res) => {
   else if (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.tmdb_api_key) tmdbKeyEarly = users[req.session.username].settings.tmdb_api_key;
   else if (serverSettings && serverSettings.tmdb_api_key) tmdbKeyEarly = serverSettings.tmdb_api_key;
     } catch (e) { tmdbKeyEarly = null }
+
+    // Masked diagnostic: did we resolve a TMDb key for this request?
+    try { appendLog(`TMDB_KEY_RESOLVED usingKey=${tmdbKeyEarly ? 'yes' : 'no'}`) } catch (e) {}
 
     // If we have a parsedCache entry and not forcing a provider refresh, return a lightweight enrichment
     // unless an authoritative provider key is present — in that case perform an external lookup so provider results can override parsed.
