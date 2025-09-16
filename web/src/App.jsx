@@ -899,16 +899,20 @@ export default function App() {
                   <div style={{display:'flex',flexDirection:'column'}}>
                     {/* combinedProgress maps scanProgress to 0-50% and metaProgress to 50-100% */}
                     {(() => {
-                      const scanPct = Number(scanProgress) || 0
-                      const metaPct = Number(metaProgress) || 0
-                      const combined = metaPhase ? Math.round(50 + (metaPct * 0.5)) : Math.round(scanPct * 0.5)
+                      // Configurable split for header progress: scan occupies SCAN_WEIGHT of the range
+                      // and metadata occupies META_WEIGHT. We map overall progress to 0-100.
+                      const SCAN_WEIGHT = 0.4 // 40% of the overall progress
+                      const META_WEIGHT = 0.6 // 60% of the overall progress (must sum to 1)
+                      const scanPct = Math.min(100, Math.max(0, Number(scanProgress) || 0))
+                      const metaPct = Math.min(100, Math.max(0, Number(metaProgress) || 0))
+                      const combined = metaPhase ? Math.round((SCAN_WEIGHT * 100) + (metaPct * META_WEIGHT)) : Math.round(scanPct * SCAN_WEIGHT)
                       return (
                         <div>Found {total} items. Scanning: {scanLoaded}/{total} ({combined}%)</div>
                       )
                     })()}
                     <div style={{height:12, width:'100%'}}>
                       <div className="progress-bar">
-                        <div className="fill" style={{ width: (metaPhase ? Math.round(50 + (metaProgress * 0.5)) : Math.round(scanProgress * 0.5)) + '%' }} />
+                        <div className="fill" style={{ width: (metaPhase ? ((SCAN_WEIGHT * 100) + (metaProgress * META_WEIGHT)) : (scanProgress * SCAN_WEIGHT)) + '%' }} />
                         <div className="shimmer" />
                       </div>
                     </div>
