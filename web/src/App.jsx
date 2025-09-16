@@ -733,6 +733,8 @@ export default function App() {
       const r = await axios.post(API(`/scan/${scanId}/refresh`), { tmdb_api_key: providerKey || undefined })
       // If server started background work, poll for progress
       if (r.status === 202 && r.data && r.data.background) {
+        // Enter metadata phase so header progress is mapped to metadata refresh
+        try { setMetaPhase(true); setMetaProgress(0); phaseStartRef.current.metaStart = Date.now() } catch (e) {}
         const toastId = pushToast && pushToast('Refresh','Refresh started on server', { sticky: true, spinner: true })
         try {
           await pollRefreshProgress(scanId, (prog) => {
@@ -744,6 +746,9 @@ export default function App() {
           if (pushToast) pushToast('Refresh','Server-side refresh complete')
         } catch (e) {
           if (pushToast) pushToast('Refresh','Server-side refresh failed')
+        } finally {
+          // Ensure header reflects completion and exit metadata phase
+          try { setMetaProgress(100); setTimeout(() => { try { setMetaPhase(false) } catch (e) {} }, 250) } catch (e) {}
         }
         // after background run completes, fetch latest enrich entries for items
         try {
