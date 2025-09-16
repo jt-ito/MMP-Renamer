@@ -161,7 +161,8 @@ export default function App() {
       const avg = (arr) => { if (!arr || !arr.length) return null; const sum = arr.reduce((a,b) => a + b, 0); return sum / arr.length }
       const sAvg = avg(s)
       const mAvg = avg(m)
-      if (!sAvg || !mAvg) return { scanWeight: 0.3, metaWeight: 0.7 }
+  // require at least 3 historical entries for both phases before trusting the heuristic
+  if (!sAvg || !mAvg || (s.length < 3) || (m.length < 3)) return { scanWeight: 0.3, metaWeight: 0.7 }
       const total = sAvg + mAvg
       if (total <= 0) return { scanWeight: 0.3, metaWeight: 0.7 }
       const scanWeight = Math.max(0.05, Math.min(0.9, sAvg / total))
