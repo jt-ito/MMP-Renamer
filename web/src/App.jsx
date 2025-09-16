@@ -145,6 +145,30 @@ export default function App() {
   const providerKey = (tmdbKey && String(tmdbKey).length) ? tmdbKey : (legacyTvdbKey || '')
   const scanOptionsRef = React.useRef({})
   const batchSize = 12
+  // dynamic weighting heuristic: store recent durations in localStorage and compute weights
+  const timingHistoryRef = useRef({ scanDurations: [], metaDurations: [] })
+  try {
+    const raw = localStorage.getItem('progressTimingHistory')
+    if (raw) timingHistoryRef.current = JSON.parse(raw)
+  } catch (e) {}
+  const saveTimingHistory = () => {
+    try { localStorage.setItem('progressTimingHistory', JSON.stringify(timingHistoryRef.current)) } catch (e) {}
+  }
+  function computeWeights() {
+    try {
+      const s = timingHistoryRef.current.scanDurations || []
+      const m = timingHistoryRef.current.metaDurations || []
+      const avg = (arr) => { if (!arr || !arr.length) return null; const sum = arr.reduce((a,b) => a + b, 0); return sum / arr.length }
+      const sAvg = avg(s)
+      const mAvg = avg(m)
+      if (!sAvg || !mAvg) return { scanWeight: 0.3, metaWeight: 0.7 }
+      const total = sAvg + mAvg
+      if (total <= 0) return { scanWeight: 0.3, metaWeight: 0.7 }
+      const scanWeight = Math.max(0.05, Math.min(0.9, sAvg / total))
+      return { scanWeight, metaWeight: 1 - scanWeight }
+    } catch (e) { return { scanWeight: 0.3, metaWeight: 0.7 } }
+  }
+  const phaseStartRef = useRef({ scanStart: null, metaStart: null })
 
   // Helper: consider an enrichment entry hidden for UI purposes if hidden or applied
   function isHiddenOrApplied(enriched) {
@@ -314,16 +338,18 @@ export default function App() {
         return n
       })
     }
-
+  // record scan start time
+  try { phaseStartRef.current.scanStart = Date.now() } catch (e) {}
     // Persist options
     scanOptionsRef.current = options || {}
 
     // After collecting all items, run the same server-side refresh the rescan uses so parsing is consistent
     try {
       pushToast && pushToast('Scan', 'Refreshing metadata (server-side) — this may take a while')
-      // enter metadata phase and reset metadata progress
-      setMetaPhase(true)
-      setMetaProgress(0)
+  // enter metadata phase and reset metadata progress
+  setMetaPhase(true)
+  setMetaProgress(0)
+  try { phaseStartRef.current.metaStart = Date.now() } catch (e) {}
       // Start a background poll to update header progress during the full refresh.
       // This mirrors the progress the notification would show but only updates the header state
       // (no toasts) so the header progress doesn't stay at 0% for large scans.
@@ -339,6 +365,21 @@ export default function App() {
       })();
 
       await refreshScan(r.data.scanId)
+      // record durations after metadata refresh completes
+      try {
+        const now = Date.now()
+        const scanStart = phaseStartRef.current.scanStart
+        const metaStart = phaseStartRef.current.metaStart
+        if (scanStart && metaStart) {
+          const scanDur = metaStart - scanStart
+          const metaDur = now - metaStart
+          const hist = timingHistoryRef.current || { scanDurations: [], metaDurations: [] }
+          hist.scanDurations = (hist.scanDurations || []).concat([scanDur]).slice(-10)
+          hist.metaDurations = (hist.metaDurations || []).concat([metaDur]).slice(-10)
+          timingHistoryRef.current = hist
+          saveTimingHistory()
+        }
+      } catch (e) {}
       // Now refresh client-side enrich for all collected paths and report progress
       const paths = collected.map(it => it.canonicalPath).filter(Boolean)
       if (paths.length > 0) {
@@ -901,18 +942,17 @@ export default function App() {
                     {(() => {
                       // Configurable split for header progress: scan occupies SCAN_WEIGHT of the range
                       // and metadata occupies META_WEIGHT. We map overall progress to 0-100.
-                      const SCAN_WEIGHT = 0.3 // 30% of the overall progress
-                      const META_WEIGHT = 0.7 // 70% of the overall progress (must sum to 1)
+                      const { scanWeight, metaWeight } = computeWeights()
                       const scanPct = Math.min(100, Math.max(0, Number(scanProgress) || 0))
                       const metaPct = Math.min(100, Math.max(0, Number(metaProgress) || 0))
-                      const combined = metaPhase ? Math.round((SCAN_WEIGHT * 100) + (metaPct * META_WEIGHT)) : Math.round(scanPct * SCAN_WEIGHT)
+                      const combined = metaPhase ? Math.round((scanWeight * 100) + (metaPct * metaWeight)) : Math.round(scanPct * scanWeight)
                       return (
                         <div>Found {total} items. Scanning: {scanLoaded}/{total} ({combined}%)</div>
                       )
                     })()}
                     <div style={{height:12, width:'100%'}}>
                       <div className="progress-bar">
-                        <div className="fill" style={{ width: (metaPhase ? ((SCAN_WEIGHT * 100) + (metaProgress * META_WEIGHT)) : (scanProgress * SCAN_WEIGHT)) + '%' }} />
+                        <div className="fill" style={{ width: (metaPhase ? ((computeWeights().scanWeight * 100) + (metaProgress * computeWeights().metaWeight)) : (scanProgress * computeWeights().scanWeight)) + '%' }} />
                         <div className="shimmer" />
                       </div>
                     </div>
