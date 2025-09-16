@@ -1561,10 +1561,10 @@ app.post('/api/rename/preview', (req, res) => {
     const fileName = (nameWithoutExt + ext).trim();
     // If an output path is configured, plan a hardlink under that path preserving a Jellyfin-friendly layout
     let toPath;
-    if (effectiveOutput) {
-  // folder: <output>/<Show Title>/Season NN for series, keep <Show Title (Year)> for movies
-  const isSeriesFolder = (meta && (meta.season != null || meta.episode != null || meta.episodeRange));
-  const titleFolder = isSeriesFolder ? sanitize(title) : (year ? `${sanitize(title)} (${year})` : sanitize(title));
+      if (effectiveOutput) {
+    // folder: <output>/<Show Title>/Season NN for series, keep <Show Title (Year)> for movies
+    const isSeriesFolder = (meta && (meta.season != null || meta.episode != null || meta.episodeRange));
+    const titleFolder = isSeriesFolder ? sanitize(stripTrailingYear(title)) : (year ? `${sanitize(title)} (${year})` : sanitize(title));
       const seasonFolder = (meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
       const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
       // filename should directly be the rendered template (nameWithoutExt) + ext
@@ -1583,6 +1583,13 @@ app.post('/api/rename/preview', (req, res) => {
 
 function sanitize(s) {
   return String(s).replace(/[\\/:*?"<>|]/g, '');
+}
+
+// Remove trailing year in parentheses, e.g. "Show (2022)" -> "Show"
+function stripTrailingYear(s) {
+  try {
+    return String(s || '').replace(/\s*\(\s*\d{4}\s*\)\s*$/, '').trim();
+  } catch (e) { return String(s || '').trim(); }
 }
 
 // Helper: clean series title to avoid duplicated episode label or episode title fragments
@@ -1800,7 +1807,10 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 // use provider tokens to construct the desired layout without hard-coding
                 const prov = enrichment.provider || {};
                 const provYear = prov.year || extractYear(prov, from) || '';
-                const titleFolder = sanitize(String(prov.title || prov.renderedName || path.basename(from, ext2)).trim() + (provYear ? ` (${provYear})` : ''));
+                // If this item represents a series (season/episode present), strip any trailing year from the series folder name
+                const rawTitleForFolder = String(prov.title || prov.renderedName || path.basename(from, ext2)).trim() || '';
+                const isSeriesProv = (prov && (prov.season != null || prov.episode != null));
+                const titleFolder = isSeriesProv ? sanitize(stripTrailingYear(rawTitleForFolder)) : sanitize(rawTitleForFolder + (provYear ? ` (${provYear})` : ''));
                 if (!configuredOut) {
                   appendLog(`HARDLINK_WARN no configured output path for from=${from} provider=${prov.renderedName}`);
                 }
@@ -1825,7 +1835,8 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                   if (sMatch !== -1) seriesFolderBase = seriesFolderBase.slice(0, sMatch).trim();
                   if (!seriesFolderBase) seriesFolderBase = String(prov.title || '').trim() + (prov.year ? ` (${prov.year})` : '');
                   // For series, prefer a folder named by the series without the year suffix.
-                  // (Do not append year for series. Movies are handled in the else branch above.)
+                  // Strip any trailing year like " (2022)" to avoid per-year top-level folders for same series.
+                  try { seriesFolderBase = stripTrailingYear(seriesFolderBase); } catch (e) { appendLog('META_STRIP_YEAR_FAIL', `${seriesFolderBase} -> ${String(e)}`); }
                   const dir = path.join(baseOut, sanitize(seriesFolderBase), seasonFolder);
                   const filenameBase = sanitize(seriesRenderedRaw);
                   finalFileName2 = (filenameBase + ext2).trim();
