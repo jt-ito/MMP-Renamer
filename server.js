@@ -630,6 +630,14 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
           if (dateStr) {
             const y = new Date(String(dateStr)).getFullYear()
             if (!isNaN(y)) guess.year = String(y)
+          } else {
+            // Some providers (AniList) return nested startDate objects like { year: 2010 }
+            try {
+              if (raw && raw.startDate && typeof raw.startDate === 'object' && raw.startDate.year) {
+                const ry = Number(raw.startDate.year)
+                if (!isNaN(ry)) guess.year = String(ry)
+              }
+            } catch (e) {}
           }
         } catch (mapErr) {
           // Map error -> keep guess as-is but note tmdb not matched
@@ -879,6 +887,12 @@ app.post('/api/scan', async (req, res) => {
   else if (serverSettings && serverSettings.tmdb_api_key) tmdbKey = serverSettings.tmdb_api_key;
   } catch (e) { tmdbKey = null }
 
+      // create a lightweight progress tracker so clients can poll this initial background pass
+      try {
+        const refreshProgressKey = `refreshScan:${scanId}`;
+        refreshProgress[refreshProgressKey] = { processed: 0, total: first.length, lastUpdated: Date.now(), status: 'running' };
+      } catch (e) {}
+
       for (const it of first) {
         try {
           const key = canonicalize(it.canonicalPath);
@@ -935,8 +949,12 @@ app.post('/api/scan', async (req, res) => {
             enrichCache[key] = Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' });
             try { writeJson(enrichStoreFile, enrichCache) } catch (ee) {}
           }
+            // update progress for polling clients
+            try { const refreshProgressKey = `refreshScan:${scanId}`; if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].processed += 1; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch(e){}
         } catch (e) { appendLog(`BACKGROUND_ENRICH_FAIL path=${it.canonicalPath} err=${e.message}`); }
       }
+        // mark progress complete for this background pass and schedule cleanup
+        try { const refreshProgressKey = `refreshScan:${scanId}`; if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].status = 'complete'; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } setTimeout(() => { try { delete refreshProgress[refreshProgressKey]; } catch(e){} }, 30*1000) } catch(e){}
     } catch (e) { appendLog(`BACKGROUND_FIRSTN_ENRICH_FAIL scan=${scanId} err=${e.message}`); }
     finally {
       try {
@@ -1615,27 +1633,45 @@ function extractYear(meta, fromPath) {
     if (ep) {
       const epDate = ep.air_date || ep.airDate || (ep.attributes && (ep.attributes.air_date || ep.attributes.airDate || ep.attributes.startDate)) || null
       if (epDate) {
-        const y = new Date(String(epDate)).getFullYear()
+        const y = new Date(String(epDate)).getUTCFullYear()
         if (!isNaN(y)) return String(y)
       }
     }
     // Season-level (TMDb attaches seasonAirDate earlier as seasonAirDate)
     const seasonDate = meta.seasonAirDate || (meta.raw && (meta.raw.seasonAirDate || (meta.raw.season && meta.raw.season.air_date))) || null
     if (seasonDate) {
-      const y = new Date(String(seasonDate)).getFullYear()
+      const y = new Date(String(seasonDate)).getUTCFullYear()
       if (!isNaN(y)) return String(y)
     }
     // Series-level typical fields
     const seriesDate = meta.first_air_date || meta.release_date || meta.firstAirDate || (meta.raw && (meta.raw.first_air_date || meta.raw.release_date || meta.raw.firstAirDate)) || null
     if (seriesDate) {
-      const y = new Date(String(seriesDate)).getFullYear()
+      const y = new Date(String(seriesDate)).getUTCFullYear()
       if (!isNaN(y)) return String(y)
     }
+    // Provider-specific startDate shapes (AniList returns raw.startDate { year })
+    try {
+      if (meta.raw && meta.raw.startDate) {
+        const sd = meta.raw.startDate
+        if (sd && typeof sd === 'object' && sd.year) {
+          const ry = Number(sd.year)
+          if (!isNaN(ry)) return String(ry)
+        } else if (sd && (typeof sd === 'string' || sd instanceof String)) {
+          const y = new Date(String(sd)).getUTCFullYear()
+          if (!isNaN(y)) return String(y)
+        }
+      }
+      if (meta.raw && meta.raw.attributes && (meta.raw.attributes.startDate || meta.raw.attributes.releaseDate)) {
+        const attrD = meta.raw.attributes.startDate || meta.raw.attributes.releaseDate
+  const y = new Date(String(attrD)).getUTCFullYear()
+  if (!isNaN(y)) return String(y)
+      }
+    } catch (e) {}
     // older/top-level year fields
     const candidates = [meta.year, meta.airedYear, meta.originalYear];
     for (const c of candidates) if (c && String(c).match(/^\d{4}$/)) return String(c);
     if (meta.timestamp) {
-      try { const d = new Date(Number(meta.timestamp)); if (!isNaN(d)) return String(d.getFullYear()) } catch (e) {}
+      try { const d = new Date(Number(meta.timestamp)); if (!isNaN(d)) return String(d.getUTCFullYear()) } catch (e) {}
     }
   } catch (e) { /* best-effort */ }
   // try to find a 4-digit year in title or parsedName
@@ -2050,6 +2086,8 @@ module.exports = module.exports || {};
 module.exports.externalEnrich = externalEnrich;
 // Export metaLookup for test harnesses and debugging
 module.exports.metaLookup = metaLookup;
+// Export extractYear for unit testing
+module.exports.extractYear = extractYear;
 
 // Only start the HTTP server when this file is run directly, not when required as a module
 if (require.main === module) {

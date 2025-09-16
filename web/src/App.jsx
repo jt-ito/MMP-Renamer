@@ -681,7 +681,9 @@ export default function App() {
         try {
           await pollRefreshProgress(scanId, (prog) => {
             // update toast with percent
-            if (pushToast) pushToast('Refresh', `Refreshing metadata: ${Math.round((prog.processed / Math.max(1, prog.total)) * 100)}% (${prog.processed}/${prog.total})`, { id: toastId, sticky: true, spinner: true })
+            const pct = Math.round((prog.processed / Math.max(1, prog.total)) * 100)
+            try { setMetaProgress(pct) } catch(e){}
+            if (pushToast) pushToast('Refresh', `Refreshing metadata: ${pct}% (${prog.processed}/${prog.total})`, { id: toastId, sticky: true, spinner: true })
           })
           if (pushToast) pushToast('Refresh','Server-side refresh complete')
         } catch (e) {
@@ -815,6 +817,28 @@ export default function App() {
                     }}
                     title="Approve selected"
                   >Approve selected</button>
+                ) : null}
+                {/* Rescan selected: appears only in select mode and when items are selected; does not reserve space when hidden */}
+                {selectMode && Object.keys(selected).length ? (
+                  <button
+                    className={"btn-ghost approve-button visible"}
+                    onClick={async () => {
+                      try {
+                        const selectedPaths = Object.keys(selected).filter(Boolean)
+                        if (!selectedPaths.length) return
+                        pushToast && pushToast('Rescan', `Rescanning ${selectedPaths.length} items...`)
+                        // set per-item loading while refresh happens
+                        const loadingMap = {}
+                        for (const p of selectedPaths) loadingMap[p] = true
+                        safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
+                        await refreshEnrichForPaths(selectedPaths)
+                        safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+                        setSelected({})
+                        pushToast && pushToast('Rescan', 'Rescan complete')
+                      } catch (e) { pushToast && pushToast('Rescan', 'Rescan failed') }
+                    }}
+                    title="Rescan selected"
+                  >Rescan selected</button>
                 ) : null}
               <button className={"btn-ghost" + (selectMode ? ' active' : '')} onClick={() => { setSelectMode(s => { if (s) setSelected({}); return !s }) }} title={selectMode ? 'Exit select mode' : 'Select items'}>Select</button>
             </div>
