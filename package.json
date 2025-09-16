@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
   "start": "node server.js",
-  "test": "node ./tests/test-extract-year.js",
+  "test": "node ./tests/test-extract-year.js && node ./tests/test-filename-parser.js",
   "test-hardlink": "node ./scripts/test-hardlink.js",
     "dev": "concurrently \"node server.js\" \"cd web && npm run dev\"",
     "web:install": "cd web && npm install",
