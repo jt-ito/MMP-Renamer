@@ -901,8 +901,8 @@ export default function App() {
                     {(() => {
                       // Configurable split for header progress: scan occupies SCAN_WEIGHT of the range
                       // and metadata occupies META_WEIGHT. We map overall progress to 0-100.
-                      const SCAN_WEIGHT = 0.4 // 40% of the overall progress
-                      const META_WEIGHT = 0.6 // 60% of the overall progress (must sum to 1)
+                      const SCAN_WEIGHT = 0.3 // 30% of the overall progress
+                      const META_WEIGHT = 0.7 // 70% of the overall progress (must sum to 1)
                       const scanPct = Math.min(100, Math.max(0, Number(scanProgress) || 0))
                       const metaPct = Math.min(100, Math.max(0, Number(metaProgress) || 0))
                       const combined = metaPhase ? Math.round((SCAN_WEIGHT * 100) + (metaPct * META_WEIGHT)) : Math.round(scanPct * SCAN_WEIGHT)
