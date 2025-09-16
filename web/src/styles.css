@@ -121,13 +121,12 @@ select.form-input:focus {
 
 .select-approve-wrap { position: static; display:inline-flex; align-items:center; min-width: 0 }
 
-/* Allow header to wrap and controls to flow only when select mode is active so the approve button can appear
-	without reserving width in the normal state. In select mode the search shrinks and controls may wrap. */
-.app.select-mode-shrink header { flex-wrap: wrap; align-items: center }
+/* Keep header items on a single line in select mode to avoid vertical shifting when approve/rescan buttons appear. */
+.app.select-mode-shrink header { flex-wrap: nowrap; align-items: center }
 /* When select mode is active, shrink the search and allow header actions to wrap beneath.
 	The approve button appears without reserving space; other controls maintain the same gap
 	defined by --header-button-gap and will wrap naturally to the next line if needed. */
-.app.select-mode-shrink .header-search { /* keep search from growing and pushing header actions apart; allow flexible shrink but keep a sensible minimum */ flex: 1 1 480px; min-width: 160px; max-width: calc(100% - 360px); margin-bottom: 8px }
+.app.select-mode-shrink .header-search { /* keep search from growing and pushing header actions apart; allow flexible shrink but keep a sensible minimum */ flex: 1 1 480px; min-width: 160px; max-width: calc(100% - 360px); margin-bottom: 0 }
 .app.select-mode-shrink .header-search .form-input { width: 100%; max-width: 100% }
 
 /* Make all settings/page buttons slightly more rounded to match modern look */
