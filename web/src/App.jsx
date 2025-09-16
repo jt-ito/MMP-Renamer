@@ -897,10 +897,18 @@ export default function App() {
               {scanMeta ? (
                 (scanning) ? (
                   <div style={{display:'flex',flexDirection:'column'}}>
-                    <div>Found {total} items. Scanning: {scanLoaded}/{total} ({metaPhase ? metaProgress : scanProgress}%)</div>
+                    {/* combinedProgress maps scanProgress to 0-50% and metaProgress to 50-100% */}
+                    {(() => {
+                      const scanPct = Number(scanProgress) || 0
+                      const metaPct = Number(metaProgress) || 0
+                      const combined = metaPhase ? Math.round(50 + (metaPct * 0.5)) : Math.round(scanPct * 0.5)
+                      return (
+                        <div>Found {total} items. Scanning: {scanLoaded}/{total} ({combined}%)</div>
+                      )
+                    })()}
                     <div style={{height:12, width:'100%'}}>
                       <div className="progress-bar">
-                        <div className="fill" style={{ width: (metaPhase ? metaProgress : scanProgress) + '%' }} />
+                        <div className="fill" style={{ width: (metaPhase ? Math.round(50 + (metaProgress * 0.5)) : Math.round(scanProgress * 0.5)) + '%' }} />
                         <div className="shimmer" />
                       </div>
                     </div>
