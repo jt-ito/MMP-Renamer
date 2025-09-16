@@ -3,6 +3,11 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+// small utilities
+const extractYear = require('./lib/extract-year');
+// probe export (temporary)
+try { module.exports = module.exports || {}; module.exports.__probe = 'ok'; } catch (e) {}
+try { module.exports = module.exports || {}; module.exports.extractYear = extractYear; } catch (e) {}
 
 // External API integration removed: TMDb-related helpers and https monkey-patch
 // have been disabled to eliminate external HTTP calls. The metaLookup function
@@ -203,9 +208,13 @@ async function metaLookup(title, apiKey, opts = {}) {
   // include AniList API key header when available (per-user or server)
       let anilistKey = null
       try {
-        if (opts && opts.anilist_key) anilistKey = opts.anilist_key
-        else if (opts && opts.username && users && users[opts.username] && users[opts.username].settings && users[opts.username].settings.anilist_api_key) anilistKey = users[opts.username].settings.anilist_api_key
-        else if (serverSettings && serverSettings.anilist_api_key) anilistKey = serverSettings.anilist_api_key
+        if (opts && opts.anilist_key) {
+          anilistKey = opts.anilist_key
+        } else if (opts && opts.username && users && users[opts.username] && users[opts.username].settings && users[opts.username].settings.anilist_api_key) {
+          anilistKey = users[opts.username].settings.anilist_api_key
+        } else if (serverSettings && serverSettings.anilist_api_key) {
+          anilistKey = serverSettings.anilist_api_key
+        }
       } catch (e) { anilistKey = null }
   const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' }
   if (anilistKey) headers['Authorization'] = `Bearer ${String(anilistKey)}`
@@ -287,7 +296,6 @@ async function metaLookup(title, apiKey, opts = {}) {
   }
 
   // Try AniList variants, then parent, then TMDb fallback
-  try {
     const variants = makeVariants(title)
     // try filename-derived variants first
     for (let i=0;i<Math.min(variants.length,3);i++) {
@@ -295,26 +303,30 @@ async function metaLookup(title, apiKey, opts = {}) {
       const a = await searchAniList(v)
       try { appendLog(`META_ANILIST_SEARCH q=${v} found=${a ? 'yes' : 'no'}`) } catch (e) {}
       if (a) {
-        // fetch episode name via Kitsu using filename episode number (always)
+        // Prefer TMDb for episode lookup when a TMDb API key is available; fall back to Kitsu if TMDb doesn't provide an episode
         let ep = null
+        let tmEp = null
         try {
-          ep = await fetchKitsuEpisode(a.name || v, opts && opts.episode != null ? opts.episode : null)
-          try { appendLog(`META_KITSU_EP q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
-        } catch (e) { ep = null; try { appendLog(`META_KITSU_EP_ERROR q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
-        // If Kitsu didn't return an episode title and we have a TMDb key, try TMDb episode endpoint as a fallback
-        try {
-          if (!ep && apiKey) {
-            try { appendLog(`META_TMDB_EP_FALLBACK q=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
-            const tmEp = await searchTmdbAndEpisode(a.name || v, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+          if (apiKey) {
+            try { appendLog(`META_TMDB_EP_ATTEMPT q=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+            tmEp = await searchTmdbAndEpisode(a.name || v, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
             if (tmEp && tmEp.episode) {
               ep = tmEp.episode
-              try { appendLog(`META_TMDB_EP_FALLBACK_OK q=${a.name || v} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
+              try { appendLog(`META_TMDB_EP_OK q=${a.name || v} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
             } else {
-              try { appendLog(`META_TMDB_EP_FALLBACK_NONE q=${a.name || v}`) } catch (e) {}
+              try { appendLog(`META_TMDB_EP_NONE q=${a.name || v}`) } catch (e) {}
             }
           }
-        } catch (e) { try { appendLog(`META_TMDB_EP_FALLBACK_ERROR q=${a.name || v} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
-        return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
+        } catch (e) { try { appendLog(`META_TMDB_EP_ERROR q=${a.name || v} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+        // If TMDb didn't provide an episode, try Kitsu as a fallback
+        if (!ep) {
+          try {
+            ep = await fetchKitsuEpisode(a.name || v, opts && opts.episode != null ? opts.episode : null)
+            try { appendLog(`META_KITSU_EP_FALLBACK q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
+          } catch (e) { ep = null; try { appendLog(`META_KITSU_EP_ERROR q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+        const retRaw = Object.assign({}, a.raw, { id: a.id, source: 'anilist' })
+        if (tmEp && tmEp.raw) retRaw._tmdb = tmEp.raw
+        return { name: a.name, raw: retRaw, episode: ep }
       }
     }
 
@@ -329,23 +341,26 @@ async function metaLookup(title, apiKey, opts = {}) {
         const a = await searchAniList(pvars[i])
         try { appendLog(`META_ANILIST_PARENT_SEARCH q=${pvars[i]} found=${a ? 'yes' : 'no'}`) } catch (e) {}
         if (a) {
+          // Prefer TMDb for episode lookup when a TMDb API key is available; fall back to Kitsu if TMDb doesn't provide an episode
           let ep = null
           try {
-            ep = await fetchKitsuEpisode(a.name || parentCandidate, opts && opts.episode != null ? opts.episode : null)
-            try { appendLog(`META_KITSU_EP_PARENT q=${a.name || parentCandidate} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
-          } catch (e) { ep = null; try { appendLog(`META_KITSU_EP_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
-          try {
-            if (!ep && apiKey) {
-              try { appendLog(`META_TMDB_EP_FALLBACK_PARENT q=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+            if (apiKey) {
+              try { appendLog(`META_TMDB_EP_ATTEMPT_PARENT q=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
               const tmEp = await searchTmdbAndEpisode(a.name || parentCandidate, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
               if (tmEp && tmEp.episode) {
                 ep = tmEp.episode
-                try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_OK q=${a.name || parentCandidate} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
+                try { appendLog(`META_TMDB_EP_PARENT_OK q=${a.name || parentCandidate} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
               } else {
-                try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_NONE q=${a.name || parentCandidate}`) } catch (e) {}
+                try { appendLog(`META_TMDB_EP_PARENT_NONE q=${a.name || parentCandidate}`) } catch (e) {}
               }
             }
-          } catch (e) { try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+          } catch (e) { try { appendLog(`META_TMDB_EP_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+          if (!ep) {
+            try {
+              ep = await fetchKitsuEpisode(a.name || parentCandidate, opts && opts.episode != null ? opts.episode : null)
+              try { appendLog(`META_KITSU_EP_PARENT_FALLBACK q=${a.name || parentCandidate} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
+            } catch (e) { ep = null; try { appendLog(`META_KITSU_EP_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+          }
           return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
         }
       }
@@ -367,9 +382,6 @@ async function metaLookup(title, apiKey, opts = {}) {
         }
       }
     }
-  } catch (e) {
-    try { appendLog(`META_LOOKUP_ERROR title=${String(title).slice(0,100)} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
-  }
 
   return null
 }
@@ -595,12 +607,23 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
             if (epTitle) guess.episodeTitle = String(epTitle).trim()
           }
 
-          // Provider block - set provider name based on raw.source (tmdb or kitsu)
+          // Provider block - set provider name based on raw.source (anilist/tmdb/kitsu)
           const providerName = (raw && raw.source) ? String(raw.source).toLowerCase() : 'tmdb'
           guess.provider = { matched: true, provider: providerName, id: raw.id || null, raw: raw }
 
-          // Back-compat: populate tmdb object only when provider is TMDb
-          if (providerName === 'tmdb') {
+          // Populate TMDb info when available.
+          // If AniList provided a TMDb raw payload in retRaw._tmdb (we attach that when
+          // we do an AniList -> TMDb episode lookup), use that as the tmdb block so
+          // the UI and consumers can access episode-level TMDb metadata even when the
+          // primary provider for the series was AniList.
+          if (raw && raw._tmdb) {
+            try {
+              guess.tmdb = { matched: true, id: raw._tmdb.id || null, raw: raw._tmdb }
+            } catch (e) {
+              guess.tmdb = { matched: false }
+            }
+          } else if (providerName === 'tmdb') {
+            // If the primary provider itself is TMDb, use the top-level raw
             guess.tmdb = { matched: true, id: raw.id || null, raw: raw }
           } else {
             guess.tmdb = { matched: false }
@@ -743,26 +766,28 @@ app.post('/api/scan', async (req, res) => {
   const IGNORED_DIRS = new Set(['node_modules', '.git', '.svn', '__pycache__']);
   const VIDEO_EXTS = ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'];
   const extRe = new RegExp('\\.(' + VIDEO_EXTS.join('|') + ')$', 'i');
-
   function walkDir(dir) {
-    let ent;
     try {
-      ent = fs.readdirSync(dir, { withFileTypes: true });
-    } catch (e) {
-      appendLog(`SCAN_DIR_SKIP dir=${dir} err=${e.message}`);
-      return;
-    }
-    for (const e of ent) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        if (IGNORED_DIRS.has(e.name)) continue;
-        walkDir(full);
-      } else {
-        // video file filter (match many common container formats)
-        if (extRe.test(e.name)) {
-          items.push({ id: uuidv4(), canonicalPath: canonicalize(full), scannedAt: Date.now() });
+      const ent = fs.readdirSync(dir, { withFileTypes: true });
+      for (const e of ent) {
+        try {
+          const full = path.join(dir, e.name);
+          if (e.isDirectory()) {
+            // skip ignored folders
+            if (IGNORED_DIRS.has(e.name)) continue;
+            walkDir(full);
+          } else if (e.isFile()) {
+            // video file filter (match many common container formats)
+            if (extRe.test(e.name)) {
+              items.push({ id: uuidv4(), canonicalPath: canonicalize(full), scannedAt: Date.now() });
+            }
+          }
+        } catch (inner) {
+          // ignore per-entry errors
         }
       }
+    } catch (err) {
+      // ignore directory read errors for now
     }
   }
 
@@ -1684,6 +1709,11 @@ function extractYear(meta, fromPath) {
   return null;
 }
 
+// Export extractYear early so unit tests can require it without running the whole server-side startup
+module.exports = module.exports || {};
+module.exports.extractYear = extractYear;
+try { fs.appendFileSync(path.join(__dirname,'debug-exports.txt'), 'EARLY export: extractYear type=' + typeof extractYear + '\n'); } catch (e) {}
+
 // Apply rename plans (safe execution)
 app.post('/api/rename/apply', requireAuth, (req, res) => {
   const { plans, dryRun } = req.body || {};
@@ -2088,12 +2118,17 @@ module.exports.externalEnrich = externalEnrich;
 module.exports.metaLookup = metaLookup;
 // Export extractYear for unit testing
 module.exports.extractYear = extractYear;
+try { fs.appendFileSync(path.join(__dirname,'debug-exports.txt'), 'LATE export: extractYear type=' + typeof extractYear + '\n'); } catch (e) {}
 
 // Only start the HTTP server when this file is run directly, not when required as a module
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Server listening on ${PORT}`);
   });
+}
+
+
+
 }
 
 
