@@ -43,8 +43,8 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 /* Ensure header icon-only buttons are visually centered with text buttons */
 .app header { line-height: 1 }
 .app header .header-actions { display:flex; align-items:center; gap: var(--header-button-gap); margin-left: auto; flex: 0 0 auto }
-.app header .header-actions .icon-only { transform: translateY(3px); display:inline-flex; align-items:center; justify-content:center }
-.app header .header-actions .icon-only .icon { display:block; margin:0 }
+.app header .header-actions .icon-only { /* Remove vertical nudge; center icons explicitly */ display:inline-flex; align-items:center; justify-content:center; padding:2px; box-sizing:border-box }
+.app header .header-actions .icon-only .icon { display:block; margin:0; line-height:18px }
 
 /* Global bulk-enrich indicator shown in header when many enrich operations are running */
 .bulk-enrich { display:inline-flex; align-items:center; gap:8px; color: var(--muted); font-size:13px }
