@@ -1562,8 +1562,9 @@ app.post('/api/rename/preview', (req, res) => {
     // If an output path is configured, plan a hardlink under that path preserving a Jellyfin-friendly layout
     let toPath;
     if (effectiveOutput) {
-      // folder: <output>/<Show Title (Year)>/Season NN
-      const titleFolder = year ? `${sanitize(title)} (${year})` : sanitize(title);
+  // folder: <output>/<Show Title>/Season NN for series, keep <Show Title (Year)> for movies
+  const isSeriesFolder = (meta && (meta.season != null || meta.episode != null || meta.episodeRange));
+  const titleFolder = isSeriesFolder ? sanitize(title) : (year ? `${sanitize(title)} (${year})` : sanitize(title));
       const seasonFolder = (meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
       const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
       // filename should directly be the rendered template (nameWithoutExt) + ext
@@ -1823,7 +1824,8 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                   const sMatch = seriesFolderBase.search(/\s-\sS\d{1,2}E\d{1,3}/);
                   if (sMatch !== -1) seriesFolderBase = seriesFolderBase.slice(0, sMatch).trim();
                   if (!seriesFolderBase) seriesFolderBase = String(prov.title || '').trim() + (prov.year ? ` (${prov.year})` : '');
-                  if (prov.year && seriesFolderBase.indexOf(`(${prov.year})`) === -1) seriesFolderBase = seriesFolderBase + ` (${prov.year})`;
+                  // For series, prefer a folder named by the series without the year suffix.
+                  // (Do not append year for series. Movies are handled in the else branch above.)
                   const dir = path.join(baseOut, sanitize(seriesFolderBase), seasonFolder);
                   const filenameBase = sanitize(seriesRenderedRaw);
                   finalFileName2 = (filenameBase + ext2).trim();
