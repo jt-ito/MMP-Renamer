@@ -324,6 +324,20 @@ export default function App() {
       // enter metadata phase and reset metadata progress
       setMetaPhase(true)
       setMetaProgress(0)
+      // Start a background poll to update header progress during the full refresh.
+      // This mirrors the progress the notification would show but only updates the header state
+      // (no toasts) so the header progress doesn't stay at 0% for large scans.
+      (async () => {
+        try {
+          await pollRefreshProgress(r.data.scanId, (prog) => {
+            const pct = Math.round((prog.processed / Math.max(1, prog.total)) * 100)
+            try { setMetaProgress(pct) } catch (e) {}
+          })
+        } catch (e) {
+          // ignore background poll errors; refreshScan will still handle toasts/errors
+        }
+      })();
+
       await refreshScan(r.data.scanId)
       // Now refresh client-side enrich for all collected paths and report progress
       const paths = collected.map(it => it.canonicalPath).filter(Boolean)
