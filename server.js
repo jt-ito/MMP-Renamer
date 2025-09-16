@@ -643,19 +643,30 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
             guess.episode = normEpisode;
           } catch (e) { /* best-effort */ }
 
-          // Year extraction: prefer episode air date (if episode lookup was performed),
-          // then season-level air date (seasonAirDate attached earlier), then series-level
-          // first_air_date/release_date. This ensures {year} reflects the specific season
-          // (or episode) rather than the series' initial air year.
+          // Year extraction: prefer series-level start/first air date for regular episodes,
+          // but for specials (season 0 or decimal episode numbers) prefer the episode
+          // air_date when available. This avoids using a special's episode air year for
+          // the whole series while still allowing specials to use episode-level dates.
           let dateStr = null
           try {
-            if (res && res.episode) {
-              dateStr = res.episode.air_date || res.episode.airDate || (res.episode.attributes && (res.episode.attributes.air_date || res.episode.attributes.airDate)) || null
+            if (typeof isSpecialCandidate !== 'undefined' && isSpecialCandidate) {
+              // For specials: prefer episode air_date first
+              if (res && res.episode) {
+                dateStr = res.episode.air_date || res.episode.airDate || (res.episode.attributes && (res.episode.attributes.air_date || res.episode.attributes.airDate)) || null
+              }
+              if (!dateStr) {
+                dateStr = raw.seasonAirDate || raw.first_air_date || raw.release_date || raw.firstAirDate || (raw.attributes && (raw.attributes.startDate || raw.attributes.releaseDate))
+              }
+            } else {
+              // For regular episodes: prefer series/season-level dates first
+              dateStr = raw.seasonAirDate || raw.first_air_date || raw.release_date || raw.firstAirDate || (raw.attributes && (raw.attributes.startDate || raw.attributes.releaseDate)) || null
+              if (!dateStr) {
+                if (res && res.episode) {
+                  dateStr = res.episode.air_date || res.episode.airDate || (res.episode.attributes && (res.episode.attributes.air_date || res.episode.attributes.airDate)) || null
+                }
+              }
             }
           } catch (e) { /* ignore */ }
-          if (!dateStr) {
-            dateStr = raw.seasonAirDate || raw.first_air_date || raw.release_date || raw.firstAirDate || (raw.attributes && (raw.attributes.startDate || raw.attributes.releaseDate))
-          }
           if (dateStr) {
             const y = new Date(String(dateStr)).getFullYear()
             if (!isNaN(y)) guess.year = String(y)
@@ -875,7 +886,11 @@ app.post('/api/scan', async (req, res) => {
             try {
               const parsedBlock = { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }
               enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
-            } catch (e) { enrichCache[key] = normalizeEnrichEntry({ parsed: { title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }, sourceId: 'parsed-cache', cachedAt: Date.now() }); }
+            } catch (e) {
+              const prev = enrichCache[key] || {};
+              const normalized = normalizeEnrichEntry({ parsed: { title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }, sourceId: 'parsed-cache', cachedAt: Date.now() });
+              enrichCache[key] = preserveAppliedFlags(prev, normalized);
+            }
           }
         } catch (renderErr) {
           // fallback to previous behavior on any error
@@ -1205,8 +1220,9 @@ app.post('/api/enrich', async (req, res) => {
       // build normalized entry
       const parsedBlock = { title: pc.title, parsedName: pc.parsedName, season: pc.season, episode: pc.episode, timestamp: Date.now() }
       const providerBlock = (enrichCache[key] && enrichCache[key].provider) ? enrichCache[key].provider : null
-      const normalized = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, provider: providerBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
-      enrichCache[key] = normalized
+  const normalized = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, provider: providerBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
+  const prev = enrichCache[key] || {};
+  enrichCache[key] = preserveAppliedFlags(prev, normalized);
       try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
       return res.json({ parsed: normalized.parsed || null, provider: normalized.provider || null })
     }
@@ -1252,10 +1268,11 @@ app.post('/api/enrich', async (req, res) => {
   const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
   try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
   enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
-    } catch (e) {
-      enrichCache[key] = { ...data, cachedAt: Date.now() };
+      } catch (e) {
+      const prev = enrichCache[key] || {};
+      enrichCache[key] = preserveAppliedFlags(prev, Object.assign({}, { ...data, cachedAt: Date.now() }));
     }
-    // if provider returned authoritative title/parsedName, persist into parsedCache so subsequent scans use it
+            // if provider returned authoritative title/parsedName, persist into parsedCache so subsequent scans use it
     try {
       if (data && data.title) {
         parsedCache[key] = parsedCache[key] || {}
@@ -1266,9 +1283,10 @@ app.post('/api/enrich', async (req, res) => {
         parsedCache[key].timestamp = Date.now()
         writeJson(parsedCacheFile, parsedCache)
       }
-    } catch (e) {}
-    writeJson(enrichStoreFile, enrichCache);
-    appendLog(`ENRICH_SUCCESS path=${key}`);
+    } catch (e) {
+      const prev = enrichCache[key] || {};
+      enrichCache[key] = preserveAppliedFlags(prev, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
+    }
     res.json({ enrichment: enrichCache[key] });
   } catch (err) { appendLog(`ENRICH_FAIL path=${key} err=${err.message}`); res.status(500).json({ error: err.message }); }
 });
@@ -1402,10 +1420,13 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
               try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
               enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
             } else {
-              enrichCache[key] = { ...data, cachedAt: Date.now() };
+              // preserve applied/hidden metadata when replacing entry
+              const prev = enrichCache[key] || {};
+              enrichCache[key] = preserveAppliedFlags(prev, Object.assign({}, { ...data, cachedAt: Date.now() }));
             }
-          } catch (e) {
-            enrichCache[key] = { ...data, cachedAt: Date.now() };
+            } catch (e) {
+            const prev = enrichCache[key] || {};
+            enrichCache[key] = preserveAppliedFlags(prev, Object.assign({}, { ...data, cachedAt: Date.now() }));
           }
           results.push({ path: key, ok: true, parsedName: data.parsedName, title: data.title });
           appendLog(`REFRESH_ITEM_OK path=${key} parsedName=${data.parsedName}`);
@@ -1590,6 +1611,21 @@ function stripTrailingYear(s) {
   try {
     return String(s || '').replace(/\s*\(\s*\d{4}\s*\)\s*$/, '').trim();
   } catch (e) { return String(s || '').trim(); }
+}
+
+// Preserve applied/hidden and related metadata when overwriting enrichCache entries
+function preserveAppliedFlags(prev, next) {
+  try {
+    prev = prev || {};
+    next = next || {};
+    if (prev.applied) next.applied = prev.applied;
+    if (prev.hidden) next.hidden = prev.hidden;
+    if (typeof prev.appliedAt !== 'undefined') next.appliedAt = prev.appliedAt;
+    if (typeof prev.appliedTo !== 'undefined') next.appliedTo = prev.appliedTo;
+    if (typeof prev.metadataFilename !== 'undefined') next.metadataFilename = prev.metadataFilename;
+    if (typeof prev.renderedName !== 'undefined') next.renderedName = prev.renderedName;
+    return next;
+  } catch (e) { return next; }
 }
 
 // Helper: clean series title to avoid duplicated episode label or episode title fragments
