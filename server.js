@@ -660,9 +660,24 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
             } else {
               // For regular episodes: prefer series/season-level dates first
               dateStr = raw.seasonAirDate || raw.first_air_date || raw.release_date || raw.firstAirDate || (raw.attributes && (raw.attributes.startDate || raw.attributes.releaseDate)) || null
+              // If AniList-style nested startDate { year: YYYY } is present, prefer it as the series start year
               if (!dateStr) {
-                if (res && res.episode) {
-                  dateStr = res.episode.air_date || res.episode.airDate || (res.episode.attributes && (res.episode.attributes.air_date || res.episode.attributes.airDate)) || null
+                try {
+                  if (raw && raw.startDate && typeof raw.startDate === 'object' && raw.startDate.year) {
+                    // set guess.year directly from the nested year and skip episode fallback
+                    const ry2 = Number(raw.startDate.year)
+                    if (!isNaN(ry2)) {
+                      guess.year = String(ry2)
+                    }
+                  }
+                } catch (e) {}
+              }
+              // If we didn't get a year yet, fall back to episode air_date when available
+              if (!guess.year) {
+                if (!dateStr) {
+                  if (res && res.episode) {
+                    dateStr = res.episode.air_date || res.episode.airDate || (res.episode.attributes && (res.episode.attributes.air_date || res.episode.attributes.airDate)) || null
+                  }
                 }
               }
             }
