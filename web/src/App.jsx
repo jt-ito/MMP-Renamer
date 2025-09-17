@@ -256,6 +256,42 @@ export default function App() {
     } catch (e) { return prev || [] }
   }
 
+      // Helper: check whether an item matches the query using enriched metadata when available
+      function matchesQuery(it, q) {
+        if (!it || !q) return false
+        const lowered = q.toLowerCase()
+        const path = (it.canonicalPath || '').toLowerCase()
+        if (path.indexOf(lowered) !== -1) return true
+        const basename = (it.canonicalPath || '').split('/').pop().toLowerCase()
+        if (basename.indexOf(lowered) !== -1) return true
+        try {
+          const e = enrichCache && enrichCache[it.canonicalPath]
+          const norm = normalizeEnrichResponse(e)
+          if (norm) {
+            const parsed = norm.parsed
+            const provider = norm.provider
+            if (parsed) {
+              const pn = (parsed.parsedName || parsed.title || '').toString().toLowerCase()
+              if (pn && pn.indexOf(lowered) !== -1) return true
+            }
+            if (provider) {
+              const pt = (provider.renderedName || provider.title || provider.episodeTitle || '').toString().toLowerCase()
+              if (pt && pt.indexOf(lowered) !== -1) return true
+              // check season/episode labels
+              const season = provider.season != null ? provider.season : (parsed && parsed.season)
+              const episode = provider.episode != null ? provider.episode : (parsed && parsed.episode)
+              if (episode != null) {
+                const pad = (n) => String(n).padStart(2,'0')
+                const epLabel = season != null ? `s${pad(season)}e${pad(episode)}` : `e${pad(episode)}`
+                if (epLabel.indexOf(lowered) !== -1) return true
+                if ((String(episode)).indexOf(lowered) !== -1) return true
+              }
+            }
+          }
+        } catch (e) {}
+        return false
+      }
+
   
 
   function pushToast(title, message){
@@ -667,10 +703,25 @@ export default function App() {
     // explicit Search button: perform server-side search and ensure each result is enriched
     try {
       setSearching(true)
-      const r = await searchScan(q, 0, batchSize)
-  const results = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
-  setItems(results)
-      setTotal(r.total || 0)
+      // If we have the baseline in-memory, perform client-side filtering using enriched metadata
+      if (allItems && allItems.length) {
+        const qq = (q || '').trim()
+        if (!qq) {
+          setItems(allItems.slice())
+          setTotal(allItems.length)
+        } else {
+          const lowered = qq.toLowerCase()
+          const results = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+          setItems(results)
+          setTotal(results.length)
+          for (const it of results || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+        }
+      } else {
+        const r = await searchScan(q, 0, batchSize)
+        const results = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+        setItems(results)
+        setTotal(r.total || 0)
+      }
       // For each matched item, poll server /enrich until cached (or timeout) so UI shows full metadata
       const pollEnrich = async (path) => {
         const maxMs = 5000
@@ -725,12 +776,7 @@ export default function App() {
             setTotal(allItems.length)
           } else {
             const lowered = q.toLowerCase()
-            const filtered = allItems.filter(it => {
-              if (!it || !it.canonicalPath) return false
-              // simple text search on filename and path — can be extended to other metadata
-              const name = (it.canonicalPath || '').toLowerCase()
-              return name.indexOf(lowered) !== -1
-            }).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+            const filtered = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
             setItems(filtered)
             setTotal(filtered.length)
             for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
