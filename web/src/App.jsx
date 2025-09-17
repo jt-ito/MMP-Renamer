@@ -256,40 +256,80 @@ export default function App() {
     } catch (e) { return prev || [] }
   }
 
-      // Helper: check whether an item matches the query using enriched metadata when available
-      function matchesQuery(it, q) {
-        if (!it || !q) return false
-        const lowered = q.toLowerCase()
-        const path = (it.canonicalPath || '').toLowerCase()
-        if (path.indexOf(lowered) !== -1) return true
-        const basename = (it.canonicalPath || '').split('/').pop().toLowerCase()
-        if (basename.indexOf(lowered) !== -1) return true
+      // Maximum number of items to perform in-memory search on; if exceeded, fall back to server search
+      const MAX_IN_MEMORY_SEARCH = 20000
+
+      // normalize text for search: lowercase, remove diacritics, collapse whitespace
+      function normalizeForSearch(s) {
+        if (!s && s !== 0) return ''
         try {
+          const str = String(s)
+          // NFKD then strip combining marks
+          const n = str.normalize ? str.normalize('NFKD') : str
+          // remove diacritics (Unicode marks) and non-word punctuation
+          return n.replace(/\p{M}/gu, '').replace(/[\s\-_.()\[\],;:!"'\/\\]+/g, ' ').toLowerCase().trim()
+        } catch (e) { return String(s).toLowerCase() }
+      }
+
+      // Build a searchable text blob for an item from canonical path and any enrichment
+      function buildSearchText(it) {
+        const parts = []
+        try {
+          parts.push(it.canonicalPath || '')
+          const b = (it.canonicalPath || '').split('/').pop()
+          if (b) parts.push(b)
           const e = enrichCache && enrichCache[it.canonicalPath]
           const norm = normalizeEnrichResponse(e)
           if (norm) {
-            const parsed = norm.parsed
-            const provider = norm.provider
-            if (parsed) {
-              const pn = (parsed.parsedName || parsed.title || '').toString().toLowerCase()
-              if (pn && pn.indexOf(lowered) !== -1) return true
+            if (norm.parsed) {
+              parts.push(norm.parsed.parsedName || '')
+              parts.push(norm.parsed.title || '')
+              if (norm.parsed.season != null) parts.push(`s${String(norm.parsed.season)}`)
+              if (norm.parsed.episode != null) parts.push(`e${String(norm.parsed.episode)}`)
             }
-            if (provider) {
-              const pt = (provider.renderedName || provider.title || provider.episodeTitle || '').toString().toLowerCase()
-              if (pt && pt.indexOf(lowered) !== -1) return true
-              // check season/episode labels
-              const season = provider.season != null ? provider.season : (parsed && parsed.season)
-              const episode = provider.episode != null ? provider.episode : (parsed && parsed.episode)
-              if (episode != null) {
-                const pad = (n) => String(n).padStart(2,'0')
-                const epLabel = season != null ? `s${pad(season)}e${pad(episode)}` : `e${pad(episode)}`
-                if (epLabel.indexOf(lowered) !== -1) return true
-                if ((String(episode)).indexOf(lowered) !== -1) return true
-              }
+            if (norm.provider) {
+              parts.push(norm.provider.renderedName || '')
+              parts.push(norm.provider.title || '')
+              parts.push(norm.provider.episodeTitle || '')
+              if (norm.provider.season != null) parts.push(`s${String(norm.provider.season)}`)
+              if (norm.provider.episode != null) parts.push(`e${String(norm.provider.episode)}`)
+              if (norm.provider.year) parts.push(String(norm.provider.year))
             }
           }
         } catch (e) {}
-        return false
+        return normalizeForSearch(parts.join(' '))
+      }
+
+      // cache for computed searchText per canonicalPath to avoid recomputing repeatedly
+      const searchTextCacheRef = useRef({})
+      function getSearchText(it) {
+        try {
+          const key = it && it.canonicalPath
+          if (!key) return ''
+          const cache = searchTextCacheRef.current || {}
+          if (cache[key]) return cache[key]
+          const txt = buildSearchText(it)
+          cache[key] = txt
+          searchTextCacheRef.current = cache
+          return txt
+        } catch (e) { return buildSearchText(it) }
+      }
+
+      // invalidate cache whenever enrichCache changes (simple strategy)
+      useEffect(() => { searchTextCacheRef.current = {} }, [enrichCache])
+
+      // Helper: check whether an item matches the query using enriched metadata when available
+      function matchesQuery(it, q) {
+        if (!it || !q) return false
+        // If the baseline is too large, signal to caller that server-side search should be used instead
+        if (allItems && allItems.length > MAX_IN_MEMORY_SEARCH) return null
+        const qnorm = normalizeForSearch(q)
+        if (!qnorm) return true
+        const tokens = qnorm.split(/\s+/).filter(Boolean)
+        if (!tokens.length) return true
+        const searchText = getSearchText(it)
+        // all tokens must be present somewhere in the searchText (AND semantics)
+        return tokens.every(t => searchText.indexOf(t) !== -1)
       }
 
   
@@ -775,11 +815,20 @@ export default function App() {
             setItems(allItems.slice())
             setTotal(allItems.length)
           } else {
-            const lowered = q.toLowerCase()
-            const filtered = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
-            setItems(filtered)
-            setTotal(filtered.length)
-            for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+            // If baseline is too large, fall back to server-side search
+            if (allItems.length > MAX_IN_MEMORY_SEARCH) {
+              const r = await searchScan(searchQuery, 0, batchSize)
+              const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+              setItems(filtered)
+              setTotal(r.total || 0)
+              for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+            } else {
+              const lowered = q.toLowerCase()
+              const filtered = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+              setItems(filtered)
+              setTotal(filtered.length)
+              for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+            }
           }
         } else {
           // perform search with cancellation via searchScan
