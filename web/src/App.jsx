@@ -78,6 +78,9 @@ export default function App() {
   const [scanMeta, setScanMeta] = useState(null)
   const [lastLibraryId, setLastLibraryId] = useLocalState('lastLibraryId', '')
   const [items, setItems] = useState([])
+  // allItems is the baseline full listing for the current scan (post-scan).
+  // This is the single source of truth for the visible dataset; searches filter this in-memory.
+  const [allItems, setAllItems] = useState([])
   const [total, setTotal] = useState(0)
   // track canonical paths for the currently-loaded scan so we don't reveal cached paths
   // that aren't present in the current scan results
@@ -393,17 +396,21 @@ export default function App() {
               const er = await axios.get(API('/enrich'), { params: { path: p } })
                 if (er.data) {
                   if (er.data.missing) {
-                    // underlying file missing: remove any local cache and ensure UI does not show it
-                    setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
-                    setItems(prev => prev.filter(it => it.canonicalPath !== p))
+                        // underlying file missing: remove any local cache and ensure UI does not show it
+                        setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
+                        setItems(prev => prev.filter(it => it.canonicalPath !== p))
+                        setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
                   } else if (er.data.cached || er.data.enrichment) {
                     const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
                     setEnrichCache(prev => ({ ...prev, [p]: enriched }))
                     if (enriched && (enriched.hidden || enriched.applied)) {
-                      setItems(prev => prev.filter(it => it.canonicalPath !== p))
+                          // remove hidden/applied items from both visible list and baseline
+                          setItems(prev => prev.filter(it => it.canonicalPath !== p))
+                          setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
                     } else {
                       // prepend in deduped fashion and skip any hidden/applied
-                      setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+                          setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+                          setAllItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
                     }
                   }
                 }
@@ -423,6 +430,8 @@ export default function App() {
       const e = enrichCache[it.canonicalPath]
       return !(e && (e.hidden === true || e.applied === true))
     })
+    // set the persistent baseline and the currently-visible items
+    setAllItems(filtered)
     setItems(filtered)
     // record current scan canonical paths so cached enrichments not present in the scan are ignored
     try { setCurrentScanPaths(new Set((collected || []).map(i => i.canonicalPath).filter(Boolean))) } catch (e) {}
@@ -599,13 +608,17 @@ export default function App() {
   // perform search immediately (used by buttons); live-search handled by debounce effect below
   async function doSearch(q) {
     setSearchQuery(q || '')
-    // clear: restore normal listing (first page)
+    // clear: restore baseline listing immediately from allItems if present
     if (!q) {
       try {
-        setItems([])
         setSearching(false)
-        // fetch first page of items from server-side scan listing
-  if (scanId) {
+        if (allItems && allItems.length) {
+          setItems(allItems.slice())
+          setTotal(allItems.length)
+          return
+        }
+        // fetch first page of items from server-side scan listing as fallback
+        if (scanId) {
           const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: 0, limit: batchSize } })
           const page = (r.data.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
           setItems(page)
@@ -705,12 +718,31 @@ export default function App() {
     // debounce live search (300ms)
     searchTimeoutRef.current = setTimeout(async () => {
       try {
-        // perform search with cancellation via searchScan
-  const r = await searchScan(searchQuery, 0, batchSize)
-  const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
-  setItems(filtered)
-  setTotal(r.total || 0)
-  for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+        if (allItems && allItems.length) {
+          const q = (searchQuery || '').trim()
+          if (!q) {
+            setItems(allItems.slice())
+            setTotal(allItems.length)
+          } else {
+            const lowered = q.toLowerCase()
+            const filtered = allItems.filter(it => {
+              if (!it || !it.canonicalPath) return false
+              // simple text search on filename and path — can be extended to other metadata
+              const name = (it.canonicalPath || '').toLowerCase()
+              return name.indexOf(lowered) !== -1
+            }).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+            setItems(filtered)
+            setTotal(filtered.length)
+            for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+          }
+        } else {
+          // perform search with cancellation via searchScan
+          const r = await searchScan(searchQuery, 0, batchSize)
+          const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+          setItems(filtered)
+          setTotal(r.total || 0)
+          for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+        }
       } catch (e) {}
     }, 300)
     return () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current) }
