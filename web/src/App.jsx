@@ -528,29 +528,71 @@ export default function App() {
 
   const handleScrollNearEnd = async () => {
     if (!scanId) return
-    const nextOffset = items.length
+    // Attempt to fetch pages until we either find visible items or reach a reasonable attempt limit.
+    // This handles cases where the server reports a non-zero total but the first N pages contain
+    // only items that are hidden/applied on the client and therefore filtered out locally.
+    let nextOffset = items.length
     if (nextOffset >= total) return
-    let r
-    if (searchQuery && searchQuery.length > 0) {
-      r = await searchScan(searchQuery, nextOffset, batchSize)
-      setItems(prev => mergeItemsUnique(prev, r.items || [], false))
-    } else {
-      r = await axios.get(API(`/scan/${scanId}/items?offset=${nextOffset}&limit=${batchSize}`))
-      setItems(prev => mergeItemsUnique(prev, r.data.items || [], false))
-      // update current scan paths with new page
-      try {
-        setCurrentScanPaths(prev => {
-          const s = new Set(prev || [])
-          for (const it of (r.data.items || [])) if (it && it.canonicalPath) s.add(it.canonicalPath)
-          return s
-        })
-      } catch (e) {}
+    let r = null
+    const maxAttempts = 8
+    let attempts = 0
+    // local mutable copy of current items for merge checks
+    let curr = items.slice()
+    while (nextOffset < total && attempts < maxAttempts) {
+      if (searchQuery && searchQuery.length > 0) {
+        r = await searchScan(searchQuery, nextOffset, batchSize)
+        const page = (r.items || [])
+        const merged = mergeItemsUnique(curr, page, false)
+        // if merged produced new visible rows, commit and stop looping
+        if (merged.length > curr.length) {
+          setItems(merged)
+          curr = merged
+          break
+        }
+        // otherwise advance offset and try next page
+        curr = merged
+        nextOffset += (page || []).length
+      } else {
+        r = await axios.get(API(`/scan/${scanId}/items?offset=${nextOffset}&limit=${batchSize}`))
+        const page = (r.data && r.data.items) || []
+        const merged = mergeItemsUnique(curr, page, false)
+        if (merged.length > curr.length) {
+          setItems(merged)
+          curr = merged
+          // update current scan paths with new page
+          try {
+            setCurrentScanPaths(prev => {
+              const s = new Set(prev || [])
+              for (const it of page) if (it && it.canonicalPath) s.add(it.canonicalPath)
+              return s
+            })
+          } catch (e) {}
+          break
+        }
+        curr = merged
+        // update current scan paths even when nothing visible was added
+        try {
+          setCurrentScanPaths(prev => {
+            const s = new Set(prev || [])
+            for (const it of page) if (it && it.canonicalPath) s.add(it.canonicalPath)
+            return s
+          })
+        } catch (e) {}
+        nextOffset += page.length
+      }
+      attempts++
     }
-    const forceEnrich = scanOptionsRef.current && scanOptionsRef.current.forceEnrich === true
-    for (const it of r.data.items) {
-      if (forceEnrich) enrichOne && enrichOne(it, true)
-      else if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
-    }
+
+    // If we fetched a page object that contains raw items, trigger enrich for them if needed
+    try {
+      const pageItems = (r && (r.items || (r.data && r.data.items))) || []
+      const forceEnrich = scanOptionsRef.current && scanOptionsRef.current.forceEnrich === true
+      for (const it of pageItems) {
+        if (!it) continue
+        if (forceEnrich) enrichOne && enrichOne(it, true)
+        else if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+      }
+    } catch (e) {}
   }
 
   // run a fresh search and replace visible items with results
@@ -590,6 +632,11 @@ export default function App() {
                   }
                 }
               } catch (e) { /* ignore per-item failures */ }
+              // If first page returned zero visible items but server reports more, try loading more pages
+              if ((page || []).length === 0 && ((scanMeta && scanMeta.totalCount) || 0) > 0) {
+                // attempt to load further pages up to a small limit
+                try { await handleScrollNearEnd() } catch (e) {}
+              }
             }))
           } catch (e) { /* ignore overall warm-up failures */ }
           return
