@@ -395,20 +395,15 @@ export default function App() {
       return
     }
 
-    // Start scan request with basic timeout/error handling so UI doesn't stay stuck
+    // Start scan request; server returns 202 quickly and performs work in background
     let r = null
     try {
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 30_000) // 30s timeout for scan start
-      r = await axios.post(API('/scan'), { libraryId: lib?.id, path: configuredPath }, { signal: controller.signal })
-      clearTimeout(timeout)
+      r = await axios.post(API('/scan'), { libraryId: lib?.id, path: configuredPath })
     } catch (err) {
       // Map common failure modes to user-friendly messages
       let msg = 'Scan request failed to start'
       try {
-        if (err.name === 'CanceledError' || err.message === 'canceled') {
-          msg = 'Scan request timed out'
-        } else if (err.response) {
+        if (err.response) {
           const status = err.response.status
           if (status === 401 || status === 403) msg = 'Not authorized — please login'
           else if (status === 404) msg = 'Configured path not found on server'
