@@ -385,6 +385,10 @@ export default function App() {
         configuredPath = (s.data && s.data.userSettings && s.data.userSettings.scan_input_path) || ''
       } catch (e) { /* ignore */ }
     }
+    // If still no configured path, but the caller passed a library with a canonicalPath, use it
+    if (!configuredPath && lib && lib.canonicalPath) {
+      try { configuredPath = lib.canonicalPath } catch (e) {}
+    }
     if (!configuredPath) {
       pushToast && pushToast('Scan', 'No input path configured — set one in Settings before scanning')
       try { setScanning(false) } catch (e) {}
