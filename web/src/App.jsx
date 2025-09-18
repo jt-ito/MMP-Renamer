@@ -798,12 +798,18 @@ export default function App() {
   React.useEffect(() => {
     // clear any pending timeout
     if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null }
-    // if empty query, clear and load normal listing
+    // if empty query, restore normal listing (prefer `allItems` if present)
     if (!searchQuery || searchQuery.length === 0) {
-      // reset items to first page
-      setItems([])
-      // small timeout to allow UI to update
-      searchTimeoutRef.current = setTimeout(() => { handleScrollNearEnd().catch(()=>{}) }, 150)
+      // If we have a cached full listing in-memory, use it immediately
+      if (allItems && allItems.length) {
+        try { setItems(allItems.slice()) } catch (e) {}
+        try { setTotal(allItems.length) } catch (e) {}
+      } else {
+        // otherwise fall back to loading pages from the server
+        setItems([])
+        // small timeout to allow UI to update
+        searchTimeoutRef.current = setTimeout(() => { handleScrollNearEnd().catch(()=>{}) }, 150)
+      }
       return () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current) }
     }
     // debounce live search (300ms)
