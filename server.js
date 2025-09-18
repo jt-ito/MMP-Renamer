@@ -27,6 +27,8 @@ function requireAuth(req, res, next) {
   } catch (e) { return res.status(401).json({ error: 'unauthenticated' }) }
 }
 
+// (test helpers will be exported after the functions are defined)
+
 function requireAdmin(req, res, next) {
   try {
     const username = req && req.session && req.session.username;
@@ -65,13 +67,13 @@ if (SESSION_KEY) {
 }
 
 const scanStoreFile = path.join(DATA_DIR, 'scans.json');
-const scanIndexFile = path.join(DATA_DIR, 'scan-index.json');
 const enrichStoreFile = path.join(DATA_DIR, 'enrich.json');
 const logsFile = path.join(DATA_DIR, 'logs.txt');
 const settingsFile = path.join(DATA_DIR, 'settings.json');
 const usersFile = path.join(DATA_DIR, 'users.json');
 const renderedIndexFile = path.join(DATA_DIR, 'rendered-index.json');
 const parsedCacheFile = path.join(DATA_DIR, 'parsed-cache.json');
+const scanCacheFile = path.join(DATA_DIR, 'scan-cache.json');
 
 // Ensure essential data files exist so server can write to them even when they're not in repo
 function ensureFile(filePath, defaultContent) {
@@ -95,19 +97,17 @@ try { ensureFile(usersFile, { admin: { username: 'admin', role: 'admin', passwor
 try { ensureFile(enrichStoreFile, {}); } catch (e) {}
 try { ensureFile(parsedCacheFile, {}); } catch (e) {}
 try { ensureFile(scanStoreFile, {}); } catch (e) {}
-try { ensureFile(scanIndexFile, {}); } catch (e) {}
+try { ensureFile(scanCacheFile, {}); } catch (e) {}
 try { ensureFile(renderedIndexFile, {}); } catch (e) {}
 try { ensureFile(logsFile, ''); } catch (e) {}
 
 let enrichCache = {};
 let parsedCache = {};
 let scans = {};
-let scanIndex = {};
 let renderedIndex = {};
 try { enrichCache = JSON.parse(fs.readFileSync(enrichStoreFile, 'utf8') || '{}') } catch (e) { enrichCache = {} }
 try { parsedCache = JSON.parse(fs.readFileSync(parsedCacheFile, 'utf8') || '{}') } catch (e) { parsedCache = {} }
 try { scans = JSON.parse(fs.readFileSync(scanStoreFile, 'utf8') || '{}') } catch (e) { scans = {} }
-try { scanIndex = JSON.parse(fs.readFileSync(scanIndexFile, 'utf8') || '{}') } catch (e) { scanIndex = {} }
 try { renderedIndex = JSON.parse(fs.readFileSync(renderedIndexFile, 'utf8') || '{}') } catch (e) { renderedIndex = {} }
 
 // Track in-flight scans to prevent concurrent runs for same path/scanId
@@ -126,29 +126,11 @@ function appendLog(line) {
 }
 
 // Simple atomic JSON writer used throughout the server
-// Debounced async JSON writer: schedule writes to avoid blocking the event loop
-const _pendingJsonWrites = {};
 function writeJson(filePath, obj) {
   try {
-    const data = JSON.stringify(obj, null, 2);
-    // store latest payload
-    _pendingJsonWrites[filePath] = _pendingJsonWrites[filePath] || {};
-    _pendingJsonWrites[filePath].data = data;
-    // reset timer
-    if (_pendingJsonWrites[filePath].timer) clearTimeout(_pendingJsonWrites[filePath].timer);
-    _pendingJsonWrites[filePath].timer = setTimeout(() => {
-      const payload = _pendingJsonWrites[filePath] && _pendingJsonWrites[filePath].data;
-      // perform async write
-      fs.writeFile(filePath, payload || '', { encoding: 'utf8' }, (err) => {
-        if (err) {
-          try { console.error('writeJson async failed', filePath, err && err.message ? err.message : err); } catch (ee) {}
-        }
-      });
-      // cleanup
-      try { delete _pendingJsonWrites[filePath]; } catch (e) {}
-    }, 300);
+    fs.writeFileSync(filePath, JSON.stringify(obj, null, 2), { encoding: 'utf8' });
   } catch (e) {
-    try { console.error('writeJson schedule failed', filePath, e && e.message ? e.message : e); } catch (ee) {}
+    try { console.error('writeJson failed', filePath, e && e.message ? e.message : e); } catch (ee) {}
   }
 }
 
@@ -792,7 +774,6 @@ app.get('/api/tmdb/status', (req, res) => {
 // Trigger scan - performs full inventory then stores artifact
 app.post('/api/scan', async (req, res) => {
   const { libraryId, path: libraryPath } = req.body || {};
-  const forceFull = !!(req.body && req.body.force);
   // Resolve chosen path in order: explicit request -> requesting user's per-user setting
   // Do NOT fallback to a global server setting here; admins are regular users with extra privileges
   let libPath = null;
@@ -815,7 +796,6 @@ app.post('/api/scan', async (req, res) => {
   }
   appendLog(`SCAN_START library=${libraryId || 'local'} path=${libPath}`);
   // perform filesystem walk synchronously but non-blocking via promises
-  const items = [];
 
   // directories to skip during scan to avoid crawling node_modules and VCS folders
   const IGNORED_DIRS = new Set(['node_modules', '.git', '.svn', '__pycache__']);
@@ -844,69 +824,71 @@ app.post('/api/scan', async (req, res) => {
     }
   }
 
-  try {
-    // If not forcing a full scan, attempt an incremental scan using the latest scan for this library/path.
-    // Find the most recent scan artifact for this libraryId and path (if any)
-    let previousScan = null;
+  // Delegate scan helpers to lib/scan.js
+  const scanLib = require('./lib/scan');
+  function loadScanCache() { return scanLib.loadScanCache(scanCacheFile); }
+  function saveScanCache(obj) { return scanLib.saveScanCache(scanCacheFile, obj); }
+
+  // Reusable per-item parsing + enrich-cache update logic (extracted from full scan flow)
+  function processParsedItem(it, session) {
     try {
-      // fast-path: use scanIndex keyed by canonicalized libPath
-      try {
-        const rp = canonicalize(libPath);
-        const prevId = scanIndex[rp];
-        if (prevId && scans[prevId] && scans[prevId].libraryId === (libraryId || 'local')) previousScan = scans[prevId];
-      } catch (e) { previousScan = null; }
-      // fallback: if index missed or invalid, scan artifacts for a match using canonicalized paths
-      if (!previousScan) {
-        const candidates = Object.values(scans || {}).filter(s => (s.libraryId === (libraryId || 'local') && s.libPath && canonicalize(s.libPath) === canonicalize(libPath))).sort((a,b) => (b.generatedAt || 0) - (a.generatedAt || 0));
-        if (candidates.length) previousScan = candidates[0];
+      const parseFilename = require('./lib/filename-parser');
+      const base = path.basename(it.canonicalPath, path.extname(it.canonicalPath));
+      const key = canonicalize(it.canonicalPath);
+      let parsed = parsedCache[key] || null
+      if (!parsed) {
+        try {
+          parsed = parseFilename(base)
+          parsedCache[key] = { title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }
+        } catch (e) { parsed = null }
       }
-    } catch (e) { previousScan = null }
-
-    if (previousScan && !forceFull) {
-      appendLog(`SCAN_INCREMENTAL_USING_PREV scan=${previousScan.id} items=${previousScan.totalCount}`);
-      // Single-pass walk: map previous items for O(1) lookup, walk the tree once and decide
-      const prevMap = new Map();
+      // Render parsed name using existing template logic (reuse existing helpers)
       try {
-        for (const it of previousScan.items || []) {
-          if (it && it.canonicalPath) prevMap.set(canonicalize(it.canonicalPath), it.id || uuidv4());
+        const userTemplate = (session && session.username && users[session.username] && users[session.username].settings && users[session.username].settings.rename_template) ? users[session.username].settings.rename_template : null;
+        const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
+        if (parsed) {
+          function pad(n){ return String(n).padStart(2,'0') }
+          let parsedEpLabel = '';
+          if (parsed.episodeRange) parsedEpLabel = parsed.season != null ? `S${pad(parsed.season)}E${parsed.episodeRange}` : `E${parsed.episodeRange}`
+          else if (parsed.episode != null) parsedEpLabel = parsed.season != null ? `S${pad(parsed.season)}E${pad(parsed.episode)}` : `E${pad(parsed.episode)}`
+          const titleToken = cleanTitleForRender(parsed.title || '', parsedEpLabel, '');
+          const nameWithoutExtRaw = String(baseNameTemplate)
+            .replace('{title}', sanitize(titleToken))
+            .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
+            .replace('{year}', parsed.year || '')
+            .replace('{epLabel}', sanitize(parsedEpLabel))
+            .replace('{episodeTitle}', '')
+            .replace('{season}', parsed.season != null ? String(parsed.season) : '')
+            .replace('{episode}', parsed.episode != null ? String(parsed.episode) : '')
+            .replace('{episodeRange}', parsed.episodeRange || '')
+            .replace('{tmdbId}', '')
+          const parsedRendered = String(nameWithoutExtRaw).replace(/\s{2,}/g, ' ').trim();
+          parsedCache[key] = Object.assign({}, parsedCache[key] || {}, { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() })
+          const parsedBlock = { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }
+          updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
         }
-      } catch (e) { /* ignore */ }
-
-      // Walk and build items in one pass: reuse ids for known files, new UUIDs for new files
-      function walkCompare(dir) {
-        let ent;
-        try { ent = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { appendLog(`SCAN_DIR_SKIP dir=${dir} err=${e.message}`); return; }
-        for (const e of ent) {
-          const full = path.join(dir, e.name);
-          if (e.isDirectory()) {
-            if (IGNORED_DIRS.has(e.name)) continue;
-            walkCompare(full);
-          } else {
-            if (extRe.test(e.name)) {
-              const c = canonicalize(full);
-              if (prevMap.has(c)) {
-                items.push({ id: prevMap.get(c), canonicalPath: c, scannedAt: Date.now() });
-                prevMap.delete(c); // mark as seen
-              } else {
-                items.push({ id: uuidv4(), canonicalPath: c, scannedAt: Date.now() });
-              }
-            }
-          }
+      } catch (e) {
+        if (parsed) {
+          updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeTitle: '', language: 'en', timestamp: Date.now() }));
         }
       }
+    } catch (e) { appendLog(`PARSE_ITEM_FAIL path=${it.canonicalPath} err=${e && e.message ? e.message : String(e)}`); }
+  }
 
-      walkCompare(libPath);
-      // At this point any entries still in prevMap were removed from disk and are dropped from the new scan
-    } else {
-      // No previous scan or forceFull requested: perform full walk
-      walkDir(libPath);
-    }
+  // Use scan library implementations
+  function fullScanLibrary(libPath) { return scanLib.fullScanLibrary(libPath, { ignoredDirs: IGNORED_DIRS, videoExts: VIDEO_EXTS, canonicalize: canonicalize, uuidv4 }); }
+  function incrementalScanLibrary(libPath) { return scanLib.incrementalScanLibrary(libPath, { scanCacheFile, ignoredDirs: IGNORED_DIRS, videoExts: VIDEO_EXTS, canonicalize: canonicalize, uuidv4 }); }
+
+  let items = [];
+  try {
+    // Use full scan to collect candidates first (fullScanLibrary wraps the walk)
+    items = fullScanLibrary(libPath);
   } catch (err) {
     appendLog(`SCAN_ERROR ${err.message}`);
     return res.status(500).json({ error: err.message });
   }
   // Prevent concurrent scans for the same resolved path
-  const lockKey = `scanPath:${canonicalize(libPath)}`;
+  const lockKey = `scanPath:${libPath}`;
   if (activeScans.has(lockKey)) {
     appendLog(`SCAN_CONFLICT path=${libPath}`);
     return res.status(409).json({ error: 'scan already in progress for this path' });
@@ -918,96 +900,32 @@ app.post('/api/scan', async (req, res) => {
   // Run quick local parsing for each discovered item so the UI shows cleaned parsed names immediately
   let backgroundStarted = false;
   try {
-    const parseFilename = require('./lib/filename-parser');
-    let userHasAuthoritativeProviderKey = false;
-    try {
-      const username = req.session && req.session.username;
-      // determine effective preferred provider for this user (user setting -> server setting -> tmdb)
-      let preferred = 'tmdb'
-      try { if (username && users[username] && users[username].settings && users[username].settings.default_meta_provider) preferred = users[username].settings.default_meta_provider; else if (serverSettings && serverSettings.default_meta_provider) preferred = serverSettings.default_meta_provider } catch (e) { preferred = 'tmdb' }
-  // only consider TMDb authoritative if preferred is tmdb and a TMDb key exists
-  if (String(preferred).toLowerCase() === 'tmdb') {
-  if (username && users[username] && users[username].settings && users[username].settings.tmdb_api_key) userHasAuthoritativeProviderKey = Boolean(users[username].settings.tmdb_api_key)
-  else if (serverSettings && serverSettings.tmdb_api_key) userHasAuthoritativeProviderKey = Boolean(serverSettings.tmdb_api_key)
-      }
-    } catch (e) { userHasAuthoritativeProviderKey = false }
-    for (const it of items) {
-      try {
-        const base = path.basename(it.canonicalPath, path.extname(it.canonicalPath));
-        const key = canonicalize(it.canonicalPath);
-        // If we have a parsed cache for this path, reuse it
-        let parsed = parsedCache[key] || null
-        if (!parsed) {
-          try {
-            parsed = parseFilename(base)
-            // store a lightweight parse result; parsedName will be rendered below using the effective template
-            parsedCache[key] = { title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }
-          } catch (e) { parsed = null }
-        }
-        // Render the parsed-name consistently using the effective rename template
-        try {
-          const userTemplate = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.rename_template) ? users[req.session.username].settings.rename_template : null;
-          const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
-          if (parsed) {
-            // build tokens for rendering parsed name; episodeTitle intentionally empty for parsed result
-            const parsedTitleRaw = parsed.title || '';
-            const parsedYear = parsed.year || '';
-            function pad(n){ return String(n).padStart(2,'0') }
-            let parsedEpLabel = '';
-            if (parsed.episodeRange) parsedEpLabel = parsed.season != null ? `S${pad(parsed.season)}E${parsed.episodeRange}` : `E${parsed.episodeRange}`
-            else if (parsed.episode != null) parsedEpLabel = parsed.season != null ? `S${pad(parsed.season)}E${pad(parsed.episode)}` : `E${pad(parsed.episode)}`
-            const titleToken = cleanTitleForRender(parsedTitleRaw, parsedEpLabel, '');
-            const nameWithoutExtRaw = String(baseNameTemplate)
-              .replace('{title}', sanitize(titleToken))
-              .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
-              .replace('{year}', parsedYear || '')
-              .replace('{epLabel}', sanitize(parsedEpLabel))
-              .replace('{episodeTitle}', '')
-              .replace('{season}', parsed.season != null ? String(parsed.season) : '')
-              .replace('{episode}', parsed.episode != null ? String(parsed.episode) : '')
-              .replace('{episodeRange}', parsed.episodeRange || '')
-              .replace('{tmdbId}', '')
-            const parsedRendered = String(nameWithoutExtRaw)
-              .replace(/\s*\(\s*\)\s*/g, '')
-              .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
-              .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
-              .replace(/\s{2,}/g, ' ')
-              .trim();
-            // persist parsed-rendered name and lightweight parse tokens
-            parsedCache[key] = Object.assign({}, parsedCache[key] || {}, { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() })
-            // store a normalized enrichment entry derived from parsing only
-            try {
-              const parsedBlock = { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }
-              updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
-            } catch (e) {
-              const normalized = normalizeEnrichEntry({ parsed: { title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }, sourceId: 'parsed-cache', cachedAt: Date.now() });
-              updateEnrichCache(key, normalized);
-            }
-          }
-        } catch (renderErr) {
-          // fallback to previous behavior on any error
-          const episodeTitle = userHasAuthoritativeProviderKey ? '' : ((parsed && parsed.episodeTitle) || '');
-            if (parsed) {
-            updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeTitle: episodeTitle, language: 'en', timestamp: Date.now() }));
-          }
-        }
-      } catch (e) { appendLog(`PARSE_ITEM_FAIL path=${it.canonicalPath} err=${e.message}`); }
+    const session = req.session || {};
+    const priorCache = loadScanCache();
+    if (!priorCache || Object.keys(priorCache).length === 0) {
+      // first full run - process everything
+      for (const it of items) processParsedItem(it, session);
+      // build current cache map and save
+      const cur = {};
+      for (const it of items) { try { const st = fs.statSync(it.canonicalPath); cur[it.canonicalPath] = st.mtimeMs; } catch (e) { cur[it.canonicalPath] = Date.now(); } }
+      saveScanCache(cur);
+    } else {
+      const { toProcess, currentCache, removed } = incrementalScanLibrary(libPath);
+      // remove stale entries
+      for (const r of removed) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
+      for (const it of toProcess) processParsedItem(it, session);
+      // persist current cache map
+      saveScanCache(currentCache);
     }
-    // persist parsed cache and enrich cache
     try { writeJson(parsedCacheFile, parsedCache) } catch (e) {}
     writeJson(enrichStoreFile, enrichCache);
   } catch (e) { appendLog(`PARSE_MODULE_FAIL err=${e.message}`); }
   // Wrap the remainder of the request flow so we can release the lock if something fails
   try {
 
-  const artifact = { id: scanId, libraryId: libraryId || 'local', libPath: libPath, totalCount: items.length, items, generatedAt: Date.now() };
+  const artifact = { id: scanId, libraryId: libraryId || 'local', totalCount: items.length, items, generatedAt: Date.now() };
   scans[scanId] = artifact;
   writeJson(scanStoreFile, scans);
-  try {
-    // store index of latest scan for this libPath so subsequent scans can quickly find it
-    try { const rp = path.resolve(libPath); scanIndex[rp] = scanId; } catch (e) { scanIndex[libPath] = scanId }
-    writeJson(scanIndexFile, scanIndex);
-  } catch (e) { /* best-effort */ }
   appendLog(`SCAN_COMPLETE id=${scanId} total=${items.length}`);
   // Auto-sweep stale enrich cache entries after a scan completes
   try { const removed = sweepEnrichCache(); if (removed && removed.length) appendLog(`AUTOSWEEP_AFTER_SCAN removed=${removed.length}`); } catch (e) {}
@@ -2274,6 +2192,13 @@ module.exports.externalEnrich = externalEnrich;
 module.exports.metaLookup = metaLookup;
 // Export extractYear for unit testing
 module.exports.extractYear = extractYear;
+// Export internal helpers for test harnesses (non-production)
+module.exports._test = module.exports._test || {};
+module.exports._test.fullScanLibrary = typeof fullScanLibrary !== 'undefined' ? fullScanLibrary : null;
+module.exports._test.incrementalScanLibrary = typeof incrementalScanLibrary !== 'undefined' ? incrementalScanLibrary : null;
+module.exports._test.loadScanCache = typeof loadScanCache !== 'undefined' ? loadScanCache : null;
+module.exports._test.saveScanCache = typeof saveScanCache !== 'undefined' ? saveScanCache : null;
+module.exports._test.processParsedItem = typeof processParsedItem !== 'undefined' ? processParsedItem : null;
 
 // Only start the HTTP server when this file is run directly, not when required as a module
 if (require.main === module) {

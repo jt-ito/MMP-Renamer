@@ -374,8 +374,6 @@ export default function App() {
   }, [])
 
   async function triggerScan(lib, options = {}) {
-    // ensure UI shows we're attempting to scan immediately
-    try { setScanning(true) } catch (e) {}
     // prefer user-configured input path (localStorage fallback), otherwise ask server
     let configuredPath = ''
     try { configuredPath = localStorage.getItem('scan_input_path') || '' } catch {}
@@ -385,38 +383,12 @@ export default function App() {
         configuredPath = (s.data && s.data.userSettings && s.data.userSettings.scan_input_path) || ''
       } catch (e) { /* ignore */ }
     }
-    // If still no configured path, but the caller passed a library with a canonicalPath, use it
-    if (!configuredPath && lib && lib.canonicalPath) {
-      try { configuredPath = lib.canonicalPath } catch (e) {}
-    }
     if (!configuredPath) {
       pushToast && pushToast('Scan', 'No input path configured — set one in Settings before scanning')
-      try { setScanning(false) } catch (e) {}
       return
     }
 
-    // Start scan request; server returns 202 quickly and performs work in background
-    let r = null
-    try {
-      r = await axios.post(API('/scan'), { libraryId: lib?.id, path: configuredPath })
-    } catch (err) {
-      // Map common failure modes to user-friendly messages
-      let msg = 'Scan request failed to start'
-      try {
-        if (err.response) {
-          const status = err.response.status
-          if (status === 401 || status === 403) msg = 'Not authorized — please login'
-          else if (status === 404) msg = 'Configured path not found on server'
-          else if (status >= 500) msg = 'Server error starting scan'
-          else msg = `Scan failed: HTTP ${status}`
-        } else if (err.request) {
-          msg = 'No response from server — network error'
-        }
-      } catch (e) { /* ignore */ }
-      pushToast && pushToast('Scan', msg)
-      try { setScanning(false) } catch (e) {}
-      return
-    }
+    const r = await axios.post(API('/scan'), { libraryId: lib?.id, path: configuredPath })
     // set the current scan id and persist last library id so rescan works across reloads
     setScanId(r.data.scanId)
     const libId = lib?.id || (r.data && r.data.libraryId) || (scanMeta && scanMeta.libraryId) || ''

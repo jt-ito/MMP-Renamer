@@ -1,0 +1,32 @@
+const fs = require('fs');
+const path = require('path');
+const server = require('../server.js');
+
+async function run() {
+  // allow server module to finish any initialization
+  await new Promise(r => setTimeout(r, 50));
+  const helpers = global.__mmp_test || server._test || {};
+  if (!helpers || !helpers.fullScanLibrary) { console.error('helpers not exposed'); process.exit(1); }
+
+  const tmpDir = path.join(__dirname, '..', 'tmp_test_scan');
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  const f1 = path.join(tmpDir, 'Show - 01.mkv'); fs.writeFileSync(f1, 'x');
+  console.log('Created', f1);
+
+  const full = helpers.fullScanLibrary(tmpDir);
+  console.log('fullScanLibrary found', full.length);
+
+  const cacheMap = full.reduce((acc, it) => { try { acc[it.canonicalPath] = fs.statSync(it.canonicalPath).mtimeMs } catch (e) { acc[it.canonicalPath] = Date.now() } return acc }, {});
+  helpers.saveScanCache(cacheMap);
+
+  const f2 = path.join(tmpDir, 'Show - 02.mkv'); fs.writeFileSync(f2, 'y');
+  const inc = helpers.incrementalScanLibrary(tmpDir);
+  console.log('incremental toProcess', inc.toProcess.length, 'removed', inc.removed.length);
+
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
+  process.exit(0);
+}
+
+run();
