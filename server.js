@@ -65,6 +65,7 @@ if (SESSION_KEY) {
 }
 
 const scanStoreFile = path.join(DATA_DIR, 'scans.json');
+const scanIndexFile = path.join(DATA_DIR, 'scan-index.json');
 const enrichStoreFile = path.join(DATA_DIR, 'enrich.json');
 const logsFile = path.join(DATA_DIR, 'logs.txt');
 const settingsFile = path.join(DATA_DIR, 'settings.json');
@@ -94,16 +95,19 @@ try { ensureFile(usersFile, { admin: { username: 'admin', role: 'admin', passwor
 try { ensureFile(enrichStoreFile, {}); } catch (e) {}
 try { ensureFile(parsedCacheFile, {}); } catch (e) {}
 try { ensureFile(scanStoreFile, {}); } catch (e) {}
+try { ensureFile(scanIndexFile, {}); } catch (e) {}
 try { ensureFile(renderedIndexFile, {}); } catch (e) {}
 try { ensureFile(logsFile, ''); } catch (e) {}
 
 let enrichCache = {};
 let parsedCache = {};
 let scans = {};
+let scanIndex = {};
 let renderedIndex = {};
 try { enrichCache = JSON.parse(fs.readFileSync(enrichStoreFile, 'utf8') || '{}') } catch (e) { enrichCache = {} }
 try { parsedCache = JSON.parse(fs.readFileSync(parsedCacheFile, 'utf8') || '{}') } catch (e) { parsedCache = {} }
 try { scans = JSON.parse(fs.readFileSync(scanStoreFile, 'utf8') || '{}') } catch (e) { scans = {} }
+try { scanIndex = JSON.parse(fs.readFileSync(scanIndexFile, 'utf8') || '{}') } catch (e) { scanIndex = {} }
 try { renderedIndex = JSON.parse(fs.readFileSync(renderedIndexFile, 'utf8') || '{}') } catch (e) { renderedIndex = {} }
 
 // Track in-flight scans to prevent concurrent runs for same path/scanId
@@ -770,6 +774,7 @@ app.get('/api/tmdb/status', (req, res) => {
 // Trigger scan - performs full inventory then stores artifact
 app.post('/api/scan', async (req, res) => {
   const { libraryId, path: libraryPath } = req.body || {};
+  const forceFull = !!(req.body && req.body.force);
   // Resolve chosen path in order: explicit request -> requesting user's per-user setting
   // Do NOT fallback to a global server setting here; admins are regular users with extra privileges
   let libPath = null;
@@ -822,13 +827,68 @@ app.post('/api/scan', async (req, res) => {
   }
 
   try {
-    walkDir(libPath);
+    // If not forcing a full scan, attempt an incremental scan using the latest scan for this library/path.
+    // Find the most recent scan artifact for this libraryId and path (if any)
+    let previousScan = null;
+    try {
+      // fast-path: use scanIndex keyed by canonicalized libPath
+      try {
+        const rp = canonicalize(libPath);
+        const prevId = scanIndex[rp];
+        if (prevId && scans[prevId] && scans[prevId].libraryId === (libraryId || 'local')) previousScan = scans[prevId];
+      } catch (e) { previousScan = null; }
+      // fallback: if index missed or invalid, scan artifacts for a match using canonicalized paths
+      if (!previousScan) {
+        const candidates = Object.values(scans || {}).filter(s => (s.libraryId === (libraryId || 'local') && s.libPath && canonicalize(s.libPath) === canonicalize(libPath))).sort((a,b) => (b.generatedAt || 0) - (a.generatedAt || 0));
+        if (candidates.length) previousScan = candidates[0];
+      }
+    } catch (e) { previousScan = null }
+
+    if (previousScan && !forceFull) {
+      appendLog(`SCAN_INCREMENTAL_USING_PREV scan=${previousScan.id} items=${previousScan.totalCount}`);
+      // Single-pass walk: map previous items for O(1) lookup, walk the tree once and decide
+      const prevMap = new Map();
+      try {
+        for (const it of previousScan.items || []) {
+          if (it && it.canonicalPath) prevMap.set(canonicalize(it.canonicalPath), it.id || uuidv4());
+        }
+      } catch (e) { /* ignore */ }
+
+      // Walk and build items in one pass: reuse ids for known files, new UUIDs for new files
+      function walkCompare(dir) {
+        let ent;
+        try { ent = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { appendLog(`SCAN_DIR_SKIP dir=${dir} err=${e.message}`); return; }
+        for (const e of ent) {
+          const full = path.join(dir, e.name);
+          if (e.isDirectory()) {
+            if (IGNORED_DIRS.has(e.name)) continue;
+            walkCompare(full);
+          } else {
+            if (extRe.test(e.name)) {
+              const c = canonicalize(full);
+              if (prevMap.has(c)) {
+                items.push({ id: prevMap.get(c), canonicalPath: c, scannedAt: Date.now() });
+                prevMap.delete(c); // mark as seen
+              } else {
+                items.push({ id: uuidv4(), canonicalPath: c, scannedAt: Date.now() });
+              }
+            }
+          }
+        }
+      }
+
+      walkCompare(libPath);
+      // At this point any entries still in prevMap were removed from disk and are dropped from the new scan
+    } else {
+      // No previous scan or forceFull requested: perform full walk
+      walkDir(libPath);
+    }
   } catch (err) {
     appendLog(`SCAN_ERROR ${err.message}`);
     return res.status(500).json({ error: err.message });
   }
   // Prevent concurrent scans for the same resolved path
-  const lockKey = `scanPath:${libPath}`;
+  const lockKey = `scanPath:${canonicalize(libPath)}`;
   if (activeScans.has(lockKey)) {
     appendLog(`SCAN_CONFLICT path=${libPath}`);
     return res.status(409).json({ error: 'scan already in progress for this path' });
@@ -900,18 +960,17 @@ app.post('/api/scan', async (req, res) => {
             // store a normalized enrichment entry derived from parsing only
             try {
               const parsedBlock = { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }
-              enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
+              updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
             } catch (e) {
-              const prev = enrichCache[key] || {};
               const normalized = normalizeEnrichEntry({ parsed: { title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }, sourceId: 'parsed-cache', cachedAt: Date.now() });
-              enrichCache[key] = preserveAppliedFlags(prev, normalized);
+              updateEnrichCache(key, normalized);
             }
           }
         } catch (renderErr) {
           // fallback to previous behavior on any error
           const episodeTitle = userHasAuthoritativeProviderKey ? '' : ((parsed && parsed.episodeTitle) || '');
-          if (parsed) {
-            enrichCache[key] = Object.assign({}, enrichCache[key] || {}, { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeTitle: episodeTitle, language: 'en', timestamp: Date.now() });
+            if (parsed) {
+            updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeTitle: episodeTitle, language: 'en', timestamp: Date.now() }));
           }
         }
       } catch (e) { appendLog(`PARSE_ITEM_FAIL path=${it.canonicalPath} err=${e.message}`); }
@@ -923,9 +982,14 @@ app.post('/api/scan', async (req, res) => {
   // Wrap the remainder of the request flow so we can release the lock if something fails
   try {
 
-  const artifact = { id: scanId, libraryId: libraryId || 'local', totalCount: items.length, items, generatedAt: Date.now() };
+  const artifact = { id: scanId, libraryId: libraryId || 'local', libPath: libPath, totalCount: items.length, items, generatedAt: Date.now() };
   scans[scanId] = artifact;
   writeJson(scanStoreFile, scans);
+  try {
+    // store index of latest scan for this libPath so subsequent scans can quickly find it
+    try { const rp = path.resolve(libPath); scanIndex[rp] = scanId; } catch (e) { scanIndex[libPath] = scanId }
+    writeJson(scanIndexFile, scanIndex);
+  } catch (e) { /* best-effort */ }
   appendLog(`SCAN_COMPLETE id=${scanId} total=${items.length}`);
   // Auto-sweep stale enrich cache entries after a scan completes
   try { const removed = sweepEnrichCache(); if (removed && removed.length) appendLog(`AUTOSWEEP_AFTER_SCAN removed=${removed.length}`); } catch (e) {}
@@ -997,16 +1061,15 @@ app.post('/api/scan', async (req, res) => {
             try {
               const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title }
               try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
-              enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+              updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
             } catch (e) {
-              enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, data, { providerRenderedName: providerRendered, sourceId: 'provider', cachedAt: Date.now() }));
+              updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { providerRenderedName: providerRendered, sourceId: 'provider', cachedAt: Date.now() }));
             }
             // persist caches
             try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
           } catch (e) {
-            // if provider render fails, still persist raw provider data
-            enrichCache[key] = Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' });
-            try { writeJson(enrichStoreFile, enrichCache) } catch (ee) {}
+            // if provider render fails, still persist raw provider data (preserve flags)
+            updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
           }
             // update progress for polling clients
             try { const refreshProgressKey = `refreshScan:${scanId}`; if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].processed += 1; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch(e){}
@@ -1236,8 +1299,7 @@ app.post('/api/enrich', async (req, res) => {
       const parsedBlock = { title: pc.title, parsedName: pc.parsedName, season: pc.season, episode: pc.episode, timestamp: Date.now() }
       const providerBlock = (enrichCache[key] && enrichCache[key].provider) ? enrichCache[key].provider : null
   const normalized = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, provider: providerBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
-  const prev = enrichCache[key] || {};
-  enrichCache[key] = preserveAppliedFlags(prev, normalized);
+  updateEnrichCache(key, normalized);
       try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
       return res.json({ parsed: normalized.parsed || null, provider: normalized.provider || null })
     }
@@ -1282,10 +1344,9 @@ app.post('/api/enrich', async (req, res) => {
       // attach normalized provider block
   const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
   try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
-  enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+  updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
       } catch (e) {
-      const prev = enrichCache[key] || {};
-      enrichCache[key] = preserveAppliedFlags(prev, Object.assign({}, { ...data, cachedAt: Date.now() }));
+  updateEnrichCache(key, Object.assign({}, { ...data, cachedAt: Date.now() }));
     }
             // if provider returned authoritative title/parsedName, persist into parsedCache so subsequent scans use it
     try {
@@ -1299,8 +1360,7 @@ app.post('/api/enrich', async (req, res) => {
         writeJson(parsedCacheFile, parsedCache)
       }
     } catch (e) {
-      const prev = enrichCache[key] || {};
-      enrichCache[key] = preserveAppliedFlags(prev, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
+      updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
     }
     res.json({ enrichment: enrichCache[key] });
   } catch (err) { appendLog(`ENRICH_FAIL path=${key} err=${err.message}`); res.status(500).json({ error: err.message }); }
@@ -1311,12 +1371,11 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
   try {
     const p = req.body && req.body.path ? req.body.path : null
     if (!p) return res.status(400).json({ error: 'path required' })
-    const key = canonicalize(p)
-    enrichCache[key] = enrichCache[key] || {}
-    enrichCache[key].hidden = true
-    writeJson(enrichStoreFile, enrichCache)
-    appendLog(`HIDE path=${p}`)
-    return res.json({ ok: true, path: key })
+  const key = canonicalize(p)
+  // set hidden flag while preserving applied/metadata fields
+  const updated = updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { hidden: true }));
+  appendLog(`HIDE path=${p}`)
+  return res.json({ ok: true, path: key, enrichment: updated })
   } catch (e) { return res.status(500).json({ error: e.message }) }
 })
 
@@ -1433,15 +1492,13 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
                 .trim();
               const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
               try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
-              enrichCache[key] = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+              updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
             } else {
               // preserve applied/hidden metadata when replacing entry
-              const prev = enrichCache[key] || {};
-              enrichCache[key] = preserveAppliedFlags(prev, Object.assign({}, { ...data, cachedAt: Date.now() }));
+              updateEnrichCache(key, Object.assign({}, { ...data, cachedAt: Date.now() }));
             }
             } catch (e) {
-            const prev = enrichCache[key] || {};
-            enrichCache[key] = preserveAppliedFlags(prev, Object.assign({}, { ...data, cachedAt: Date.now() }));
+            updateEnrichCache(key, Object.assign({}, { ...data, cachedAt: Date.now() }));
           }
           results.push({ path: key, ok: true, parsedName: data.parsedName, title: data.title });
           appendLog(`REFRESH_ITEM_OK path=${key} parsedName=${data.parsedName}`);
@@ -1641,6 +1698,21 @@ function preserveAppliedFlags(prev, next) {
     if (typeof prev.renderedName !== 'undefined') next.renderedName = prev.renderedName;
     return next;
   } catch (e) { return next; }
+}
+
+// Centralized update helper: always preserve applied/hidden flags, normalize entry, and persist
+function updateEnrichCache(key, nextObj) {
+  try {
+    const prev = enrichCache[key] || {};
+    // merge with prev to keep any existing fields, then allow preserveAppliedFlags to copy applied/hidden
+    const merged = Object.assign({}, prev, nextObj || {});
+    const normalized = normalizeEnrichEntry(merged);
+    enrichCache[key] = preserveAppliedFlags(prev, normalized);
+    try { writeJson(enrichStoreFile, enrichCache); } catch (e) { /* best-effort persist */ }
+    return enrichCache[key];
+  } catch (e) {
+    return nextObj;
+  }
 }
 
 // Helper: clean series title to avoid duplicated episode label or episode title fragments

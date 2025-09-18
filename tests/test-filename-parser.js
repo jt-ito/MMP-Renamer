@@ -21,3 +21,13 @@ function run() {
 }
 
 run()
+
+// Additional test for user-provided example: trailing numeric should be episode
+try {
+  const example = '/mnt/Tor/[Hentai] Chuhai Lips - 08 [WEB 1080p x264 AAC2.0][Uncensored][Dual Audio].mkv'
+  const r2 = parse(example)
+  console.log('example parse:', r2)
+  if (!(r2.title && /Chuhai Lips/i.test(r2.title))) throw new Error('title mismatch')
+  if (Number(r2.episode) !== 8) throw new Error('episode mismatch: ' + String(r2.episode))
+  console.log('additional test passed')
+} catch (e) { console.error('additional test failed', e && e.message); process.exit(1) }

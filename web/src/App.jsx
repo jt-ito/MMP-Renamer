@@ -1266,9 +1266,19 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
           <button title="Hide this item" className="btn-ghost" disabled={loading} onClick={async () => {
             if (!it) return
             try {
-              await axios.post(API('/enrich/hide'), { path: it.canonicalPath })
+              const r = await axios.post(API('/enrich/hide'), { path: it.canonicalPath })
+              // if server returns the updated enrichment, use it to update local cache immediately
+              if (r && r.data && r.data.enrichment) {
+                const enriched = normalizeEnrichResponse(r.data.enrichment)
+                setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: enriched }))
+                if (enriched && (enriched.hidden || enriched.applied)) {
+                  setItems(prev => prev.filter(x => x.canonicalPath !== it.canonicalPath))
+                  setAllItems(prev => prev.filter(x => x.canonicalPath !== it.canonicalPath))
+                }
+              }
               pushToast && pushToast('Hide', 'Item hidden')
-              await refreshEnrichForPaths([it.canonicalPath])
+              // background-sync to ensure eventual consistency
+              refreshEnrichForPaths([it.canonicalPath]).catch(()=>{})
             } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
           }}><IconCopy/> <span>Hide</span></button>
         </div>
