@@ -399,7 +399,22 @@ export default function App() {
       r = await axios.post(API('/scan'), { libraryId: lib?.id, path: configuredPath }, { signal: controller.signal })
       clearTimeout(timeout)
     } catch (err) {
-      pushToast && pushToast('Scan', 'Scan request failed to start')
+      // Map common failure modes to user-friendly messages
+      let msg = 'Scan request failed to start'
+      try {
+        if (err.name === 'CanceledError' || err.message === 'canceled') {
+          msg = 'Scan request timed out'
+        } else if (err.response) {
+          const status = err.response.status
+          if (status === 401 || status === 403) msg = 'Not authorized — please login'
+          else if (status === 404) msg = 'Configured path not found on server'
+          else if (status >= 500) msg = 'Server error starting scan'
+          else msg = `Scan failed: HTTP ${status}`
+        } else if (err.request) {
+          msg = 'No response from server — network error'
+        }
+      } catch (e) { /* ignore */ }
+      pushToast && pushToast('Scan', msg)
       try { setScanning(false) } catch (e) {}
       return
     }
