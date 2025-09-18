@@ -126,11 +126,29 @@ function appendLog(line) {
 }
 
 // Simple atomic JSON writer used throughout the server
+// Debounced async JSON writer: schedule writes to avoid blocking the event loop
+const _pendingJsonWrites = {};
 function writeJson(filePath, obj) {
   try {
-    fs.writeFileSync(filePath, JSON.stringify(obj, null, 2), { encoding: 'utf8' });
+    const data = JSON.stringify(obj, null, 2);
+    // store latest payload
+    _pendingJsonWrites[filePath] = _pendingJsonWrites[filePath] || {};
+    _pendingJsonWrites[filePath].data = data;
+    // reset timer
+    if (_pendingJsonWrites[filePath].timer) clearTimeout(_pendingJsonWrites[filePath].timer);
+    _pendingJsonWrites[filePath].timer = setTimeout(() => {
+      const payload = _pendingJsonWrites[filePath] && _pendingJsonWrites[filePath].data;
+      // perform async write
+      fs.writeFile(filePath, payload || '', { encoding: 'utf8' }, (err) => {
+        if (err) {
+          try { console.error('writeJson async failed', filePath, err && err.message ? err.message : err); } catch (ee) {}
+        }
+      });
+      // cleanup
+      try { delete _pendingJsonWrites[filePath]; } catch (e) {}
+    }, 300);
   } catch (e) {
-    try { console.error('writeJson failed', filePath, e && e.message ? e.message : e); } catch (ee) {}
+    try { console.error('writeJson schedule failed', filePath, e && e.message ? e.message : e); } catch (ee) {}
   }
 }
 
