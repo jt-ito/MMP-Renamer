@@ -747,8 +747,17 @@ export default function App() {
       if (allItems && allItems.length) {
         const qq = (q || '').trim()
         if (!qq) {
-          setItems(allItems.slice())
-          setTotal(allItems.length)
+          if (allItems.length <= MAX_IN_MEMORY_SEARCH) {
+            setItems(allItems.slice())
+            setTotal(allItems.length)
+          } else {
+            // large baseline: fetch first page from server instead of rendering all in-memory
+            const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: 0, limit: batchSize } })
+            const page = (r.data.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+            setItems(page)
+            setTotal((scanMeta && scanMeta.totalCount) || page.length || 0)
+            try { setCurrentScanPaths(new Set((r.data.items || []).map(i => i.canonicalPath).filter(Boolean))) } catch (e) {}
+          }
         } else {
           const lowered = qq.toLowerCase()
           const results = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
@@ -800,10 +809,21 @@ export default function App() {
     if (searchTimeoutRef.current) { clearTimeout(searchTimeoutRef.current); searchTimeoutRef.current = null }
     // if empty query, restore normal listing (prefer `allItems` if present)
     if (!searchQuery || searchQuery.length === 0) {
-      // If we have a cached full listing in-memory, use it immediately
-      if (allItems && allItems.length) {
+      // If we have a cached full listing in-memory and it's reasonably sized, use it immediately
+      if (allItems && allItems.length && allItems.length <= MAX_IN_MEMORY_SEARCH) {
         try { setItems(allItems.slice()) } catch (e) {}
         try { setTotal(allItems.length) } catch (e) {}
+      } else if (allItems && allItems.length && allItems.length > MAX_IN_MEMORY_SEARCH) {
+        // baseline is too large for in-memory rendering -> fetch first page from server
+        try {
+          // prefer using current scanId paging if available
+          if (scanId) {
+            searchTimeoutRef.current = setTimeout(() => { handleScrollNearEnd().catch(()=>{}) }, 150)
+          } else {
+            setItems([])
+            searchTimeoutRef.current = setTimeout(() => { handleScrollNearEnd().catch(()=>{}) }, 150)
+          }
+        } catch (e) { setItems([]) }
       } else {
         // otherwise fall back to loading pages from the server
         setItems([])
