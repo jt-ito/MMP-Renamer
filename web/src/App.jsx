@@ -374,6 +374,8 @@ export default function App() {
   }, [])
 
   async function triggerScan(lib, options = {}) {
+    // ensure UI shows we're attempting to scan immediately
+    try { setScanning(true) } catch (e) {}
     // prefer user-configured input path (localStorage fallback), otherwise ask server
     let configuredPath = ''
     try { configuredPath = localStorage.getItem('scan_input_path') || '' } catch {}
@@ -385,10 +387,22 @@ export default function App() {
     }
     if (!configuredPath) {
       pushToast && pushToast('Scan', 'No input path configured — set one in Settings before scanning')
+      try { setScanning(false) } catch (e) {}
       return
     }
 
-    const r = await axios.post(API('/scan'), { libraryId: lib?.id, path: configuredPath })
+    // Start scan request with basic timeout/error handling so UI doesn't stay stuck
+    let r = null
+    try {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 30_000) // 30s timeout for scan start
+      r = await axios.post(API('/scan'), { libraryId: lib?.id, path: configuredPath }, { signal: controller.signal })
+      clearTimeout(timeout)
+    } catch (err) {
+      pushToast && pushToast('Scan', 'Scan request failed to start')
+      try { setScanning(false) } catch (e) {}
+      return
+    }
     // set the current scan id and persist last library id so rescan works across reloads
     setScanId(r.data.scanId)
     const libId = lib?.id || (r.data && r.data.libraryId) || (scanMeta && scanMeta.libraryId) || ''
