@@ -77,6 +77,7 @@ export default function App() {
   const [scanId, setScanId] = useState(null)
   const [scanMeta, setScanMeta] = useState(null)
   const [lastLibraryId, setLastLibraryId] = useLocalState('lastLibraryId', '')
+  const [lastScanId, setLastScanId] = useLocalState('lastScanId', null)
   const [items, setItems] = useState([])
   // allItems is the baseline full listing for the current scan (post-scan).
   // This is the single source of truth for the visible dataset; searches filter this in-memory.
@@ -390,7 +391,8 @@ export default function App() {
 
     const r = await axios.post(API('/scan'), { libraryId: lib?.id, path: configuredPath })
     // set the current scan id and persist last library id so rescan works across reloads
-    setScanId(r.data.scanId)
+  setScanId(r.data.scanId)
+  try { setLastScanId(r.data.scanId) } catch (e) {}
     const libId = lib?.id || (r.data && r.data.libraryId) || (scanMeta && scanMeta.libraryId) || ''
     try { setLastLibraryId(libId) } catch (e) {}
 
@@ -1012,6 +1014,48 @@ export default function App() {
     window.addEventListener('renamer:unapproved', handler)
     return () => window.removeEventListener('renamer:unapproved', handler)
   }, [])
+
+  // On mount: if we have a persisted lastScanId, attempt to load it and populate allItems
+  useEffect(() => {
+    let mounted = true
+    async function loadLastScan() {
+      try {
+        if (!lastScanId) return
+        // fetch scan metadata
+        const metaRes = await axios.get(API(`/scan/${lastScanId}`)).catch(() => null)
+        if (!metaRes || !metaRes.data) return
+        if (!mounted) return
+        setScanId(lastScanId)
+        setScanMeta(metaRes.data)
+        const totalCount = metaRes.data.totalCount || 0
+        setTotal(totalCount)
+        // if the scan is small enough, fetch all items in one go; otherwise, fetch first page only
+        if (totalCount <= MAX_IN_MEMORY_SEARCH) {
+          // fetch in pages of 500
+          const pageSize = 500
+          let all = []
+          for (let off = 0; off < totalCount; off += pageSize) {
+            const r = await axios.get(API(`/scan/${lastScanId}/items`), { params: { offset: off, limit: pageSize } }).catch(() => ({ data: { items: [] } }))
+            if (!mounted) return
+            all = all.concat(r.data.items || [])
+          }
+          setAllItems(all)
+          setItems(all)
+          setCurrentScanPaths(new Set((all || []).map(i => i.canonicalPath)))
+        } else {
+          // large scan: fetch first page only and rely on server search/paging for the rest
+          const r = await axios.get(API(`/scan/${lastScanId}/items`), { params: { offset: 0, limit: 500 } }).catch(() => ({ data: { items: [] } }))
+          if (!mounted) return
+          const first = r.data.items || []
+          setAllItems(first)
+          setItems(first)
+          setCurrentScanPaths(new Set((first || []).map(i => i.canonicalPath)))
+        }
+      } catch (e) { /* best-effort */ }
+    }
+    loadLastScan()
+    return () => { mounted = false }
+  }, [lastScanId])
 
   const selectedCount = Object.keys(selected || {}).length
   return (
