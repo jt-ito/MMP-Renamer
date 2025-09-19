@@ -1,0 +1,3 @@
+Commit server: snapshot enrichment into stored scan items and prune hidden/applied
+
+This file is a placeholder used by the automated patch tool to describe the commit message for the changes already applied to server.js.

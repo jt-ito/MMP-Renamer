@@ -1080,12 +1080,29 @@ app.post('/api/scan', async (req, res) => {
             const s = scans[sid];
             if (!s || !Array.isArray(s.items)) continue;
             const before = s.items.length;
-            s.items = s.items.filter(it => {
-              try { const k = canonicalize(it.canonicalPath); const e = enrichCache[k] || null; if (e && (e.hidden || e.applied)) return false; return true } catch (e) { return true }
+            // filter out hidden/applied and snapshot any available enrichment into item.enrichment
+            s.items = s.items.map(it => (it && it.canonicalPath) ? Object.assign({}, it) : it).filter(it => {
+              try {
+                const k = canonicalize(it.canonicalPath);
+                const e = enrichCache[k] || null;
+                // if hidden/applied, remove
+                if (e && (e.hidden || e.applied)) return false;
+                // otherwise attach a snapshot of enrichment (normalized) for client hydration
+                try { it.enrichment = enrichCache[k] || null } catch (ee) { it.enrichment = null }
+                return true
+              } catch (e) { return true }
             });
             if (s.items.length !== before) {
               s.totalCount = s.items.length;
               modified.push(sid);
+            } else {
+              // Even if count didn't change, we may have enriched items to snapshot; mark modified
+              // when any item gained an enrichment snapshot
+              let anySnapshot = false
+              for (const it of s.items) {
+                try { if (it && it.enrichment) { anySnapshot = true; break } } catch (e) {}
+              }
+              if (anySnapshot) modified.push(sid)
             }
           } catch (e) {}
         }
@@ -1587,12 +1604,24 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
             const s = scans[sid];
             if (!s || !Array.isArray(s.items)) continue;
             const before = s.items.length;
-            s.items = s.items.filter(it => {
-              try { const k = canonicalize(it.canonicalPath); const e = enrichCache[k] || null; if (e && (e.hidden || e.applied)) return false; return true } catch (e) { return true }
+            s.items = s.items.map(it => (it && it.canonicalPath) ? Object.assign({}, it) : it).filter(it => {
+              try {
+                const k = canonicalize(it.canonicalPath);
+                const e = enrichCache[k] || null;
+                if (e && (e.hidden || e.applied)) return false;
+                try { it.enrichment = enrichCache[k] || null } catch (ee) { it.enrichment = null }
+                return true
+              } catch (e) { return true }
             });
             if (s.items.length !== before) {
               s.totalCount = s.items.length;
               modified.push(sid);
+            } else {
+              let anySnapshot = false
+              for (const it of s.items) {
+                try { if (it && it.enrichment) { anySnapshot = true; break } } catch (e) {}
+              }
+              if (anySnapshot) modified.push(sid)
             }
           } catch (e) {}
         }
