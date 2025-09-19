@@ -1347,17 +1347,23 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
             // guard concurrent clicks
             if (loadingEnrich && loadingEnrich[originalPath]) return
             safeSetLoadingEnrich(prev => ({ ...prev, [originalPath]: true }))
-            let showedToast = false
+            let resp = null
+            let didFinalToast = false
             try {
               // attempt hide
-              const resp = await axios.post(API('/enrich/hide'), { path: originalPath })
+              resp = await axios.post(API('/enrich/hide'), { path: originalPath })
               // prefer canonical key returned by server when present
               const serverKey = resp && resp.data && resp.data.path ? resp.data.path : originalPath
-              const returned = resp && resp.data && (resp.data.enrichment || resp.data) ? (resp.data.enrichment || resp.data.enrichment || resp.data) : null
+              const returned = resp && resp.data && (resp.data.enrichment || resp.data) ? (resp.data.enrichment || resp.data) : null
               // Always fetch authoritative enrichment after the operation to avoid races
-              const er = await axios.get(API('/enrich'), { params: { path: serverKey } }).catch(() => null)
-              const authoritative = er && er.data && (er.data.enrichment || er.data) ? (er.data.enrichment || er.data) : null
+              let authoritative = null
+              try {
+                const er = await axios.get(API('/enrich'), { params: { path: serverKey } }).catch(() => null)
+                authoritative = er && er.data && (er.data.enrichment || er.data) ? (er.data.enrichment || er.data) : null
+              } catch (e) { authoritative = null }
               const enriched = authoritative ? normalizeEnrichResponse(authoritative) : (returned ? normalizeEnrichResponse(returned) : null)
+
+              // Apply authoritative/optimistic changes to local cache/UI but do NOT show final toast yet.
               if (enriched) {
                 setEnrichCache(prev => ({ ...prev, [serverKey]: enriched }))
                 // remove from visible lists if hidden/applied
@@ -1365,17 +1371,14 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   setItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
                   setAllItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
                 }
-                pushToast && pushToast('Hide', 'Item hidden')
-                showedToast = true
               } else {
                 // no authoritative enrichment — fallback to optimistic hide but still attempt to refresh scans
                 setEnrichCache(prev => ({ ...prev, [originalPath]: Object.assign({}, prev && prev[originalPath] ? prev[originalPath] : {}, { hidden: true }) }))
                 setItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
                 setAllItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
-                pushToast && pushToast('Hide', 'Item hidden')
-                showedToast = true
               }
-              // refresh affected scans if server indicates modification
+
+              // refresh affected scans if server indicates modification and wait for them to complete
               try {
                 const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
                 if (modified && modified.length) {
@@ -1403,22 +1406,101 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   }
                 }
               } catch (e) { /* swallow */ }
-            } catch (err) {
-              // On network error, consult authoritative GET before deciding failure
+
+              // Now that we've reloaded scans (if applicable), confirm final state and show a single toast.
               try {
-                const check = await axios.get(API('/enrich'), { params: { path: originalPath } }).catch(() => null)
-                const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
-                const norm = auth ? normalizeEnrichResponse(auth) : null
-                if (norm && (norm.hidden || norm.applied)) {
-                  // server likely applied hide but POST failed — treat as success
-                  setEnrichCache(prev => ({ ...prev, [originalPath]: norm }))
-                  setItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
-                  setAllItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
-                  if (!showedToast) { pushToast && pushToast('Hide', 'Item hidden (confirmed)'); showedToast = true }
+                // If we have an authoritative enriched object that indicates hidden/applied, show success
+                if (enriched && (enriched.hidden || enriched.applied)) {
+                  pushToast && pushToast('Hide', 'Item hidden')
+                  didFinalToast = true
                 } else {
+                  // Otherwise, perform a final authoritative check before declaring failure
+                  const tryPaths = []
+                  if (resp && resp.data && resp.data.path) tryPaths.push(resp.data.path)
+                  tryPaths.push(originalPath)
+                  let confirmed = false
+                  for (const pth of tryPaths) {
+                    try {
+                      const check = await axios.get(API('/enrich'), { params: { path: pth } }).catch(() => null)
+                      const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
+                      const norm = auth ? normalizeEnrichResponse(auth) : null
+                      if (norm && (norm.hidden || norm.applied)) {
+                        // server applied hide — treat as success
+                        setEnrichCache(prev => ({ ...prev, [pth]: norm }))
+                        setItems(prev => prev.filter(x => x.canonicalPath !== pth))
+                        setAllItems(prev => prev.filter(x => x.canonicalPath !== pth))
+                        pushToast && pushToast('Hide', 'Item hidden (confirmed)')
+                        didFinalToast = true
+                        confirmed = true
+                        break
+                      }
+                    } catch (e) {}
+                  }
+                  if (!confirmed && !didFinalToast) {
+                    // genuine failure
+                    pushToast && pushToast('Hide', 'Failed to hide')
+                    didFinalToast = true
+                  }
+                }
+              } catch (e) {
+                if (!didFinalToast) { pushToast && pushToast('Hide', 'Failed to hide') }
+                didFinalToast = true
+              }
+            } catch (err) {
+              // On network error, consult authoritative GET before deciding failure (existing behavior)
+              try {
+                const tryPaths = []
+                if (resp && resp.data && resp.data.path) tryPaths.push(resp.data.path)
+                tryPaths.push(originalPath)
+                let confirmed = false
+                for (const pth of tryPaths) {
+                  try {
+                    const check = await axios.get(API('/enrich'), { params: { path: pth } }).catch(() => null)
+                    const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
+                    const norm = auth ? normalizeEnrichResponse(auth) : null
+                    if (norm && (norm.hidden || norm.applied)) {
+                      // server likely applied hide but POST failed — treat as success
+                      setEnrichCache(prev => ({ ...prev, [pth]: norm }))
+                      setItems(prev => prev.filter(x => x.canonicalPath !== pth))
+                      setAllItems(prev => prev.filter(x => x.canonicalPath !== pth))
+                      pushToast && pushToast('Hide', 'Item hidden (confirmed)')
+                      confirmed = true
+                      break
+                    }
+                  } catch (e) {}
+                }
+                if (!confirmed) {
                   // genuine failure
                   pushToast && pushToast('Hide', 'Failed to hide')
                 }
+                // If POST did return modifiedScanIds before network error, reload those scans
+                try {
+                  const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
+                  if (modified && modified.length) {
+                    const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
+                    for (const sid of toReload) {
+                      try {
+                        const m = await axios.get(API(`/scan/${sid}`))
+                        const total = m.data.totalCount || 0
+                        const coll = []
+                        let off = 0
+                        while (off < total) {
+                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`))
+                          const its = pgr.data.items || []
+                          coll.push(...its)
+                          off += its.length
+                        }
+                        if (sid === scanId || sid === lastScanId) {
+                          setScanMeta(m.data)
+                          setTotal(m.data.totalCount || coll.length)
+                          setItems(coll.filter(it => it && it.canonicalPath))
+                          setAllItems(coll.filter(it => it && it.canonicalPath))
+                          try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                        }
+                      } catch (e) {}
+                    }
+                  }
+                } catch (ee) {}
               } catch (ee) {
                 pushToast && pushToast('Hide', 'Failed to hide')
               }
