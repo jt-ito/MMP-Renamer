@@ -1343,38 +1343,44 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
           <button title="Rescan metadata for this item" className="btn-ghost" disabled={loading} onClick={async () => { if (!it) return; pushToast && pushToast('Rescan','Refreshing metadata...'); await enrichOne(it, true) }}>{loading ? <Spinner/> : <><IconRefresh/> <span>Rescan</span></>} </button>
           <button title="Hide this item" className="btn-ghost" disabled={loading} onClick={async () => {
             if (!it) return
-            const p = it.canonicalPath
-            // set per-item loading to prevent duplicate clicks
-            safeSetLoadingEnrich(prev => ({ ...prev, [p]: true }))
+            const originalPath = it.canonicalPath
+            // guard concurrent clicks
+            if (loadingEnrich && loadingEnrich[originalPath]) return
+            safeSetLoadingEnrich(prev => ({ ...prev, [originalPath]: true }))
+            let showedToast = false
             try {
-              const r = await axios.post(API('/enrich/hide'), { path: p })
-              // On success, use authoritative enrichment returned by server when available
-              try {
-                const returned = (r && r.data && (r.data.enrichment || r.data)) || null
-                if (returned) {
-                  const enriched = normalizeEnrichResponse(returned.enrichment || returned)
-                  setEnrichCache(prev => ({ ...prev, [p]: enriched }))
-                  if (enriched && (enriched.hidden || enriched.applied)) {
-                    setItems(prev => prev.filter(x => x.canonicalPath !== p))
-                    setAllItems(prev => prev.filter(x => x.canonicalPath !== p))
-                  }
-                } else {
-                  // fallback optimistic removal
-                  setEnrichCache(prev => ({ ...prev, [p]: Object.assign({}, prev && prev[p] ? prev[p] : {}, { hidden: true }) }))
-                  setItems(prev => prev.filter(x => x.canonicalPath !== p))
-                  setAllItems(prev => prev.filter(x => x.canonicalPath !== p))
+              // attempt hide
+              const resp = await axios.post(API('/enrich/hide'), { path: originalPath })
+              // prefer canonical key returned by server when present
+              const serverKey = resp && resp.data && resp.data.path ? resp.data.path : originalPath
+              const returned = resp && resp.data && (resp.data.enrichment || resp.data) ? (resp.data.enrichment || resp.data.enrichment || resp.data) : null
+              // Always fetch authoritative enrichment after the operation to avoid races
+              const er = await axios.get(API('/enrich'), { params: { path: serverKey } }).catch(() => null)
+              const authoritative = er && er.data && (er.data.enrichment || er.data) ? (er.data.enrichment || er.data) : null
+              const enriched = authoritative ? normalizeEnrichResponse(authoritative) : (returned ? normalizeEnrichResponse(returned) : null)
+              if (enriched) {
+                setEnrichCache(prev => ({ ...prev, [serverKey]: enriched }))
+                // remove from visible lists if hidden/applied
+                if (enriched.hidden || enriched.applied) {
+                  setItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
+                  setAllItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
                 }
-              } catch (e) { /* best-effort */ }
-              pushToast && pushToast('Hide', 'Item hidden')
-              // background-sync: re-fetch authoritative enrichment to reconcile
-              refreshEnrichForPaths([p]).catch(()=>{})
-              // If server returned modified scan ids, refresh any open scans so UI reflects removals
+                pushToast && pushToast('Hide', 'Item hidden')
+                showedToast = true
+              } else {
+                // no authoritative enrichment — fallback to optimistic hide but still attempt to refresh scans
+                setEnrichCache(prev => ({ ...prev, [originalPath]: Object.assign({}, prev && prev[originalPath] ? prev[originalPath] : {}, { hidden: true }) }))
+                setItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
+                setAllItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
+                pushToast && pushToast('Hide', 'Item hidden')
+                showedToast = true
+              }
+              // refresh affected scans if server indicates modification
               try {
-                const modified = (r && r.data && Array.isArray(r.data.modifiedScanIds)) ? r.data.modifiedScanIds : []
+                const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
                 if (modified && modified.length) {
-                  // if current scan or lastScanId is affected, reload those artifacts
-                  const toCheck = new Set(modified)
-                  const reloadIf = async (sid) => {
+                  const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
+                  for (const sid of toReload) {
                     try {
                       const m = await axios.get(API(`/scan/${sid}`))
                       const total = m.data.totalCount || 0
@@ -1386,35 +1392,38 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                         coll.push(...its)
                         off += its.length
                       }
-                      // update UI only if this scan is currently selected
                       if (sid === scanId || sid === lastScanId) {
                         setScanMeta(m.data)
                         setTotal(m.data.totalCount || coll.length)
                         setItems(coll.filter(it => it && it.canonicalPath))
                         setAllItems(coll.filter(it => it && it.canonicalPath))
-                        // update currentScanPaths set
                         try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
                       }
                     } catch (e) { /* best-effort */ }
                   }
-                  // reload any affected scans that match current or lastScanId
-                  for (const sid of Array.from(toCheck)) {
-                    if (sid === scanId || sid === lastScanId) await reloadIf(sid)
-                  }
                 }
               } catch (e) { /* swallow */ }
-            } catch (e) {
-              // only show failure if POST failed; but if our local cache already reflects hidden, suppress the negative toast
+            } catch (err) {
+              // On network error, consult authoritative GET before deciding failure
               try {
-                const local = enrichCache && enrichCache[p]
-                if (local && local.hidden) {
-                  // server likely succeeded but client request errored; don't show failure toast
+                const check = await axios.get(API('/enrich'), { params: { path: originalPath } }).catch(() => null)
+                const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
+                const norm = auth ? normalizeEnrichResponse(auth) : null
+                if (norm && (norm.hidden || norm.applied)) {
+                  // server likely applied hide but POST failed — treat as success
+                  setEnrichCache(prev => ({ ...prev, [originalPath]: norm }))
+                  setItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
+                  setAllItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
+                  if (!showedToast) { pushToast && pushToast('Hide', 'Item hidden (confirmed)'); showedToast = true }
                 } else {
+                  // genuine failure
                   pushToast && pushToast('Hide', 'Failed to hide')
                 }
-              } catch (ee) { pushToast && pushToast('Hide', 'Failed to hide') }
+              } catch (ee) {
+                pushToast && pushToast('Hide', 'Failed to hide')
+              }
             } finally {
-              safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[p]; return n })
+              safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[originalPath]; return n })
             }
           }}><IconCopy/> <span>Hide</span></button>
         </div>
