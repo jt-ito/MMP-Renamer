@@ -1020,12 +1020,20 @@ export default function App() {
     let mounted = true
     async function loadLastScan() {
       try {
-        if (!lastScanId) return
-        // fetch scan metadata
-        const metaRes = await axios.get(API(`/scan/${lastScanId}`)).catch(() => null)
+        let effectiveScanId = lastScanId
+        let metaRes = null
+        if (effectiveScanId) metaRes = await axios.get(API(`/scan/${effectiveScanId}`)).catch(() => null)
+        // If persisted lastScanId not found on server, fallback to latest scan for the library
+        if ((!metaRes || !metaRes.data) && lastLibraryId) {
+          const pick = await axios.get(API('/scan/latest'), { params: { libraryId: lastLibraryId } }).catch(() => null)
+          if (pick && pick.data && pick.data.scanId) {
+            effectiveScanId = pick.data.scanId
+            metaRes = await axios.get(API(`/scan/${effectiveScanId}`)).catch(() => null)
+          }
+        }
         if (!metaRes || !metaRes.data) return
         if (!mounted) return
-        setScanId(lastScanId)
+        setScanId(effectiveScanId)
         setScanMeta(metaRes.data)
         const totalCount = metaRes.data.totalCount || 0
         setTotal(totalCount)

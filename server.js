@@ -1060,6 +1060,20 @@ app.post('/api/scan', async (req, res) => {
 app.get('/api/scan/:scanId', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
 app.get('/api/scan/:scanId/items', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); const offset = parseInt(req.query.offset || '0', 10); const limit = Math.min(parseInt(req.query.limit || '50', 10), 500); const slice = s.items.slice(offset, offset + limit); res.json({ items: slice, offset, limit, total: s.totalCount }); });
 
+// Return the most recent scan artifact optionally filtered by libraryId. Useful when client lost lastScanId.
+app.get('/api/scan/latest', (req, res) => {
+  try {
+    const lib = req.query.libraryId || null
+    const all = Object.keys(scans || {}).map(k => scans[k]).filter(Boolean)
+    let filtered = all
+    if (lib) filtered = filtered.filter(s => s.libraryId === lib)
+    if (!filtered.length) return res.status(404).json({ error: 'no scans' })
+    filtered.sort((a,b) => (b.generatedAt || 0) - (a.generatedAt || 0))
+    const pick = filtered[0]
+    return res.json({ scanId: pick.id, libraryId: pick.libraryId, totalCount: pick.totalCount, generatedAt: pick.generatedAt })
+  } catch (e) { return res.status(500).json({ error: e.message }) }
+})
+
 // Search items within a scan without returning all items (server-side filter)
 app.get('/api/scan/:scanId/search', (req, res) => {
   try {
