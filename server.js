@@ -1348,9 +1348,16 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
     if (!p) return res.status(400).json({ error: 'path required' })
   const key = canonicalize(p)
   // set hidden flag while preserving applied/metadata fields
-  const updated = updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { hidden: true }));
+  updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { hidden: true }));
+  // ensure we return the authoritative enrichment object as persisted
+  let returned = null
+  try {
+    returned = enrichCache[key] || null
+    // persist has already been attempted by updateEnrichCache; attempt best-effort write again
+    try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
+  } catch (e) { returned = null }
   appendLog(`HIDE path=${p}`)
-  return res.json({ ok: true, path: key, enrichment: updated })
+  return res.json({ ok: true, path: key, enrichment: returned })
   } catch (e) { return res.status(500).json({ error: e.message }) }
 })
 
