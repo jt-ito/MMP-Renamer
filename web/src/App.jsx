@@ -1368,9 +1368,51 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               pushToast && pushToast('Hide', 'Item hidden')
               // background-sync: re-fetch authoritative enrichment to reconcile
               refreshEnrichForPaths([p]).catch(()=>{})
+              // If server returned modified scan ids, refresh any open scans so UI reflects removals
+              try {
+                const modified = (r && r.data && Array.isArray(r.data.modifiedScanIds)) ? r.data.modifiedScanIds : []
+                if (modified && modified.length) {
+                  // if current scan or lastScanId is affected, reload those artifacts
+                  const toCheck = new Set(modified)
+                  const reloadIf = async (sid) => {
+                    try {
+                      const m = await axios.get(API(`/scan/${sid}`))
+                      const total = m.data.totalCount || 0
+                      const coll = []
+                      let off = 0
+                      while (off < total) {
+                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`))
+                        const its = pgr.data.items || []
+                        coll.push(...its)
+                        off += its.length
+                      }
+                      // update UI only if this scan is currently selected
+                      if (sid === scanId || sid === lastScanId) {
+                        setScanMeta(m.data)
+                        setTotal(m.data.totalCount || coll.length)
+                        setItems(coll.filter(it => it && it.canonicalPath))
+                        setAllItems(coll.filter(it => it && it.canonicalPath))
+                        // update currentScanPaths set
+                        try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                      }
+                    } catch (e) { /* best-effort */ }
+                  }
+                  // reload any affected scans that match current or lastScanId
+                  for (const sid of Array.from(toCheck)) {
+                    if (sid === scanId || sid === lastScanId) await reloadIf(sid)
+                  }
+                }
+              } catch (e) { /* swallow */ }
             } catch (e) {
-              // only show failure if POST failed
-              pushToast && pushToast('Hide', 'Failed to hide')
+              // only show failure if POST failed; but if our local cache already reflects hidden, suppress the negative toast
+              try {
+                const local = enrichCache && enrichCache[p]
+                if (local && local.hidden) {
+                  // server likely succeeded but client request errored; don't show failure toast
+                } else {
+                  pushToast && pushToast('Hide', 'Failed to hide')
+                }
+              } catch (ee) { pushToast && pushToast('Hide', 'Failed to hide') }
             } finally {
               safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[p]; return n })
             }
