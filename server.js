@@ -1445,7 +1445,7 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
     }
     // persist updated scans store if any modified
     if (modifiedScanIds.length) {
-      try { writeJson(scanStoreFile, scans) } catch (e) {}
+      try { writeJson(scanStoreFile, scans); appendLog(`HIDE_UPDATED_SCANS path=${p} ids=${modifiedScanIds.join(',')}`) } catch (e) {}
     }
   } catch (e) {}
   // ensure we return the authoritative enrichment object as persisted
@@ -1674,6 +1674,19 @@ app.get('/api/debug/locks', requireAuth, (req, res) => {
       scansFile: statFor(scansFile)
     }
     return res.json({ locks, files });
+  } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }) }
+})
+
+// Client-side confirmation that it refreshed scans/items after a server-side change.
+// This is best-effort and used for diagnostic logging only.
+app.post('/api/debug/client-refreshed', requireAuth, (req, res) => {
+  try {
+    const info = req.body || {}
+    const path = info.path || null
+    const scanId = info.scanId || null
+    if (path) appendLog(`CLIENT_REFRESHED path=${path}`)
+    if (scanId) appendLog(`CLIENT_REFRESHED_SCAN id=${scanId}`)
+    return res.json({ ok: true })
   } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }) }
 })
 

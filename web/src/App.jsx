@@ -1401,6 +1401,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                         setItems(coll.filter(it => it && it.canonicalPath))
                         setAllItems(coll.filter(it => it && it.canonicalPath))
                         try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                        // inform server we refreshed this scan so server logs can confirm client-side refresh
+                        try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
                       }
                     } catch (e) { /* best-effort */ }
                   }
@@ -1496,6 +1498,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                           setItems(coll.filter(it => it && it.canonicalPath))
                           setAllItems(coll.filter(it => it && it.canonicalPath))
                           try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                          // inform server we refreshed this scan so server logs can confirm client-side refresh
+                          try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
                         }
                       } catch (e) {}
                     }
