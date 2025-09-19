@@ -1425,7 +1425,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
             } finally {
               safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[originalPath]; return n })
             }
-          }}><IconCopy/> <span>Hide</span></button>
+          }}>{loading ? <Spinner/> : <><IconCopy/> <span>Hide</span></>}</button>
         </div>
       </div>
     )
