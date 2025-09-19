@@ -1068,6 +1068,31 @@ app.post('/api/scan', async (req, res) => {
         activeScans.delete(lockKey);
         appendLog(`SCAN_LOCK_RELEASED path=${libPath}`);
       } catch (ee) {}
+      // After background enrichment completes, ensure stored scan artifacts do not contain
+      // items that were marked hidden or applied during the enrichment. Remove such items
+      // from persisted scan artifacts and persist scans.json when modified so clients
+      // restoring a scan will not see items the user has hidden/applied.
+      try {
+        const modified = [];
+        const sids = Object.keys(scans || {});
+        for (const sid of sids) {
+          try {
+            const s = scans[sid];
+            if (!s || !Array.isArray(s.items)) continue;
+            const before = s.items.length;
+            s.items = s.items.filter(it => {
+              try { const k = canonicalize(it.canonicalPath); const e = enrichCache[k] || null; if (e && (e.hidden || e.applied)) return false; return true } catch (e) { return true }
+            });
+            if (s.items.length !== before) {
+              s.totalCount = s.items.length;
+              modified.push(sid);
+            }
+          } catch (e) {}
+        }
+        if (modified.length) {
+          try { writeJson(scanStoreFile, scans); appendLog(`POST_BACKGROUND_ENRICH_SCANS_UPDATED ids=${modified.join(',')}`) } catch (e) {}
+        }
+      } catch (e) {}
     }
   })();
   } catch (err) {
@@ -1553,6 +1578,28 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
       }
       writeJson(enrichStoreFile, enrichCache);
       appendLog(`REFRESH_SCAN_COMPLETE scan=${req.params.scanId} items=${results.length}`);
+      // Ensure stored scan artifacts reflect applied/hidden flags updated during refresh
+      try {
+        const modified = [];
+        const sids = Object.keys(scans || {});
+        for (const sid of sids) {
+          try {
+            const s = scans[sid];
+            if (!s || !Array.isArray(s.items)) continue;
+            const before = s.items.length;
+            s.items = s.items.filter(it => {
+              try { const k = canonicalize(it.canonicalPath); const e = enrichCache[k] || null; if (e && (e.hidden || e.applied)) return false; return true } catch (e) { return true }
+            });
+            if (s.items.length !== before) {
+              s.totalCount = s.items.length;
+              modified.push(sid);
+            }
+          } catch (e) {}
+        }
+        if (modified.length) {
+          try { writeJson(scanStoreFile, scans); appendLog(`POST_REFRESH_SCANS_UPDATED ids=${modified.join(',')}`) } catch (e) {}
+        }
+      } catch (e) {}
       // mark progress as complete
       try { if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].status = 'complete'; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch(e){}
       try { const removed2 = sweepEnrichCache(); if (removed2 && removed2.length) appendLog(`AUTOSWEEP_AFTER_REFRESH removed=${removed2.length}`); } catch (e) {}
