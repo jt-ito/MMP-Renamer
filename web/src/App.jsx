@@ -1505,6 +1505,60 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 pushToast && pushToast('Hide', 'Failed to hide')
               }
             } finally {
+              // Always attempt to refresh affected scans so UI matches server state.
+              try {
+                const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
+                if (modified && modified.length) {
+                  const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
+                  for (const sid of toReload) {
+                    try {
+                      const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
+                      if (m && m.data) {
+                        const total = m.data.totalCount || 0
+                        const coll = []
+                        let off = 0
+                        while (off < total) {
+                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
+                          const its = pgr.data.items || []
+                          coll.push(...its)
+                          off += its.length
+                        }
+                        if (sid === scanId || sid === lastScanId) {
+                          setScanMeta(m.data)
+                          setTotal(m.data.totalCount || coll.length)
+                          setItems(coll.filter(it => it && it.canonicalPath))
+                          setAllItems(coll.filter(it => it && it.canonicalPath))
+                          try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                        }
+                      }
+                    } catch (e) { /* swallow */ }
+                  }
+                } else {
+                  // Fallback: if server didn't return modifiedScanIds (or POST failed), reload the current scan(s)
+                  const sid = scanId || lastScanId
+                  if (sid) {
+                    try {
+                      const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
+                      if (m && m.data) {
+                        const total = m.data.totalCount || 0
+                        const coll = []
+                        let off = 0
+                        while (off < total) {
+                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
+                          const its = pgr.data.items || []
+                          coll.push(...its)
+                          off += its.length
+                        }
+                        setScanMeta(m.data)
+                        setTotal(m.data.totalCount || coll.length)
+                        setItems(coll.filter(it => it && it.canonicalPath))
+                        setAllItems(coll.filter(it => it && it.canonicalPath))
+                        try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                      }
+                    } catch (e) { /* swallow */ }
+                  }
+                }
+              } catch (ee) { /* best-effort refresh */ }
               safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[originalPath]; return n })
             }
           }}>{loading ? <Spinner/> : <><IconCopy/> <span>Hide</span></>}</button>
