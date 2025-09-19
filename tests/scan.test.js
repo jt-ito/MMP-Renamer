@@ -32,24 +32,42 @@ describe('lib/scan.js', function() {
     // build cache via stats
     const curCache = {};
     for (const it of found1) {
-      curCache[it.canonicalPath] = fs.statSync(it.canonicalPath).mtimeMs;
+      const st = fs.statSync(it.canonicalPath);
+      curCache[it.canonicalPath] = { mtime: st.mtimeMs, size: st.size, id: String(st.size || 0) + ':' + String(Math.floor(st.mtimeMs || Date.now())) };
     }
   const scanCacheFile = path.join(DATA_DIR, 'scan-cache.json');
-  scanLib.saveScanCache(scanCacheFile, { files: curCache, dirs: {} });
+  scanLib.saveScanCache(scanCacheFile, { files: curCache, dirs: {}, initialScanAt: Date.now() });
 
     // add a new file
     const b = path.join(tmpRoot, 'Show - 02.mkv');
     fs.writeFileSync(b, 'y');
 
-    const inc = scanLib.incrementalScanLibrary(tmpRoot, { scanCacheFile, canonicalize: p => path.resolve(p).replace(/\\/g, '/') });
+  const inc = scanLib.incrementalScanLibrary(tmpRoot, { scanCacheFile, canonicalize: p => path.resolve(p).replace(/\\/g, '/') });
     // should detect one new file and zero removed
     assert.strictEqual(inc.toProcess.length, 1, 'expected one new/changed file');
     assert.strictEqual(inc.removed.length, 0, 'expected no removed files');
+
+  // Save current cache returned by incremental and ensure ids are present and reused
+  scanLib.saveScanCache(scanCacheFile, Object.assign({}, inc.currentCache || {}, { initialScanAt: Date.now() }));
+  const incAgain = scanLib.incrementalScanLibrary(tmpRoot, { scanCacheFile, canonicalize: p => path.resolve(p).replace(/\\/g, '/') });
+  // since nothing changed, toProcess should be zero
+  assert.strictEqual(incAgain.toProcess.length, 0, 'expected zero new files after re-check');
 
     // remove the first file
     fs.rmSync(a);
     const inc2 = scanLib.incrementalScanLibrary(tmpRoot, { scanCacheFile, canonicalize: p => path.resolve(p).replace(/\\/g, '/') });
     // now removed should include the first file path
     assert.ok(inc2.removed.length >= 1, 'expected at least one removed file');
+  });
+
+  it('saveScanCache is atomic and recovers from corrupted file', function() {
+    const scanCacheFile = path.join(DATA_DIR, 'scan-cache.json');
+    // write a corrupted file first
+    fs.writeFileSync(scanCacheFile, '{ this is : not json', 'utf8');
+    // now call saveScanCache to write a valid object
+    const good = { files: {}, dirs: {}, initialScanAt: Date.now() };
+    scanLib.saveScanCache(scanCacheFile, good);
+    const read = JSON.parse(fs.readFileSync(scanCacheFile, 'utf8'));
+    assert.ok(read && read.files && typeof read.initialScanAt === 'number', 'expected valid JSON after atomic save');
   });
 });

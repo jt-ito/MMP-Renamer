@@ -922,14 +922,21 @@ app.post('/api/scan', async (req, res) => {
       const curDirs = {};
       for (const it of items) {
         try { const st = fs.statSync(it.canonicalPath); curFiles[it.canonicalPath] = st.mtimeMs; } catch (e) { curFiles[it.canonicalPath] = Date.now(); }
-        try { const d = path.dirname(it.canonicalPath); const stD = fs.statSync(d); if (stD && stD.mtimeMs != null) curDirs[d] = stD.mtimeMs; } catch (e) {}
+        try { const d = path.dirname(it.canonicalPath); const stD = fs.statSync(d); if (stD && stD.mtimeMs != null) curDirs[canonicalize(d)] = stD.mtimeMs; } catch (e) {}
       }
-      saveScanCache({ files: curFiles, dirs: curDirs });
+      // mark initial scan completion so subsequent runs can prefer incremental
+      const cacheObj = { files: curFiles, dirs: curDirs, initialScanAt: Date.now() };
+      saveScanCache(cacheObj);
       // ensure items includes canonicalPath/id entries for artifact
       items = items.map(it => ({ id: it.id || uuidv4(), canonicalPath: it.canonicalPath, scannedAt: it.scannedAt || Date.now() }));
     } else {
       // incremental scan: optimized walk to detect new/changed files and removals
       const { toProcess, currentCache, removed } = incrementalScanLibrary(libPath);
+      // If incremental scan returned currentCache but lacks initialScanAt, preserve prior marker if present
+      try {
+        const prior = loadScanCache();
+        if (prior && prior.initialScanAt && !currentCache.initialScanAt) currentCache.initialScanAt = prior.initialScanAt;
+      } catch (e) {}
       // remove stale entries
       for (const r of removed) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
       // process new/changed items
@@ -1211,6 +1218,16 @@ app.post('/api/settings', requireAuth, (req, res) => {
     appendLog(`SETTINGS_SAVED_USER user=${username} keys=${Object.keys(body).join(',')}`);
     return res.json({ ok: true, userSettings: users[username].settings });
   } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// Admin endpoint: force next scan to be full by clearing scan cache
+app.post('/api/scan/force', requireAdmin, (req, res) => {
+  try {
+    // remove scan cache file so next /api/scan will perform a full walk
+    try { if (fs.existsSync(scanCacheFile)) fs.unlinkSync(scanCacheFile); } catch (e) { appendLog(`SCAN_FORCE_UNLINK_FAIL err=${e && e.message ? e.message : String(e)}`); }
+    appendLog(`SCAN_FORCE_CLEARED by=${req.session && req.session.username ? req.session.username : '<unknown>'}`);
+    return res.json({ ok: true, forced: true });
+  } catch (e) { return res.status(500).json({ error: e.message }) }
 });
 
 // Path existence check (used by the client to validate configured paths)
