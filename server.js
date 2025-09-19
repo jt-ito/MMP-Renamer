@@ -972,6 +972,10 @@ app.post('/api/scan', async (req, res) => {
   // Wrap the remainder of the request flow so we can release the lock if something fails
   try {
 
+  // Determine enrichment candidates: when doing incremental scans we only want to
+  // refresh metadata for new/changed items (toProcess). For full scans, use the
+  // artifact items as before.
+  const enrichCandidates = (typeof toProcess !== 'undefined' && Array.isArray(toProcess) && toProcess.length) ? toProcess : items;
   const artifact = { id: scanId, libraryId: libraryId || 'local', totalCount: items.length, items, generatedAt: Date.now() };
   scans[scanId] = artifact;
   writeJson(scanStoreFile, scans);
@@ -986,7 +990,8 @@ app.post('/api/scan', async (req, res) => {
     try {
       backgroundStarted = true;
       const N = 12;
-      const first = artifact.items.slice(0, N);
+  // Only enrich the first N candidates from the chosen candidate set (prefer new/changed)
+  const first = (enrichCandidates && Array.isArray(enrichCandidates) ? enrichCandidates : artifact.items).slice(0, N);
   // pick tmdb key similar to other endpoints (prefer session user's key, then server)
   let tmdbKey = null;
       try {
