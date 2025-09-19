@@ -862,7 +862,9 @@ app.post('/api/scan', async (req, res) => {
             .replace('{episode}', parsed.episode != null ? String(parsed.episode) : '')
             .replace('{episodeRange}', parsed.episodeRange || '')
             .replace('{tmdbId}', '')
-          const parsedRendered = String(nameWithoutExtRaw).replace(/\s{2,}/g, ' ').trim();
+          let parsedRendered = String(nameWithoutExtRaw).replace(/\s{2,}/g, ' ').trim();
+          // strip empty parentheses (e.g., 'Title () - ...') and trailing hyphens left by empty tokens
+          try { parsedRendered = parsedRendered.replace(/\s*\(\s*\)\s*/g, '').replace(/\s*[-–—]\s*$/g, '').replace(/\s{2,}/g, ' ').trim(); } catch (e) {}
           parsedCache[key] = Object.assign({}, parsedCache[key] || {}, { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() })
           const parsedBlock = { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }
           updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
