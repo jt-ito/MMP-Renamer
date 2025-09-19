@@ -881,11 +881,23 @@ app.post('/api/scan', async (req, res) => {
 
   let items = [];
   try {
-    // Use full scan to collect candidates first (fullScanLibrary wraps the walk)
-    items = fullScanLibrary(libPath);
+    // Load prior scan cache to decide between full vs incremental scan
+    const priorCache = loadScanCache();
+    if (!priorCache || !priorCache.files || Object.keys(priorCache.files).length === 0) {
+      // No prior cache - perform full scan to collect candidates
+      try {
+        items = fullScanLibrary(libPath);
+      } catch (err) {
+        appendLog(`SCAN_ERROR ${err.message}`);
+        return res.status(500).json({ error: err.message });
+      }
+    } else {
+      // We'll call incrementalScanLibrary later after acquiring lock; for now leave items empty
+      items = [];
+    }
   } catch (err) {
-    appendLog(`SCAN_ERROR ${err.message}`);
-    return res.status(500).json({ error: err.message });
+    appendLog(`SCAN_ERROR ${err && err.message ? err.message : String(err)}`);
+    return res.status(500).json({ error: err && err.message ? err.message : String(err) });
   }
   // Prevent concurrent scans for the same resolved path
   const lockKey = `scanPath:${libPath}`;
@@ -901,21 +913,31 @@ app.post('/api/scan', async (req, res) => {
   let backgroundStarted = false;
   try {
     const session = req.session || {};
-    const priorCache = loadScanCache();
-    if (!priorCache || Object.keys(priorCache).length === 0) {
+    const priorCache2 = loadScanCache();
+    if (!priorCache2 || !priorCache2.files || Object.keys(priorCache2.files).length === 0) {
       // first full run - process everything
       for (const it of items) processParsedItem(it, session);
-      // build current cache map and save
-      const cur = {};
-      for (const it of items) { try { const st = fs.statSync(it.canonicalPath); cur[it.canonicalPath] = st.mtimeMs; } catch (e) { cur[it.canonicalPath] = Date.now(); } }
-      saveScanCache(cur);
+      // build current cache map (files + dirs) and save
+      const curFiles = {};
+      const curDirs = {};
+      for (const it of items) {
+        try { const st = fs.statSync(it.canonicalPath); curFiles[it.canonicalPath] = st.mtimeMs; } catch (e) { curFiles[it.canonicalPath] = Date.now(); }
+        try { const d = path.dirname(it.canonicalPath); const stD = fs.statSync(d); if (stD && stD.mtimeMs != null) curDirs[d] = stD.mtimeMs; } catch (e) {}
+      }
+      saveScanCache({ files: curFiles, dirs: curDirs });
+      // ensure items includes canonicalPath/id entries for artifact
+      items = items.map(it => ({ id: it.id || uuidv4(), canonicalPath: it.canonicalPath, scannedAt: it.scannedAt || Date.now() }));
     } else {
+      // incremental scan: optimized walk to detect new/changed files and removals
       const { toProcess, currentCache, removed } = incrementalScanLibrary(libPath);
       // remove stale entries
       for (const r of removed) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
+      // process new/changed items
       for (const it of toProcess) processParsedItem(it, session);
-      // persist current cache map
+      // persist current cache map (currentCache is { files, dirs })
       saveScanCache(currentCache);
+      // build items array for artifact from currentCache.files
+      items = Object.keys(currentCache.files || {}).map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }));
     }
     try { writeJson(parsedCacheFile, parsedCache) } catch (e) {}
     writeJson(enrichStoreFile, enrichCache);

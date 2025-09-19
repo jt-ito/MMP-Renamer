@@ -42,7 +42,7 @@ async function run() {
   console.log('full scan found', found1.length);
   const cache1 = buildCacheMap(found1);
   try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (e) {}
-  fs.writeFileSync(scanCacheFile, JSON.stringify(cache1, null, 2), 'utf8');
+  fs.writeFileSync(scanCacheFile, JSON.stringify({ files: cache1, dirs: {} }, null, 2), 'utf8');
 
   // add a new file
   const f2 = path.join(tmpDir, 'Show - 02.mkv'); fs.writeFileSync(f2, 'y');

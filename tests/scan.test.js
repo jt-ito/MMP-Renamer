@@ -34,8 +34,8 @@ describe('lib/scan.js', function() {
     for (const it of found1) {
       curCache[it.canonicalPath] = fs.statSync(it.canonicalPath).mtimeMs;
     }
-    const scanCacheFile = path.join(DATA_DIR, 'scan-cache.json');
-    scanLib.saveScanCache(scanCacheFile, curCache);
+  const scanCacheFile = path.join(DATA_DIR, 'scan-cache.json');
+  scanLib.saveScanCache(scanCacheFile, { files: curCache, dirs: {} });
 
     // add a new file
     const b = path.join(tmpRoot, 'Show - 02.mkv');
