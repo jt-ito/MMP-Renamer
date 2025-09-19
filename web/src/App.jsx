@@ -1337,19 +1337,19 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
             if (!it) return
             try {
               const r = await axios.post(API('/enrich/hide'), { path: it.canonicalPath })
-              // if server returns the updated enrichment, use it to update local cache immediately
-              if (r && r.data && r.data.enrichment) {
-                const enriched = normalizeEnrichResponse(r.data.enrichment)
-                setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: enriched }))
-                if (enriched && (enriched.hidden || enriched.applied)) {
-                  setItems(prev => prev.filter(x => x.canonicalPath !== it.canonicalPath))
-                  setAllItems(prev => prev.filter(x => x.canonicalPath !== it.canonicalPath))
-                }
-              }
+              // Treat any successful response as success (status 2xx). Optimistically update UI so item disappears.
+              try {
+                // mark local enrichCache hidden immediately so UI filters the row
+                setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: Object.assign({}, prev && prev[it.canonicalPath] ? prev[it.canonicalPath] : {}, { hidden: true }) }))
+                setItems(prev => prev.filter(x => x.canonicalPath !== it.canonicalPath))
+                setAllItems(prev => prev.filter(x => x.canonicalPath !== it.canonicalPath))
+              } catch (e) { /* best-effort */ }
               pushToast && pushToast('Hide', 'Item hidden')
-              // background-sync to ensure eventual consistency
+              // background-sync: fetch authoritative enrichment and rehydrate local cache (preserve applied/hidden flags)
               refreshEnrichForPaths([it.canonicalPath]).catch(()=>{})
-            } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
+            } catch (e) {
+              pushToast && pushToast('Hide', 'Failed to hide')
+            }
           }}><IconCopy/> <span>Hide</span></button>
         </div>
       </div>
