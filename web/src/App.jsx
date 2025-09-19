@@ -1343,20 +1343,36 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
           <button title="Rescan metadata for this item" className="btn-ghost" disabled={loading} onClick={async () => { if (!it) return; pushToast && pushToast('Rescan','Refreshing metadata...'); await enrichOne(it, true) }}>{loading ? <Spinner/> : <><IconRefresh/> <span>Rescan</span></>} </button>
           <button title="Hide this item" className="btn-ghost" disabled={loading} onClick={async () => {
             if (!it) return
+            const p = it.canonicalPath
+            // set per-item loading to prevent duplicate clicks
+            safeSetLoadingEnrich(prev => ({ ...prev, [p]: true }))
             try {
-              const r = await axios.post(API('/enrich/hide'), { path: it.canonicalPath })
-              // Treat any successful response as success (status 2xx). Optimistically update UI so item disappears.
+              const r = await axios.post(API('/enrich/hide'), { path: p })
+              // On success, use authoritative enrichment returned by server when available
               try {
-                // mark local enrichCache hidden immediately so UI filters the row
-                setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: Object.assign({}, prev && prev[it.canonicalPath] ? prev[it.canonicalPath] : {}, { hidden: true }) }))
-                setItems(prev => prev.filter(x => x.canonicalPath !== it.canonicalPath))
-                setAllItems(prev => prev.filter(x => x.canonicalPath !== it.canonicalPath))
+                const returned = (r && r.data && (r.data.enrichment || r.data)) || null
+                if (returned) {
+                  const enriched = normalizeEnrichResponse(returned.enrichment || returned)
+                  setEnrichCache(prev => ({ ...prev, [p]: enriched }))
+                  if (enriched && (enriched.hidden || enriched.applied)) {
+                    setItems(prev => prev.filter(x => x.canonicalPath !== p))
+                    setAllItems(prev => prev.filter(x => x.canonicalPath !== p))
+                  }
+                } else {
+                  // fallback optimistic removal
+                  setEnrichCache(prev => ({ ...prev, [p]: Object.assign({}, prev && prev[p] ? prev[p] : {}, { hidden: true }) }))
+                  setItems(prev => prev.filter(x => x.canonicalPath !== p))
+                  setAllItems(prev => prev.filter(x => x.canonicalPath !== p))
+                }
               } catch (e) { /* best-effort */ }
               pushToast && pushToast('Hide', 'Item hidden')
-              // background-sync: fetch authoritative enrichment and rehydrate local cache (preserve applied/hidden flags)
-              refreshEnrichForPaths([it.canonicalPath]).catch(()=>{})
+              // background-sync: re-fetch authoritative enrichment to reconcile
+              refreshEnrichForPaths([p]).catch(()=>{})
             } catch (e) {
+              // only show failure if POST failed
               pushToast && pushToast('Hide', 'Failed to hide')
+            } finally {
+              safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[p]; return n })
             }
           }}><IconCopy/> <span>Hide</span></button>
         </div>

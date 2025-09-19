@@ -928,7 +928,16 @@ app.post('/api/scan', async (req, res) => {
       const cacheObj = { files: curFiles, dirs: curDirs, initialScanAt: Date.now() };
       saveScanCache(cacheObj);
       // ensure items includes canonicalPath/id entries for artifact
-      items = items.map(it => ({ id: it.id || uuidv4(), canonicalPath: it.canonicalPath, scannedAt: it.scannedAt || Date.now() }));
+      // Filter out entries that are marked hidden or already applied in enrichCache so restored scans respect those flags
+      items = items.map(it => ({ id: it.id || uuidv4(), canonicalPath: it.canonicalPath, scannedAt: it.scannedAt || Date.now() }))
+        .filter(it => {
+          try {
+            const k = canonicalize(it.canonicalPath);
+            const e = enrichCache[k] || null;
+            if (e && (e.hidden || e.applied)) return false;
+            return true;
+          } catch (e) { return true; }
+        });
     } else {
       // incremental scan: optimized walk to detect new/changed files and removals
       const { toProcess, currentCache, removed } = incrementalScanLibrary(libPath);
@@ -944,7 +953,16 @@ app.post('/api/scan', async (req, res) => {
       // persist current cache map (currentCache is { files, dirs })
       saveScanCache(currentCache);
       // build items array for artifact from currentCache.files
-      items = Object.keys(currentCache.files || {}).map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }));
+      // Exclude items that are marked hidden or applied in the enrich cache so restored scans don't re-show them
+      items = Object.keys(currentCache.files || {}).map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }))
+        .filter(it => {
+          try {
+            const k = canonicalize(it.canonicalPath);
+            const e = enrichCache[k] || null;
+            if (e && (e.hidden || e.applied)) return false;
+            return true;
+          } catch (e) { return true; }
+        });
     }
     try { writeJson(parsedCacheFile, parsedCache) } catch (e) {}
     writeJson(enrichStoreFile, enrichCache);
@@ -1363,6 +1381,29 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
   const key = canonicalize(p)
   // set hidden flag while preserving applied/metadata fields
   updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { hidden: true }));
+  // Remove this path from any existing stored scan artifacts so clients restoring a previous scan won't see it
+  let modifiedScanIds = [];
+  try {
+    const scanIds = Object.keys(scans || {});
+    for (const sid of scanIds) {
+      try {
+        const s = scans[sid];
+        if (!s || !Array.isArray(s.items)) continue;
+        const before = s.items.length;
+        s.items = s.items.filter(it => {
+          try { return canonicalize(it.canonicalPath) !== key } catch (e) { return true }
+        });
+        if (s.items.length !== before) {
+          s.totalCount = s.items.length;
+          modifiedScanIds.push(sid);
+        }
+      } catch (e) {}
+    }
+    // persist updated scans store if any modified
+    if (modifiedScanIds.length) {
+      try { writeJson(scanStoreFile, scans) } catch (e) {}
+    }
+  } catch (e) {}
   // ensure we return the authoritative enrichment object as persisted
   let returned = null
   try {
@@ -1371,7 +1412,7 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
     try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
   } catch (e) { returned = null }
   appendLog(`HIDE path=${p}`)
-  return res.json({ ok: true, path: key, enrichment: returned })
+  return res.json({ ok: true, path: key, enrichment: returned, modifiedScanIds })
   } catch (e) { return res.status(500).json({ error: e.message }) }
 })
 
