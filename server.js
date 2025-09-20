@@ -181,6 +181,12 @@ async function metaLookup(title, apiKey, opts = {}) {
   // Simple HTTP helpers
   const https = require('https')
   function httpRequest(options, body, timeoutMs = 4000) {
+    // allow unit tests to inject a fake httpRequest via module.exports._test._httpRequest
+    try {
+      if (module && module.exports && module.exports._test && typeof module.exports._test._httpRequest === 'function') {
+        return module.exports._test._httpRequest(options, body, timeoutMs)
+      }
+    } catch (e) { /* ignore and continue with real httpRequest */ }
     return new Promise((resolve, reject) => {
       let timed = false
       const req = https.request(options, (res) => {
@@ -204,10 +210,17 @@ async function metaLookup(title, apiKey, opts = {}) {
       await pace('graphql.anilist.co')
       // Request relations/season/seasonYear so we can prefer season-specific media when available
       const query = `query ($search: String) { Page(page:1, perPage:8) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } season seasonYear relations { nodes { id title { romaji english native } } } } } }`;
-      const vars = JSON.stringify({ search: String(q || '') })
-      const body = JSON.stringify({ query, variables: JSON.parse(vars) })
-      // Use POST to graphql.anilist.co
-  // include AniList API key header when available (per-user or server)
+      // If the caller provided a season, try an AniList text search that includes the season (e.g. "Title Season 1")
+      const wantedSeason = (opts && typeof opts.season !== 'undefined' && opts.season !== null) ? Number(opts.season) : null
+      const tryQueries = []
+      if (wantedSeason !== null) {
+        tryQueries.push(String(q).trim() + ` Season ${wantedSeason}`)
+        // also try a parenthetical form
+        tryQueries.push(String(q).trim() + ` (Season ${wantedSeason})`)
+      }
+      tryQueries.push(String(q || ''))
+
+      // include AniList API key header when available (per-user or server)
       let anilistKey = null
       try {
         if (opts && opts.anilist_key) anilistKey = opts.anilist_key
@@ -217,12 +230,21 @@ async function metaLookup(title, apiKey, opts = {}) {
   const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' }
   if (anilistKey) headers['Authorization'] = `Bearer ${String(anilistKey)}`
   const opt = { hostname: 'graphql.anilist.co', path: '/', method: 'POST', headers }
-      const res = await httpRequest(opt, body, 3500)
-      if (!res || !res.body) return null
-      let j = null
-      try { j = JSON.parse(res.body) } catch (e) { return null }
-      const items = j && j.data && j.data.Page && Array.isArray(j.data.Page.media) ? j.data.Page.media : []
-      if (!items || !items.length) return null
+          // perform queries in order (season-augmented first when available)
+          let items = null
+          for (const qtry of tryQueries) {
+            try {
+              const vars = JSON.stringify({ search: String(qtry || '') })
+              const body = JSON.stringify({ query, variables: JSON.parse(vars) })
+              const res = await httpRequest(opt, body, 3500)
+              if (!res || !res.body) continue
+              let j = null
+              try { j = JSON.parse(res.body) } catch (e) { continue }
+              const found = j && j.data && j.data.Page && Array.isArray(j.data.Page.media) ? j.data.Page.media : []
+              if (found && found.length) { items = found; break }
+            } catch (e) { /* try next */ }
+          }
+          if (!items || !items.length) return null
   // select preferred title: english -> romaji -> native
   items.sort((a,b)=> (wordOverlap(String(b.title.english||b.title.romaji||b.title.native||''), String(q)) - wordOverlap(String(a.title.english||a.title.romaji||a.title.native||''), String(q))));
   // If a season was requested, try to find a media entry or a related node that explicitly mentions that season number
@@ -247,7 +269,6 @@ async function metaLookup(title, apiKey, opts = {}) {
 
   // prefer items whose seasonYear or title/relations indicate the requested season/year
   let pick = null
-  const wantedSeason = (opts && typeof opts.season !== 'undefined' && opts.season !== null) ? Number(opts.season) : null
   const wantedYear = (opts && (typeof opts.seasonYear !== 'undefined' || typeof opts.year !== 'undefined')) ? Number((opts.seasonYear != null ? opts.seasonYear : opts.year)) : null
   if (wantedSeason !== null || wantedYear !== null) {
     for (const it of items) {
@@ -276,7 +297,32 @@ async function metaLookup(title, apiKey, opts = {}) {
     }
   }
   // fallback to best lexical match
-  if (!pick) pick = items[0]
+  if (!pick) {
+    // Prefer a series-level entry when no explicit season was requested.
+    // Many AniList entries are season-specific ("3rd Season") which we should avoid
+    // when the caller is searching for the parent series (no wantedSeason).
+    try {
+      let nonSeason = null
+      for (const it of items) {
+        try {
+          // build candidate title strings
+          const candidates = []
+          if (it && it.title) candidates.push(it.title.english, it.title.romaji, it.title.native)
+          if (it && it.relations && Array.isArray(it.relations.nodes)) {
+            for (const rn of it.relations.nodes) if (rn && rn.title) candidates.push(rn.title.english, rn.title.romaji, rn.title.native)
+          }
+          // if none of the candidate titles contain an explicit season number, treat as non-season
+          let anySeason = false
+          for (const c of candidates) {
+            try { if (extractSeasonNumberFromTitle(c)) { anySeason = true; break } } catch (e) {}
+          }
+          if (!anySeason) { nonSeason = it; break }
+        } catch (e) {}
+      }
+      if (nonSeason) pick = nonSeason
+      else pick = items[0]
+    } catch (e) { pick = items[0] }
+  }
   if (!pick) return null
   // pick English when available, otherwise romaji, otherwise native
   const name = (pick.title && (pick.title.english || pick.title.romaji || pick.title.native)) ? (pick.title.english || pick.title.romaji || pick.title.native) : null
@@ -1751,6 +1797,56 @@ app.post('/api/debug/client-refreshed', requireAuth, (req, res) => {
     const scanId = info.scanId || null
     if (path) appendLog(`CLIENT_REFRESHED path=${path}`)
     if (scanId) appendLog(`CLIENT_REFRESHED_SCAN id=${scanId}`)
+
+    // Correlate recent HIDE events with this client-refreshed notification.
+    // If a HIDE for the same path or affecting the same scanId occurred recently,
+    // emit a reconciliation/confirmation event so clients polling hide-events see it
+    // and treat the hide as successful (avoids spurious "Failed to hide" toasts).
+    try {
+      const now = Date.now()
+      const WINDOW_MS = 10 * 1000 // 10s window to consider recent hides
+      const reconciled = []
+      if (path && Array.isArray(hideEvents)) {
+        const key = canonicalize(path)
+        // find the most recent hide event for this path within the window
+        for (let i = hideEvents.length - 1; i >= 0; i--) {
+          const ev = hideEvents[i]
+          if (!ev || !ev.ts) continue
+          if (ev.path === key && (now - ev.ts) <= WINDOW_MS) {
+            // push a confirmation event derived from the original
+            try {
+              const confirm = { ts: now, path: key, originalPath: ev.originalPath || path, modifiedScanIds: ev.modifiedScanIds || [], reconciled: true }
+              hideEvents.push(confirm)
+              if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
+              appendLog(`HIDE_RECONCILED path=${path} via=clientRefreshed`)
+              reconciled.push(path)
+            } catch (e) {}
+            break
+          }
+          // stop searching once events are older than the window
+          if ((now - ev.ts) > WINDOW_MS) break
+        }
+      }
+      if (scanId && Array.isArray(hideEvents)) {
+        // find any hide events that listed this scanId as modified within the window
+        const sidStr = String(scanId)
+        for (let i = hideEvents.length - 1; i >= 0; i--) {
+          const ev = hideEvents[i]
+          if (!ev || !ev.ts) continue
+          if ((now - ev.ts) > WINDOW_MS) break
+          try {
+            if (Array.isArray(ev.modifiedScanIds) && ev.modifiedScanIds.map(String).indexOf(sidStr) !== -1) {
+              const confirm = { ts: now, path: ev.path, originalPath: ev.originalPath || null, modifiedScanIds: ev.modifiedScanIds || [], reconciled: true }
+              hideEvents.push(confirm)
+              if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
+              appendLog(`HIDE_RECONCILED scan=${scanId} path=${ev.originalPath || ev.path} via=clientRefreshed`)
+              reconciled.push(ev.path || ev.originalPath || sidStr)
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (e) { /* best-effort correlation; don't fail the request */ }
+
     return res.json({ ok: true })
   } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }) }
 })
