@@ -105,6 +105,122 @@ export default function App() {
   // last seen hide event timestamp (ms)
   const lastHideEventTsRef = useRef(0)
 
+  // Wait for a hide event matching any of the provided candidate paths.
+  // Returns the event object if found within timeoutMs, otherwise null.
+  async function waitForHideEvent(candidates = [], timeoutMs = 5000, interval = 400) {
+    const start = Date.now()
+    try {
+      while (Date.now() - start < timeoutMs) {
+        try {
+          const since = lastHideEventTsRef.current || 0
+          const r = await axios.get(API('/enrich/hide-events'), { params: { since } }).catch(() => null)
+          if (r && r.data && Array.isArray(r.data.events) && r.data.events.length) {
+            for (const ev of r.data.events) {
+              try {
+                // update last seen ts
+                if (ev && ev.ts && ev.ts > (lastHideEventTsRef.current || 0)) lastHideEventTsRef.current = ev.ts
+                // match by canonical path or originalPath if provided
+                if (!ev) continue
+                const p = ev.path || ev.originalPath || ''
+                for (const c of candidates) {
+                  if (!c) continue
+                  try { if (String(p) === String(c) || String(ev.originalPath) === String(c)) return ev } catch (e) {}
+                }
+              } catch (e) {}
+            }
+          }
+        } catch (e) {}
+        await new Promise(r => setTimeout(r, interval))
+      }
+    } catch (e) {}
+    return null
+  }
+
+  // If hide appears to have failed, wait briefly for any server-side hide event
+  // matching the provided candidate paths. If an event is seen, refresh scans
+  // and authoritative enrichment for the affected path(s) and show success.
+  async function handleHideFailure(candidates = []) {
+    try {
+      const ev = await waitForHideEvent(candidates, 4000, 350)
+      if (!ev) return false
+      const p = ev.path || ev.originalPath || (candidates && candidates[0])
+      // fetch authoritative enrichment for the event path
+      try {
+        if (p) {
+          const er = await axios.get(API('/enrich'), { params: { path: p } }).catch(() => null)
+          const auth = er && er.data && (er.data.enrichment || er.data) ? (er.data.enrichment || er.data) : null
+          const norm = auth ? normalizeEnrichResponse(auth) : null
+          if (norm) {
+            setEnrichCache(prev => ({ ...prev, [p]: norm }))
+            setItems(prev => prev.filter(x => x.canonicalPath !== p))
+            setAllItems(prev => prev.filter(x => x.canonicalPath !== p))
+          }
+        }
+      } catch (e) {}
+
+      // reload any scans the event reported as modified, but only if they match our current scans
+      try {
+        const modified = Array.isArray(ev.modifiedScanIds) ? ev.modifiedScanIds : []
+        if (modified && modified.length) {
+          const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
+          for (const sid of toReload) {
+            try {
+              const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
+              if (m && m.data) {
+                const total = m.data.totalCount || 0
+                const coll = []
+                let off = 0
+                while (off < total) {
+                  const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
+                  const its = pgr.data.items || []
+                  coll.push(...its)
+                  off += its.length
+                }
+                if (sid === scanId || sid === lastScanId) {
+                  setScanMeta(m.data)
+                  setTotal(m.data.totalCount || coll.length)
+                  setItems(coll.filter(it => it && it.canonicalPath))
+                  setAllItems(coll.filter(it => it && it.canonicalPath))
+                  try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                  try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
+                }
+              }
+            } catch (e) { /* swallow */ }
+          }
+        } else {
+          // fallback: reload the currently shown scan
+          const sid = scanId || lastScanId
+          if (sid) {
+            try {
+              const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
+              if (m && m.data) {
+                const total = m.data.totalCount || 0
+                const coll = []
+                let off = 0
+                while (off < total) {
+                  const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
+                  const its = pgr.data.items || []
+                  coll.push(...its)
+                  off += its.length
+                }
+                setScanMeta(m.data)
+                setTotal(m.data.totalCount || coll.length)
+                setItems(coll.filter(it => it && it.canonicalPath))
+                setAllItems(coll.filter(it => it && it.canonicalPath))
+                try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+              }
+            } catch (e) { /* swallow */ }
+          }
+        }
+      } catch (e) { /* swallow */ }
+
+      pushToast && pushToast('Hide', 'Item hidden (server event)')
+      return true
+    } catch (e) {
+      return false
+    }
+  }
+
   // computed: whether a bulk enrich/metadata refresh is in-flight
   const enrichPendingCount = Object.keys(loadingEnrich || {}).length
   const globalEnrichPending = metaPhase || enrichPendingCount > 0
@@ -1510,13 +1626,25 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     } catch (e) {}
                   }
                   if (!confirmed && !didFinalToast) {
-                    // genuine failure
-                    pushToast && pushToast('Hide', 'Failed to hide')
+                    // genuine failure — but wait briefly for any server-side hide event before giving up
+                    try {
+                      const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
+                      if (!handled) {
+                        pushToast && pushToast('Hide', 'Failed to hide')
+                      }
+                    } catch (e) {
+                      pushToast && pushToast('Hide', 'Failed to hide')
+                    }
                     didFinalToast = true
                   }
                 }
               } catch (e) {
-                if (!didFinalToast) { pushToast && pushToast('Hide', 'Failed to hide') }
+                if (!didFinalToast) {
+                  try {
+                    const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
+                    if (!handled) pushToast && pushToast('Hide', 'Failed to hide')
+                  } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
+                }
                 didFinalToast = true
               }
             } catch (err) {
@@ -1542,10 +1670,13 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     }
                   } catch (e) {}
                 }
-                if (!confirmed) {
-                  // genuine failure
-                  pushToast && pushToast('Hide', 'Failed to hide')
-                }
+                    if (!confirmed) {
+                      // genuine failure — wait for server hide event briefly before declaring failure
+                      try {
+                        const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
+                        if (!handled) pushToast && pushToast('Hide', 'Failed to hide')
+                      } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
+                    }
                 // If POST did return modifiedScanIds before network error, reload those scans
                 try {
                   const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
@@ -1577,7 +1708,10 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   }
                 } catch (ee) {}
               } catch (ee) {
-                pushToast && pushToast('Hide', 'Failed to hide')
+                try {
+                  const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
+                  if (!handled) pushToast && pushToast('Hide', 'Failed to hide')
+                } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
               }
             } finally {
               // Always attempt to refresh affected scans so UI matches server state.

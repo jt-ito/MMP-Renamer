@@ -202,7 +202,8 @@ async function metaLookup(title, apiKey, opts = {}) {
   async function searchAniList(q) {
     try {
       await pace('graphql.anilist.co')
-      const query = `query ($search: String) { Page(page:1, perPage:5) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } } } }`;
+      // Request relations/season/seasonYear so we can prefer season-specific media when available
+      const query = `query ($search: String) { Page(page:1, perPage:8) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } season seasonYear relations { nodes { id title { romaji english native } } } } } }`;
       const vars = JSON.stringify({ search: String(q || '') })
       const body = JSON.stringify({ query, variables: JSON.parse(vars) })
       // Use POST to graphql.anilist.co
@@ -224,7 +225,52 @@ async function metaLookup(title, apiKey, opts = {}) {
       if (!items || !items.length) return null
   // select preferred title: english -> romaji -> native
   items.sort((a,b)=> (wordOverlap(String(b.title.english||b.title.romaji||b.title.native||''), String(q)) - wordOverlap(String(a.title.english||a.title.romaji||a.title.native||''), String(q))));
-  const pick = items[0]
+  // If a season was requested, try to find a media entry or a related node that explicitly mentions that season number in the title.
+  function extractSeasonNumberFromTitle(t) {
+    try {
+      if (!t) return null
+      const s = String(t)
+      // common patterns: "Season 2", "Season 01", "S02", "S2", "(Season 2)"
+      let m = s.match(/season[^0-9]{0,3}(\d{1,2})/i)
+      if (m && m[1]) return parseInt(m[1],10)
+      m = s.match(/\bS(\d{1,2})\b/i)
+      if (m && m[1]) return parseInt(m[1],10)
+      // fallback: trailing digits like "Title 2" (only if short)
+      m = s.match(/(?:[\(\[\- ]|\b)(\d{1,2})(?:[\)\]\- ]|\b)$/)
+      if (m && m[1]) return parseInt(m[1],10)
+    } catch (e) {}
+    return null
+  }
+
+  // prefer items whose own title contains the requested season number, or whose relations include such titles
+  let pick = null
+  if (opts && typeof opts.season !== 'undefined' && opts.season !== null) {
+    const wanted = Number(opts.season)
+    for (const it of items) {
+      try {
+        // prefer direct season field on AniList media
+        if (it && typeof it.season !== 'undefined' && it.season !== null) {
+          try { if (Number(it.season) === wanted) { pick = it; break } } catch (e) {}
+        }
+        const candidates = []
+        if (it && it.title) {
+          candidates.push(it.title.english, it.title.romaji, it.title.native)
+        }
+        if (it && it.relations && Array.isArray(it.relations.nodes)) {
+          for (const rn of it.relations.nodes) {
+            if (rn && rn.title) candidates.push(rn.title.english, rn.title.romaji, rn.title.native)
+          }
+        }
+        for (const c of candidates) {
+          const sn = extractSeasonNumberFromTitle(c)
+          if (sn && sn === wanted) { pick = it; break }
+        }
+        if (pick) break
+      } catch (e) {}
+    }
+  }
+  // fallback to best lexical match
+  if (!pick) pick = items[0]
   if (!pick) return null
   // pick English when available, otherwise romaji, otherwise native
   const name = (pick.title && (pick.title.english || pick.title.romaji || pick.title.native)) ? (pick.title.english || pick.title.romaji || pick.title.native) : null
