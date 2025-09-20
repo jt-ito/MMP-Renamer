@@ -1924,42 +1924,58 @@ app.post('/api/debug/client-refreshed', requireAuth, (req, res) => {
     try {
       const now = Date.now()
       const WINDOW_MS = 10 * 1000 // 10s window to consider recent hides
-      const reconciled = []
+      const dedupeLookback = 50 // only check the most recent N events to bound work
+      // helper to decide whether a similar reconciled event already exists recently
+      function recentlyHasReconciled(match) {
+        try {
+          if (!Array.isArray(hideEvents) || hideEvents.length === 0) return false
+          const start = Math.max(0, hideEvents.length - dedupeLookback)
+          for (let i = hideEvents.length - 1; i >= start; i--) {
+            const ev = hideEvents[i]
+            if (!ev || !ev.ts) continue
+            if ((now - ev.ts) > WINDOW_MS) continue
+            if (!ev.reconciled) continue
+            // match by path or by modifiedScanIds overlap
+            if (match.path && ev.path === match.path) return true
+            if (match.scanId && Array.isArray(ev.modifiedScanIds) && ev.modifiedScanIds.map(String).indexOf(String(match.scanId)) !== -1) return true
+          }
+        } catch (e) {}
+        return false
+      }
+
       if (path && Array.isArray(hideEvents)) {
         const key = canonicalize(path)
-        // find the most recent hide event for this path within the window
-        for (let i = hideEvents.length - 1; i >= 0; i--) {
-          const ev = hideEvents[i]
-          if (!ev || !ev.ts) continue
-          if (ev.path === key && (now - ev.ts) <= WINDOW_MS) {
-            // push a confirmation event derived from the original
-            try {
-              const confirm = { ts: now, path: key, originalPath: ev.originalPath || path, modifiedScanIds: ev.modifiedScanIds || [], reconciled: true }
-              hideEvents.push(confirm)
-              if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
-              appendLog(`HIDE_RECONCILED path=${path} via=clientRefreshed`)
-              reconciled.push(path)
-            } catch (e) {}
-            break
-          }
-          // stop searching once events are older than the window
-          if ((now - ev.ts) > WINDOW_MS) break
+        if (!recentlyHasReconciled({ path: key })) {
+          try {
+            const confirm = { ts: now, path: key, originalPath: path, modifiedScanIds: [], reconciled: true }
+            hideEvents.push(confirm)
+            if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
+            appendLog(`HIDE_RECONCILED path=${path} via=clientRefreshed`)
+          } catch (e) {}
+        } else {
+          appendLog(`HIDE_RECONCILED_SKIPPED path=${path} reason=recently_reconciled`)
         }
       }
+
       if (scanId && Array.isArray(hideEvents)) {
-        // find any hide events that listed this scanId as modified within the window
         const sidStr = String(scanId)
-        for (let i = hideEvents.length - 1; i >= 0; i--) {
+        // find any hide events that listed this scanId as modified within the window
+        // and emit a single reconciled confirmation only if not already emitted recently
+        for (let i = hideEvents.length - 1; i >= Math.max(0, hideEvents.length - dedupeLookback); i--) {
           const ev = hideEvents[i]
           if (!ev || !ev.ts) continue
-          if ((now - ev.ts) > WINDOW_MS) break
+          if ((now - ev.ts) > WINDOW_MS) continue
           try {
             if (Array.isArray(ev.modifiedScanIds) && ev.modifiedScanIds.map(String).indexOf(sidStr) !== -1) {
-              const confirm = { ts: now, path: ev.path, originalPath: ev.originalPath || null, modifiedScanIds: ev.modifiedScanIds || [], reconciled: true }
-              hideEvents.push(confirm)
-              if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
-              appendLog(`HIDE_RECONCILED scan=${scanId} path=${ev.originalPath || ev.path} via=clientRefreshed`)
-              reconciled.push(ev.path || ev.originalPath || sidStr)
+              if (!recentlyHasReconciled({ scanId })) {
+                const confirm = { ts: now, path: ev.path, originalPath: ev.originalPath || null, modifiedScanIds: ev.modifiedScanIds || [], reconciled: true }
+                hideEvents.push(confirm)
+                if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
+                appendLog(`HIDE_RECONCILED scan=${scanId} path=${ev.originalPath || ev.path} via=clientRefreshed`)
+              } else {
+                appendLog(`HIDE_RECONCILED_SKIPPED scan=${scanId} path=${ev.originalPath || ev.path} reason=recently_reconciled`)
+              }
+              break
             }
           } catch (e) {}
         }
