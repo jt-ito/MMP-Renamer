@@ -39,6 +39,53 @@ function useLocalState(key, initial) {
 }
 export default function App() {
 
+  // --- restored component state & refs (must be available to helper functions) ---
+  const [libraries, setLibraries] = useState([])
+  const [scanId, setScanId] = useState(null)
+  const [scanMeta, setScanMeta] = useState(null)
+  const [items, setItems] = useState([])
+  const [allItems, setAllItems] = useState([])
+  const [total, setTotal] = useState(0)
+  const [theme, setTheme] = useLocalState('theme', 'dark')
+  const [lastScanId, setLastScanId] = useLocalState('lastScanId', null)
+  const [lastLibraryId, setLastLibraryId] = useLocalState('lastLibraryId', null)
+  const [toasts, setToasts] = useState([])
+  const [logs, setLogs] = useState('')
+  const [auth, setAuth] = useState(null)
+  const [authChecked, setAuthChecked] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searching, setSearching] = useState(false)
+  const [selected, setSelected] = useState({})
+  const [selectMode, setSelectMode] = useState(false)
+  const [loadingEnrich, setLoadingEnrich] = useState({})
+  const safeSetLoadingEnrich = (updater) => { try { setLoadingEnrich(prev => typeof updater === 'function' ? updater(prev) : updater) } catch (e) {} }
+
+  const [providerKey, setProviderKey] = useLocalState('tmdb_api_key', '')
+
+  // persistent/local-backed UI state
+  const [visibleOffset, setVisibleOffset] = useLocalState('visibleOffset', 0)
+  const [visibleCount, setVisibleCount] = useLocalState('visibleCount', 12)
+
+  const batchSize = 12
+
+  // caches and refs used by helper functions
+  const listRef = useRef(null)
+  const searchTimeoutRef = useRef(null)
+  const searchAbortRef = useRef(null)
+  const lastHideEventTsRef = useRef(0)
+  const phaseStartRef = useRef({})
+  const timingHistoryRef = useRef({})
+  const scanOptionsRef = useRef({})
+
+  const [currentScanPaths, setCurrentScanPaths] = useState(new Set())
+
+  // enrich cache: persisted in localStorage via useLocalState
+  const enrichCacheRef = useRef(() => ({}))
+  const [enrichCache, setEnrichCache] = useLocalState('enrichCache', {})
+  useEffect(() => { enrichCacheRef.current = { ...enrichCache } }, [enrichCache])
+
+  // ---------------------------------------------------------------------------
+
   function isHiddenOrApplied(enriched) {
     return enriched && (enriched.hidden === true || enriched.applied === true)
   }
