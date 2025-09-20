@@ -763,6 +763,38 @@ export default function App() {
   const _norm = (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
   const nameForToast = (_norm && (_norm.parsed?.title || _norm.provider?.title)) || (key && key.split('/')?.pop()) || key
   pushToast && pushToast('Enrich', `Updated metadata for ${nameForToast}`)
+  // If server indicated modifiedScanIds (e.g. client-requested rescan), refresh those scans
+  try {
+    const modified = (w && w.data && Array.isArray(w.data.modifiedScanIds)) ? w.data.modifiedScanIds : []
+    if (modified && modified.length) {
+      const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
+      for (const sid of toReload) {
+        try {
+          const m = await axios.get(API(`/scan/${sid}`))
+          const total = m.data.totalCount || 0
+          const coll = []
+          let off = 0
+          while (off < total) {
+            const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`))
+            const its = pgr.data.items || []
+            coll.push(...its)
+            off += its.length
+          }
+          if (sid === scanId || sid === lastScanId) {
+            try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
+              setScanMeta(m.data)
+              setTotal(m.data.totalCount || coll.length)
+              setItems(coll.filter(it => it && it.canonicalPath))
+              setAllItems(coll.filter(it => it && it.canonicalPath))
+              try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
+            }
+            try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
+          }
+        } catch (e) { /* best-effort */ }
+      }
+    }
+  } catch (e) { /* swallow */ }
+
   return (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
     } catch (err) {
       setEnrichCache(prev => ({ ...prev, [key]: { error: err?.message || String(err) } }))
