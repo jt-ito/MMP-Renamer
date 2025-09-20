@@ -715,11 +715,42 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
               // If AniList-style nested startDate { year: YYYY } is present, prefer it as the series start year
               if (!dateStr) {
                 try {
-                  if (raw && raw.startDate && typeof raw.startDate === 'object' && raw.startDate.year) {
-                    // set guess.year directly from the nested year and skip episode fallback
-                    const ry2 = Number(raw.startDate.year)
-                    if (!isNaN(ry2)) {
-                      guess.year = String(ry2)
+                  // Prefer season-specific start year when AniList provides relation nodes for seasons.
+                  // If the parsed season is present, try to find a related node whose season or seasonYear/startDate matches.
+                  if (raw && raw.relations && Array.isArray(raw.relations.nodes) && typeof guess.season !== 'undefined' && guess.season != null) {
+                    try {
+                      for (const rn of raw.relations.nodes) {
+                        if (!rn) continue
+                        // direct season field on related node
+                        if (typeof rn.season !== 'undefined' && rn.season != null && Number(rn.season) === Number(guess.season)) {
+                          if (rn.startDate && typeof rn.startDate === 'object' && rn.startDate.year) {
+                            const syear = Number(rn.startDate.year)
+                            if (!isNaN(syear)) { guess.year = String(syear); break }
+                          }
+                          if (typeof rn.seasonYear !== 'undefined' && rn.seasonYear != null) {
+                            const sy2 = Number(rn.seasonYear)
+                            if (!isNaN(sy2)) { guess.year = String(sy2); break }
+                          }
+                        }
+                        // sometimes relation nodes encode seasonYear directly even if season missing
+                        if (typeof rn.seasonYear !== 'undefined' && rn.seasonYear != null && Number(rn.seasonYear) && typeof guess.season !== 'undefined' && guess.season != null) {
+                          // best-effort: if relation node title contains season number, prefer it
+                          try {
+                            const ttl = (rn.title && (rn.title.english || rn.title.romaji || rn.title.native)) ? (rn.title.english || rn.title.romaji || rn.title.native) : ''
+                            if (ttl && String(ttl).toLowerCase().indexOf('season') !== -1 && String(ttl).indexOf(String(guess.season)) !== -1) {
+                              const sy3 = Number(rn.seasonYear)
+                              if (!isNaN(sy3)) { guess.year = String(sy3); break }
+                            }
+                          } catch (e) {}
+                        }
+                      }
+                    } catch (e) {}
+                  }
+                  // If season-specific year not found, fall back to series-level nested startDate
+                  if (!guess.year) {
+                    if (raw && raw.startDate && typeof raw.startDate === 'object' && raw.startDate.year) {
+                      const ry2 = Number(raw.startDate.year)
+                      if (!isNaN(ry2)) { guess.year = String(ry2) }
                     }
                   }
                 } catch (e) {}

@@ -32,272 +32,13 @@ axios.defaults.withCredentials = true
 
 function useLocalState(key, initial) {
   const [s, setS] = useState(() => {
-    try {
-      const v = localStorage.getItem(key)
-      if (v === null || v === undefined) return initial
-      try { return JSON.parse(v) } catch { return v }
-    } catch (e) { return initial }
+    try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : initial } catch { return initial }
   })
-  useEffect(() => {
-    try {
-      // Store primitives as raw strings for compatibility with other parts of the app
-      if (typeof s === 'string' || typeof s === 'number' || typeof s === 'boolean') localStorage.setItem(key, String(s))
-      else localStorage.setItem(key, JSON.stringify(s))
-    } catch (e) {}
-  }, [key, s])
+  useEffect(() => { try { localStorage.setItem(key, JSON.stringify(s)) } catch {} }, [key, s])
   return [s, setS]
 }
-
-// Helper: normalize server enrich responses to { parsed, provider, hidden, applied }
-function normalizeEnrichResponse(data) {
-  if (!data) return null
-  // Direct GET /api/enrich returns { cached, parsed, provider }
-  if (data.parsed || data.provider) {
-    return { parsed: data.parsed || null, provider: data.provider || null, hidden: data.hidden || false, applied: data.applied || false }
-  }
-  // POST /api/enrich historically returned { enrichment: {...} } or direct enrichment object
-  const e = data.enrichment || data
-  if (!e) return null
-  // If already normalized
-  if (e.parsed || e.provider) return { parsed: e.parsed || null, provider: e.provider || null, hidden: e.hidden || false, applied: e.applied || false }
-  // Otherwise build parsed/provider blocks from legacy enrichment shape
-  const parsed = (e.parsed) ? e.parsed : (e.parsedName || e.title ? { title: e.title || '', parsedName: e.parsedName || '', season: e.season, episode: e.episode, timestamp: e.timestamp } : null)
-  const provider = (e.provider) ? e.provider : ((e.episodeTitle || e.year || e.providerRenderedName || e.tmdb) ? { title: e.title || parsed && parsed.title || '', year: e.year || null, season: e.season, episode: e.episode, episodeTitle: e.episodeTitle || '', raw: e.provider || e.tmdb || null, renderedName: e.providerRenderedName || e.renderedName || null, matched: !!(e.title || e.episodeTitle) } : null)
-  return { parsed: parsed || null, provider: provider || null, hidden: e.hidden || false, applied: e.applied || false }
-}
-
-function Spinner(){
-  return (
-    <svg className="icon spinner" viewBox="0 0 50 50" width="18" height="18"><circle cx="25" cy="25" r="20" stroke="currentColor" strokeWidth="4" strokeOpacity="0.18" fill="none"/><path d="M45 25a20 20 0 0 1-20 20" stroke="currentColor" strokeWidth="4" strokeLinecap="round" fill="none"><animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25" dur="1s" repeatCount="indefinite"/></path></svg>
-  )
-}
-
 export default function App() {
-  const [libraries, setLibraries] = useState([])
-  const [scanId, setScanId] = useState(null)
-  const [scanMeta, setScanMeta] = useState(null)
-  const [lastLibraryId, setLastLibraryId] = useLocalState('lastLibraryId', '')
-  const [lastScanId, setLastScanId] = useLocalState('lastScanId', null)
-  const [items, setItems] = useState([])
-  // allItems is the baseline full listing for the current scan (post-scan).
-  // This is the single source of truth for the visible dataset; searches filter this in-memory.
-  const [allItems, setAllItems] = useState([])
-  const [total, setTotal] = useState(0)
-  // track canonical paths for the currently-loaded scan so we don't reveal cached paths
-  // that aren't present in the current scan results
-  const [currentScanPaths, setCurrentScanPaths] = useState(new Set())
-  const [scanning, setScanning] = useState(false)
-  const [scanLoaded, setScanLoaded] = useState(0)
-  const [scanProgress, setScanProgress] = useState(0)
-  const [metaPhase, setMetaPhase] = useState(false)
-  const [metaProgress, setMetaProgress] = useState(0)
-  const [theme, setTheme] = useLocalState('theme', 'dark')
-  const [selectMode, setSelectMode] = useState(false)
-  const [selected, setSelected] = useState({})
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searching, setSearching] = useState(false)
-  const searchAbortRef = React.useRef(null)
-  const searchTimeoutRef = React.useRef(null)
-  const [enrichCache, setEnrichCache] = useLocalState('enrichCache', {})
-  const [logs, setLogs] = useState('')
-  const [toasts, setToasts] = useState([])
-  const [loadingEnrich, setLoadingEnrich] = useState({})
-  // last seen hide event timestamp (ms)
-  const lastHideEventTsRef = useRef(0)
 
-  // Wait for a hide event matching any of the provided candidate paths.
-  // Returns the event object if found within timeoutMs, otherwise null.
-  async function waitForHideEvent(candidates = [], timeoutMs = 5000, interval = 400) {
-    const start = Date.now()
-    try {
-      while (Date.now() - start < timeoutMs) {
-        try {
-          const since = lastHideEventTsRef.current || 0
-          const r = await axios.get(API('/enrich/hide-events'), { params: { since } }).catch(() => null)
-          if (r && r.data && Array.isArray(r.data.events) && r.data.events.length) {
-            for (const ev of r.data.events) {
-              try {
-                // update last seen ts
-                if (ev && ev.ts && ev.ts > (lastHideEventTsRef.current || 0)) lastHideEventTsRef.current = ev.ts
-                // match by canonical path or originalPath if provided
-                if (!ev) continue
-                const p = ev.path || ev.originalPath || ''
-                for (const c of candidates) {
-                  if (!c) continue
-                  try { if (String(p) === String(c) || String(ev.originalPath) === String(c)) return ev } catch (e) {}
-                }
-              } catch (e) {}
-            }
-          }
-        } catch (e) {}
-        await new Promise(r => setTimeout(r, interval))
-      }
-    } catch (e) {}
-    return null
-  }
-
-  // If hide appears to have failed, wait briefly for any server-side hide event
-  // matching the provided candidate paths. If an event is seen, refresh scans
-  // and authoritative enrichment for the affected path(s) and show success.
-  async function handleHideFailure(candidates = []) {
-    try {
-      const ev = await waitForHideEvent(candidates, 4000, 350)
-      if (!ev) return false
-      const p = ev.path || ev.originalPath || (candidates && candidates[0])
-      // fetch authoritative enrichment for the event path
-      try {
-        if (p) {
-          const er = await axios.get(API('/enrich'), { params: { path: p } }).catch(() => null)
-          const auth = er && er.data && (er.data.enrichment || er.data) ? (er.data.enrichment || er.data) : null
-          const norm = auth ? normalizeEnrichResponse(auth) : null
-          if (norm) {
-            setEnrichCache(prev => ({ ...prev, [p]: norm }))
-            setItems(prev => prev.filter(x => x.canonicalPath !== p))
-            setAllItems(prev => prev.filter(x => x.canonicalPath !== p))
-          }
-        }
-      } catch (e) {}
-
-      // reload any scans the event reported as modified, but only if they match our current scans
-      try {
-        const modified = Array.isArray(ev.modifiedScanIds) ? ev.modifiedScanIds : []
-        if (modified && modified.length) {
-          const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
-          for (const sid of toReload) {
-            try {
-              const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
-              if (m && m.data) {
-                const total = m.data.totalCount || 0
-                const coll = []
-                let off = 0
-                while (off < total) {
-                  const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
-                  const its = pgr.data.items || []
-                  coll.push(...its)
-                  off += its.length
-                }
-                if (sid === scanId || sid === lastScanId) {
-                          try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
-                            setScanMeta(m.data)
-                            setTotal(m.data.totalCount || coll.length)
-                            setItems(coll.filter(it => it && it.canonicalPath))
-                            setAllItems(coll.filter(it => it && it.canonicalPath))
-                            try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
-                          }
-                  try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
-                }
-              }
-            } catch (e) { /* swallow */ }
-          }
-        } else {
-          // fallback: reload the currently shown scan
-          const sid = scanId || lastScanId
-          if (sid) {
-            try {
-              const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
-              if (m && m.data) {
-                const total = m.data.totalCount || 0
-                const coll = []
-                let off = 0
-                while (off < total) {
-                  const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
-                  const its = pgr.data.items || []
-                  coll.push(...its)
-                  off += its.length
-                }
-                try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
-                  setScanMeta(m.data)
-                  setTotal(m.data.totalCount || coll.length)
-                  setItems(coll.filter(it => it && it.canonicalPath))
-                  setAllItems(coll.filter(it => it && it.canonicalPath))
-                  try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
-                }
-              }
-            } catch (e) { /* swallow */ }
-          }
-        }
-      } catch (e) { /* swallow */ }
-
-      pushToast && pushToast('Hide', 'Item hidden (server event)')
-      return true
-    } catch (e) {
-      return false
-    }
-  }
-
-  // computed: whether a bulk enrich/metadata refresh is in-flight
-  const enrichPendingCount = Object.keys(loadingEnrich || {}).length
-  const globalEnrichPending = metaPhase || enrichPendingCount > 0
-  // debounce hiding the global indicator to avoid flicker
-  const [visibleGlobalEnrichPending, setVisibleGlobalEnrichPending] = useState(globalEnrichPending)
-  const hideDebounceRef = React.useRef(null)
-
-  React.useEffect(() => {
-    // if pending, show immediately and cancel any pending hide timeout
-    if (globalEnrichPending) {
-      if (hideDebounceRef.current) { clearTimeout(hideDebounceRef.current); hideDebounceRef.current = null }
-      setVisibleGlobalEnrichPending(true)
-      return
-    }
-    // if not pending, schedule hide after 300ms to avoid flicker
-    if (!globalEnrichPending) {
-      if (hideDebounceRef.current) clearTimeout(hideDebounceRef.current)
-      hideDebounceRef.current = setTimeout(() => {
-        setVisibleGlobalEnrichPending(false)
-        hideDebounceRef.current = null
-      }, 300)
-    }
-    return () => { if (hideDebounceRef.current) { clearTimeout(hideDebounceRef.current); hideDebounceRef.current = null } }
-  }, [globalEnrichPending])
-
-  // defensive setter wrapper: some runtime bundles or injection can cause the
-  // state setter to be unavailable in certain scopes; use this wrapper to
-  // avoid uncaught ReferenceError when event handlers run.
-  function safeSetLoadingEnrich(updater) {
-    try { setLoadingEnrich(updater) } catch (e) { /* swallow */ }
-  }
-
-  // expose global alias for compatibility with any injected or legacy code
-  React.useEffect(() => {
-    try { if (typeof window !== 'undefined') window.safeSetLoadingEnrich = safeSetLoadingEnrich } catch (e) {}
-    return () => { try { if (typeof window !== 'undefined' && window.safeSetLoadingEnrich === safeSetLoadingEnrich) delete window.safeSetLoadingEnrich } catch (e) {} }
-  }, [])
-  const [auth, setAuth] = useState(null)
-  const [authChecked, setAuthChecked] = useState(false)
-  const [renameTemplate, setRenameTemplate] = useLocalState('rename_template', '{title} ({year}) - {epLabel} - {episodeTitle}')
-  const [legacyTvdbKey, setLegacyTvdbKey] = useLocalState('tvdb_api_key', '')
-  // support modern TMDb key while staying backward-compatible with legacy tvdb_api_key
-  const [tmdbKey, setTmdbKey] = useLocalState('tmdb_api_key', '')
-  const providerKey = (tmdbKey && String(tmdbKey).length) ? tmdbKey : (legacyTvdbKey || '')
-  const scanOptionsRef = React.useRef({})
-  const batchSize = 12
-  // dynamic weighting heuristic: store recent durations in localStorage and compute weights
-  const timingHistoryRef = useRef({ scanDurations: [], metaDurations: [] })
-  try {
-    const raw = localStorage.getItem('progressTimingHistory')
-    if (raw) timingHistoryRef.current = JSON.parse(raw)
-  } catch (e) {}
-  const saveTimingHistory = () => {
-    try { localStorage.setItem('progressTimingHistory', JSON.stringify(timingHistoryRef.current)) } catch (e) {}
-  }
-  function computeWeights() {
-    try {
-      const s = timingHistoryRef.current.scanDurations || []
-      const m = timingHistoryRef.current.metaDurations || []
-      const avg = (arr) => { if (!arr || !arr.length) return null; const sum = arr.reduce((a,b) => a + b, 0); return sum / arr.length }
-      const sAvg = avg(s)
-      const mAvg = avg(m)
-  // require at least 3 historical entries for both phases before trusting the heuristic
-  if (!sAvg || !mAvg || (s.length < 3) || (m.length < 3)) return { scanWeight: 0.3, metaWeight: 0.7 }
-      const total = sAvg + mAvg
-      if (total <= 0) return { scanWeight: 0.3, metaWeight: 0.7 }
-      const scanWeight = Math.max(0.05, Math.min(0.9, sAvg / total))
-      return { scanWeight, metaWeight: 1 - scanWeight }
-    } catch (e) { return { scanWeight: 0.3, metaWeight: 0.7 } }
-  }
-  const phaseStartRef = useRef({ scanStart: null, metaStart: null })
-
-  // Helper: consider an enrichment entry hidden for UI purposes if hidden or applied
   function isHiddenOrApplied(enriched) {
     return enriched && (enriched.hidden === true || enriched.applied === true)
   }
@@ -1560,248 +1301,85 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
             if (loadingEnrich && loadingEnrich[originalPath]) return
             safeSetLoadingEnrich(prev => ({ ...prev, [originalPath]: true }))
             let resp = null
-            let didFinalToast = false
             try {
-              // attempt hide
-              resp = await axios.post(API('/enrich/hide'), { path: originalPath })
-              // prefer canonical key returned by server when present
+              // Try to request hide on server (best-effort)
+              try { resp = await axios.post(API('/enrich/hide'), { path: originalPath }) } catch (e) { resp = null }
+
               const serverKey = resp && resp.data && resp.data.path ? resp.data.path : originalPath
-              const returned = resp && resp.data && (resp.data.enrichment || resp.data) ? (resp.data.enrichment || resp.data) : null
-              // Always fetch authoritative enrichment after the operation to avoid races
+
+              // Fetch authoritative enrichment if available (non-blocking to UI)
               let authoritative = null
               try {
                 const er = await axios.get(API('/enrich'), { params: { path: serverKey } }).catch(() => null)
                 authoritative = er && er.data && (er.data.enrichment || er.data) ? (er.data.enrichment || er.data) : null
               } catch (e) { authoritative = null }
-              const enriched = authoritative ? normalizeEnrichResponse(authoritative) : (returned ? normalizeEnrichResponse(returned) : null)
 
-              // Apply authoritative/optimistic changes to local cache/UI but do NOT show final toast yet.
+              const enriched = authoritative ? normalizeEnrichResponse(authoritative) : (resp && resp.data ? normalizeEnrichResponse(resp.data.enrichment || resp.data) : null)
+
+              // Update local cache with authoritative or optimistic hide
               if (enriched) {
                 setEnrichCache(prev => ({ ...prev, [serverKey]: enriched }))
-                // remove from visible lists if hidden/applied
-                if (enriched.hidden || enriched.applied) {
-                  setItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
-                  setAllItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
-                }
               } else {
-                // no authoritative enrichment — fallback to optimistic hide but still attempt to refresh scans
                 setEnrichCache(prev => ({ ...prev, [originalPath]: Object.assign({}, prev && prev[originalPath] ? prev[originalPath] : {}, { hidden: true }) }))
-                setItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
-                setAllItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
               }
 
-              // refresh affected scans if server indicates modification and wait for them to complete
-              try {
-                const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
-                if (modified && modified.length) {
-                  const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
-                  for (const sid of toReload) {
-                    try {
-                      const m = await axios.get(API(`/scan/${sid}`))
-                      const total = m.data.totalCount || 0
-                      const coll = []
-                      let off = 0
-                      while (off < total) {
-                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`))
-                        const its = pgr.data.items || []
-                        coll.push(...its)
-                        off += its.length
-                      }
-                      if (sid === scanId || sid === lastScanId) {
-                        try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
-                          setScanMeta(m.data)
-                          setTotal(m.data.totalCount || coll.length)
-                          setItems(coll.filter(it => it && it.canonicalPath))
-                          setAllItems(coll.filter(it => it && it.canonicalPath))
-                          try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
-                        }
-                        // inform server we refreshed this scan so server logs can confirm client-side refresh
-                        try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
-                      }
-                    } catch (e) { /* best-effort */ }
-                  }
-                }
-              } catch (e) { /* swallow */ }
+              // Immediate UI removal so hide feels instant
+              setItems(prev => prev.filter(x => x.canonicalPath !== serverKey && x.canonicalPath !== originalPath))
+              setAllItems(prev => prev.filter(x => x.canonicalPath !== serverKey && x.canonicalPath !== originalPath))
+              try { setTotal(t => Math.max(0, (t || 0) - 1)) } catch (e) {}
 
-              // Now that we've reloaded scans (if applicable), confirm final state and show a single toast.
-              try {
-                // If we have an authoritative enriched object that indicates hidden/applied, show success
-                if (enriched && (enriched.hidden || enriched.applied)) {
-                  pushToast && pushToast('Hide', 'Item hidden')
-                  didFinalToast = true
-                } else {
-                  // Otherwise, perform a final authoritative check before declaring failure
-                  const tryPaths = []
-                  if (resp && resp.data && resp.data.path) tryPaths.push(resp.data.path)
-                  tryPaths.push(originalPath)
-                  let confirmed = false
-                  for (const pth of tryPaths) {
-                    try {
-                      const check = await axios.get(API('/enrich'), { params: { path: pth } }).catch(() => null)
-                      const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
-                      const norm = auth ? normalizeEnrichResponse(auth) : null
-                      if (norm && (norm.hidden || norm.applied)) {
-                        // server applied hide — treat as success
-                        setEnrichCache(prev => ({ ...prev, [pth]: norm }))
-                        setItems(prev => prev.filter(x => x.canonicalPath !== pth))
-                        setAllItems(prev => prev.filter(x => x.canonicalPath !== pth))
-                        pushToast && pushToast('Hide', 'Item hidden (confirmed)')
-                        didFinalToast = true
-                        confirmed = true
-                        break
-                      }
-                    } catch (e) {}
-                  }
-                  if (!confirmed && !didFinalToast) {
-                    // genuine failure — but wait briefly for any server-side hide event before giving up
-                    try {
-                      const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
-                      if (!handled) {
-                        pushToast && pushToast('Hide', 'Failed to hide')
-                      }
-                    } catch (e) {
-                      pushToast && pushToast('Hide', 'Failed to hide')
-                    }
-                    didFinalToast = true
-                  }
-                }
-              } catch (e) {
-                if (!didFinalToast) {
+              // If authoritative says hidden/applied, show success toast now
+              if (enriched && (enriched.hidden || enriched.applied)) {
+                pushToast && pushToast('Hide', 'Item hidden')
+              } else {
+                // Otherwise, perform background reconciliation of scans and authoritative enrichment
+                void (async () => {
                   try {
-                    const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
-                    if (!handled) pushToast && pushToast('Hide', 'Failed to hide')
-                  } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
-                }
-                didFinalToast = true
+                    const modified = resp && resp.data && Array.isArray(resp.data.modifiedScanIds) ? resp.data.modifiedScanIds : []
+                    if (modified && modified.length) {
+                      const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
+                      for (const sid of toReload) {
+                        try {
+                          const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
+                          if (m && m.data) {
+                            const total = m.data.totalCount || 0
+                            const coll = []
+                            let off = 0
+                            while (off < total) {
+                              const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
+                              const its = pgr.data.items || []
+                              coll.push(...its)
+                              off += its.length
+                            }
+                            if (sid === scanId || sid === lastScanId) {
+                              try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
+                                setScanMeta(m.data)
+                                setTotal(m.data.totalCount || coll.length)
+                                setItems(coll.filter(it => it && it.canonicalPath))
+                                setAllItems(coll.filter(it => it && it.canonicalPath))
+                                try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
+                              }
+                              try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
+                            }
+                          }
+                        } catch (e) { /* swallow per-scan errors */ }
+                      }
+                    } else {
+                      // no modifiedScanIds: wait briefly for any hide-events or perform fallback checks
+                      try { await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ]) } catch (e) {}
+                    }
+                    // ensure authoritative enrichment is refreshed for the path
+                    try { await refreshEnrichForPaths([serverKey]) } catch (e) {}
+                  } catch (e) { /* swallow background errors */ }
+                })()
               }
             } catch (err) {
-              // On network error, consult authoritative GET before deciding failure (existing behavior)
-              try {
-                const tryPaths = []
-                if (resp && resp.data && resp.data.path) tryPaths.push(resp.data.path)
-                tryPaths.push(originalPath)
-                let confirmed = false
-                for (const pth of tryPaths) {
-                  try {
-                    const check = await axios.get(API('/enrich'), { params: { path: pth } }).catch(() => null)
-                    const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
-                    const norm = auth ? normalizeEnrichResponse(auth) : null
-                    if (norm && (norm.hidden || norm.applied)) {
-                      // server likely applied hide but POST failed — treat as success
-                      setEnrichCache(prev => ({ ...prev, [pth]: norm }))
-                      setItems(prev => prev.filter(x => x.canonicalPath !== pth))
-                      setAllItems(prev => prev.filter(x => x.canonicalPath !== pth))
-                      pushToast && pushToast('Hide', 'Item hidden (confirmed)')
-                      confirmed = true
-                      break
-                    }
-                  } catch (e) {}
-                }
-                    if (!confirmed) {
-                      // genuine failure — wait for server hide event briefly before declaring failure
-                      try {
-                        const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
-                        if (!handled) pushToast && pushToast('Hide', 'Failed to hide')
-                      } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
-                    }
-                // If POST did return modifiedScanIds before network error, reload those scans
-                try {
-                  const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
-                  if (modified && modified.length) {
-                    const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
-                    for (const sid of toReload) {
-                      try {
-                        const m = await axios.get(API(`/scan/${sid}`))
-                        const total = m.data.totalCount || 0
-                        const coll = []
-                        let off = 0
-                        while (off < total) {
-                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`))
-                          const its = pgr.data.items || []
-                          coll.push(...its)
-                          off += its.length
-                        }
-                        if (sid === scanId || sid === lastScanId) {
-                            try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
-                              setScanMeta(m.data)
-                              setTotal(m.data.totalCount || coll.length)
-                              setItems(coll.filter(it => it && it.canonicalPath))
-                              setAllItems(coll.filter(it => it && it.canonicalPath))
-                              try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
-                            }
-                          // inform server we refreshed this scan so server logs can confirm client-side refresh
-                          try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
-                        }
-                      } catch (e) {}
-                    }
-                  }
-                } catch (ee) {}
-              } catch (ee) {
-                try {
-                  const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
-                  if (!handled) pushToast && pushToast('Hide', 'Failed to hide')
-                } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
-              }
+              // Network error: optimistic removal already applied. Schedule background verification.
+              void (async () => {
+                try { await handleHideFailure([originalPath]) } catch (e) {}
+                try { await refreshEnrichForPaths([originalPath]) } catch (e) {}
+              })()
             } finally {
-              // Always attempt to refresh affected scans so UI matches server state.
-              try {
-                const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
-                if (modified && modified.length) {
-                  const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
-                  for (const sid of toReload) {
-                    try {
-                      const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
-                      if (m && m.data) {
-                        const total = m.data.totalCount || 0
-                        const coll = []
-                        let off = 0
-                        while (off < total) {
-                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
-                          const its = pgr.data.items || []
-                          coll.push(...its)
-                          off += its.length
-                        }
-                        if (sid === scanId || sid === lastScanId) {
-                          try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
-                            setScanMeta(m.data)
-                            setTotal(m.data.totalCount || coll.length)
-                            setItems(coll.filter(it => it && it.canonicalPath))
-                            setAllItems(coll.filter(it => it && it.canonicalPath))
-                            try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
-                          }
-                        }
-                      }
-                    } catch (e) { /* swallow */ }
-                  }
-                } else {
-                  // Fallback: if server didn't return modifiedScanIds (or POST failed), reload the current scan(s)
-                  const sid = scanId || lastScanId
-                  if (sid) {
-                    try {
-                      const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
-                      if (m && m.data) {
-                        const total = m.data.totalCount || 0
-                        const coll = []
-                        let off = 0
-                        while (off < total) {
-                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
-                          const its = pgr.data.items || []
-                          coll.push(...its)
-                          off += its.length
-                        }
-                        try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
-                          // helper failed — fall back to explicit state updates
-                          setScanMeta(m.data)
-                          setTotal(m.data.totalCount || coll.length)
-                          setItems(coll.filter(it => it && it.canonicalPath))
-                          setAllItems(coll.filter(it => it && it.canonicalPath))
-                          try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
-                        }
-                      }
-                    } catch (e) { /* swallow */ }
-                  }
-                }
-              } catch (ee) { /* best-effort refresh */ }
               safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[originalPath]; return n })
             }
           }}>{loading ? <Spinner/> : <><IconCopy/> <span>Hide</span></>}</button>
