@@ -178,6 +178,20 @@ async function metaLookup(title, apiKey, opts = {}) {
   // Build simple variants to try (original, cleaned, stripped parentheses, lowercase)
   function makeVariants(t){ const s = String(t || '').trim(); const variants = []; if (!s) return variants; variants.push(s); const cleaned = s.replace(/[._\-:]+/g,' ').replace(/\s+/g,' ').trim(); variants.push(cleaned); const stripped = cleaned.replace(/\s*[\[(].*?[\])]/g, '').replace(/\s+/g,' ').trim(); if (stripped && stripped !== cleaned) variants.push(stripped); variants.push(stripped.toLowerCase()); return [...new Set(variants)].slice(0,5) }
 
+  // Strip season-like suffix tokens that AniList might include in titles, e.g. " (Season 2)", "Season 2", "2nd".
+  // This helper is available to the whole metaLookup function so downstream TMDb/Kitsu lookups don't receive AniList's season-suffixed titles.
+  function stripAniListSeasonSuffix(name) {
+    try {
+      if (!name) return name
+      let out = String(name)
+      out = out.replace(/\s*\(\s*Season\s*\d{1,2}(?:st|nd|rd|th)?\s*\)\s*$/i, '')
+      out = out.replace(/\s+Season\s+\d{1,2}(?:st|nd|rd|th)?\s*$/i, '')
+      out = out.replace(/\s+\d{1,2}(?:st|nd|rd|th)?\s+Season\s*$/i, '')
+      out = out.replace(/\s+\d+(?:st|nd|rd|th)?\s*$/i, '')
+      return out.trim()
+    } catch (e) { return name }
+  }
+
   // Simple HTTP helpers
   const https = require('https')
   function httpRequest(options, body, timeoutMs = 4000) {
@@ -234,6 +248,7 @@ async function metaLookup(title, apiKey, opts = {}) {
           let items = null
           for (const qtry of tryQueries) {
             try {
+              try { appendLog(`META_ANILIST_TRY q=${qtry}`) } catch (e) {}
               const vars = JSON.stringify({ search: String(qtry || '') })
               const body = JSON.stringify({ query, variables: JSON.parse(vars) })
               const res = await httpRequest(opt, body, 3500)
@@ -244,6 +259,7 @@ async function metaLookup(title, apiKey, opts = {}) {
               if (found && found.length) { items = found; break }
             } catch (e) { /* try next */ }
           }
+          try { appendLog(`META_ANILIST_TRY_RESULT qTried=${tryQueries.join('|')} matched=${items && items.length ? 'yes' : 'no'}`) } catch (e) {}
           if (!items || !items.length) return null
   // select preferred title: english -> romaji -> native
   items.sort((a,b)=> (wordOverlap(String(b.title.english||b.title.romaji||b.title.native||''), String(q)) - wordOverlap(String(a.title.english||a.title.romaji||a.title.native||''), String(q))));
@@ -433,8 +449,8 @@ async function metaLookup(title, apiKey, opts = {}) {
         let ep = null
         try {
             if (apiKey) {
-            try { appendLog(`META_TMDB_EP_AFTER_ANILIST q=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
             const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name) : v
+            try { appendLog(`META_TMDB_EP_AFTER_ANILIST tmLookup=${tmLookupName} anilist=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
             const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
             if (tmEp && tmEp.episode) {
               ep = tmEp.episode
@@ -453,8 +469,8 @@ async function metaLookup(title, apiKey, opts = {}) {
         // If Kitsu didn't return an episode title and we have a TMDb key, try TMDb episode endpoint as a fallback
         try {
             if (!ep && apiKey) {
-              try { appendLog(`META_TMDB_EP_FALLBACK q=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
-            const tmLookupNameFb = (a && a.name) ? stripAniListSeasonSuffix(a.name) : v
+              const tmLookupNameFb = (a && a.name) ? stripAniListSeasonSuffix(a.name) : v
+              try { appendLog(`META_TMDB_EP_FALLBACK tmLookup=${tmLookupNameFb} anilist=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
             const tmEp = await searchTmdbAndEpisode(tmLookupNameFb, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
             if (tmEp && tmEp.episode) {
               ep = tmEp.episode
@@ -482,8 +498,8 @@ async function metaLookup(title, apiKey, opts = {}) {
           let ep = null
           try {
             if (apiKey) {
-              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT q=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
               const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name) : parentCandidate
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT tmLookup=${tmLookupName} anilist=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
               const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
               if (tmEp && tmEp.episode) {
                 ep = tmEp.episode
@@ -501,8 +517,8 @@ async function metaLookup(title, apiKey, opts = {}) {
           } catch (e) { ep = null; try { appendLog(`META_EP_AFTER_ANILIST_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
           try {
             if (!ep && apiKey) {
-              try { appendLog(`META_TMDB_EP_FALLBACK_PARENT q=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
               const tmLookupNameFb = (a && a.name) ? stripAniListSeasonSuffix(a.name) : parentCandidate
+              try { appendLog(`META_TMDB_EP_FALLBACK_PARENT tmLookup=${tmLookupNameFb} anilist=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
               const tmEp = await searchTmdbAndEpisode(tmLookupNameFb, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
               if (tmEp && tmEp.episode) {
                 ep = tmEp.episode
