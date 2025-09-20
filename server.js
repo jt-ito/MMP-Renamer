@@ -1960,11 +1960,15 @@ app.post('/api/debug/client-refreshed', requireAuth, (req, res) => {
 app.get('/api/enrich/hide-events', requireAuth, (req, res) => {
   try {
     const since = parseInt(req.query.since || '0', 10) || 0
+    const uname = req.session && req.session.username ? String(req.session.username) : '<anon>'
+    try { appendLog(`HIDE_EVENTS_REQ user=${uname} since=${since} hideEventsLen=${Array.isArray(hideEvents) ? hideEvents.length : 'na'}`) } catch (e) {}
     // defensive: ensure hideEvents is an array
     const he = Array.isArray(hideEvents) ? hideEvents : []
     const ev = he.filter(e => (e && e.ts && e.ts > since))
+    try { appendLog(`HIDE_EVENTS_RESP user=${uname} since=${since} matched=${(ev && ev.length) || 0}`) } catch (e) {}
     return res.json({ ok: true, events: ev || [] })
   } catch (e) {
+    try { appendLog(`HIDE_EVENTS_ERR err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
     try { console.error('hide-events failed', e && e.message ? e.message : e) } catch (ee) {}
     return res.status(500).json({ error: e && e.message ? e.message : String(e) })
   }
@@ -2647,6 +2651,25 @@ app.post('/api/logs/clear', (req, res) => {
   fs.writeFileSync(logsFile, '');
   res.json({ ok: true });
 });
+
+// Debug trace endpoint: return recent logs and runtime state for diagnostics
+app.get('/api/debug/trace', (req, res) => {
+  try {
+    const tail = fs.existsSync(logsFile) ? fs.readFileSync(logsFile, 'utf8').split('\n').slice(-500).join('\n') : '';
+    const state = {
+      pid: process.pid,
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      hideEventsLen: Array.isArray(hideEvents) ? hideEvents.length : 0,
+      enrichCacheSize: Object.keys(enrichCache || {}).length,
+      refreshProgressKeys: Object.keys(refreshProgress || {}).length
+    }
+    return res.json({ ok: true, state, logs: tail })
+  } catch (e) {
+    try { appendLog(`TRACE_ERR err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) })
+  }
+})
 
 // Backwards-compatible route: keep /api/tvdb/status as an alias for legacy clients (proxies to /api/meta/status)
 app.get('/api/tvdb/status', (req, res) => {
