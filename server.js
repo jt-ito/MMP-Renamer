@@ -1319,6 +1319,29 @@ app.get('/api/enrich/by-rendered', (req, res) => {
 })
 
 app.get('/api/settings', (req, res) => { const userSettings = (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings) ? users[req.session.username].settings : {}; res.json({ serverSettings: serverSettings || {}, userSettings }); });
+// Public session endpoint used by client to check authentication status
+app.get('/api/session', (req, res) => {
+  try {
+    const session = req.session || null
+    const username = session && session.username ? session.username : null
+    const role = username && users && users[username] ? users[username].role : null
+    const authenticated = !!username
+    return res.json({ authenticated, username, role })
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) })
+  }
+})
+
+// Auth status endpoint: used by registration UI to determine if initial registration
+// should be open (no users exist yet)
+app.get('/api/auth/status', (req, res) => {
+  try {
+    const hasUsers = users && Object.keys(users).length > 0
+    return res.json({ hasUsers })
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) })
+  }
+})
 // Diagnostic: expose current session and user presence to help debug auth issues (no secrets)
 app.get('/api/debug/session', (req, res) => {
   try {
