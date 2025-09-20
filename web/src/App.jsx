@@ -86,6 +86,15 @@ export default function App() {
 
   // ---------------------------------------------------------------------------
 
+  // UI state used across header and helpers
+  const [scanning, setScanning] = useState(false)
+  const [metaPhase, setMetaPhase] = useState(false)
+  const [metaProgress, setMetaProgress] = useState(0)
+  const [enrichPendingCount, setEnrichPendingCount] = useState(0)
+  const [visibleGlobalEnrichPending, setVisibleGlobalEnrichPending] = useState(false)
+  const [scanLoaded, setScanLoaded] = useState(0)
+  const [scanProgress, setScanProgress] = useState(0)
+
   function isHiddenOrApplied(enriched) {
     return enriched && (enriched.hidden === true || enriched.applied === true)
   }
