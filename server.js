@@ -225,7 +225,10 @@ async function metaLookup(title, apiKey, opts = {}) {
       if (!items || !items.length) return null
   // select preferred title: english -> romaji -> native
   items.sort((a,b)=> (wordOverlap(String(b.title.english||b.title.romaji||b.title.native||''), String(q)) - wordOverlap(String(a.title.english||a.title.romaji||a.title.native||''), String(q))));
-  // If a season was requested, try to find a media entry or a related node that explicitly mentions that season number in the title.
+  // If a season was requested, try to find a media entry or a related node that explicitly mentions that season number
+  // or season-year. AniList's `season` field is an enum (e.g. "SUMMER") and not a numeric season index, but
+  // AniList exposes `seasonYear` which we can compare against the requested year. We also fall back to extracting
+  // season numbers from titles/related nodes.
   function extractSeasonNumberFromTitle(t) {
     try {
       if (!t) return null
@@ -242,16 +245,19 @@ async function metaLookup(title, apiKey, opts = {}) {
     return null
   }
 
-  // prefer items whose own title contains the requested season number, or whose relations include such titles
+  // prefer items whose seasonYear or title/relations indicate the requested season/year
   let pick = null
-  if (opts && typeof opts.season !== 'undefined' && opts.season !== null) {
-    const wanted = Number(opts.season)
+  const wantedSeason = (opts && typeof opts.season !== 'undefined' && opts.season !== null) ? Number(opts.season) : null
+  const wantedYear = (opts && (typeof opts.seasonYear !== 'undefined' || typeof opts.year !== 'undefined')) ? Number((opts.seasonYear != null ? opts.seasonYear : opts.year)) : null
+  if (wantedSeason !== null || wantedYear !== null) {
     for (const it of items) {
       try {
-        // prefer direct season field on AniList media
-        if (it && typeof it.season !== 'undefined' && it.season !== null) {
-          try { if (Number(it.season) === wanted) { pick = it; break } } catch (e) {}
+        // prefer match by AniList seasonYear when provided
+        if (wantedYear !== null && it && typeof it.seasonYear !== 'undefined' && it.seasonYear !== null) {
+          try { if (Number(it.seasonYear) === wantedYear) { pick = it; break } } catch (e) {}
         }
+        // AniList `season` field is an enum (e.g. 'SUMMER') and not a numeric season index; attempt to
+        // extract numeric season from titles/relations instead
         const candidates = []
         if (it && it.title) {
           candidates.push(it.title.english, it.title.romaji, it.title.native)
@@ -263,7 +269,7 @@ async function metaLookup(title, apiKey, opts = {}) {
         }
         for (const c of candidates) {
           const sn = extractSeasonNumberFromTitle(c)
-          if (sn && sn === wanted) { pick = it; break }
+          if (sn && wantedSeason !== null && sn === wantedSeason) { pick = it; break }
         }
         if (pick) break
       } catch (e) {}
@@ -715,42 +721,11 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
               // If AniList-style nested startDate { year: YYYY } is present, prefer it as the series start year
               if (!dateStr) {
                 try {
-                  // Prefer season-specific start year when AniList provides relation nodes for seasons.
-                  // If the parsed season is present, try to find a related node whose season or seasonYear/startDate matches.
-                  if (raw && raw.relations && Array.isArray(raw.relations.nodes) && typeof guess.season !== 'undefined' && guess.season != null) {
-                    try {
-                      for (const rn of raw.relations.nodes) {
-                        if (!rn) continue
-                        // direct season field on related node
-                        if (typeof rn.season !== 'undefined' && rn.season != null && Number(rn.season) === Number(guess.season)) {
-                          if (rn.startDate && typeof rn.startDate === 'object' && rn.startDate.year) {
-                            const syear = Number(rn.startDate.year)
-                            if (!isNaN(syear)) { guess.year = String(syear); break }
-                          }
-                          if (typeof rn.seasonYear !== 'undefined' && rn.seasonYear != null) {
-                            const sy2 = Number(rn.seasonYear)
-                            if (!isNaN(sy2)) { guess.year = String(sy2); break }
-                          }
-                        }
-                        // sometimes relation nodes encode seasonYear directly even if season missing
-                        if (typeof rn.seasonYear !== 'undefined' && rn.seasonYear != null && Number(rn.seasonYear) && typeof guess.season !== 'undefined' && guess.season != null) {
-                          // best-effort: if relation node title contains season number, prefer it
-                          try {
-                            const ttl = (rn.title && (rn.title.english || rn.title.romaji || rn.title.native)) ? (rn.title.english || rn.title.romaji || rn.title.native) : ''
-                            if (ttl && String(ttl).toLowerCase().indexOf('season') !== -1 && String(ttl).indexOf(String(guess.season)) !== -1) {
-                              const sy3 = Number(rn.seasonYear)
-                              if (!isNaN(sy3)) { guess.year = String(sy3); break }
-                            }
-                          } catch (e) {}
-                        }
-                      }
-                    } catch (e) {}
-                  }
-                  // If season-specific year not found, fall back to series-level nested startDate
-                  if (!guess.year) {
-                    if (raw && raw.startDate && typeof raw.startDate === 'object' && raw.startDate.year) {
-                      const ry2 = Number(raw.startDate.year)
-                      if (!isNaN(ry2)) { guess.year = String(ry2) }
+                  if (raw && raw.startDate && typeof raw.startDate === 'object' && raw.startDate.year) {
+                    // set guess.year directly from the nested year and skip episode fallback
+                    const ry2 = Number(raw.startDate.year)
+                    if (!isNaN(ry2)) {
+                      guess.year = String(ry2)
                     }
                   }
                 } catch (e) {}
@@ -1319,29 +1294,6 @@ app.get('/api/enrich/by-rendered', (req, res) => {
 })
 
 app.get('/api/settings', (req, res) => { const userSettings = (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings) ? users[req.session.username].settings : {}; res.json({ serverSettings: serverSettings || {}, userSettings }); });
-// Public session endpoint used by client to check authentication status
-app.get('/api/session', (req, res) => {
-  try {
-    const session = req.session || null
-    const username = session && session.username ? session.username : null
-    const role = username && users && users[username] ? users[username].role : null
-    const authenticated = !!username
-    return res.json({ authenticated, username, role })
-  } catch (e) {
-    return res.status(500).json({ error: e && e.message ? e.message : String(e) })
-  }
-})
-
-// Auth status endpoint: used by registration UI to determine if initial registration
-// should be open (no users exist yet)
-app.get('/api/auth/status', (req, res) => {
-  try {
-    const hasUsers = users && Object.keys(users).length > 0
-    return res.json({ hasUsers })
-  } catch (e) {
-    return res.status(500).json({ error: e && e.message ? e.message : String(e) })
-  }
-})
 // Diagnostic: expose current session and user presence to help debug auth issues (no secrets)
 app.get('/api/debug/session', (req, res) => {
   try {
