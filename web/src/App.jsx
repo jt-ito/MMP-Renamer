@@ -90,6 +90,8 @@ export default function App() {
   const [loadingEnrich, setLoadingEnrich] = useState({})
   // last seen hide event timestamp (ms)
   const lastHideEventTsRef = useRef(0)
+  // track last reconciled confirmations sent/seen to avoid repost loops
+  const lastReconciledTsRef = useRef({})
 
   // Wait for a hide event matching any of the provided candidate paths.
   // Returns the event object if found within timeoutMs, otherwise null.
@@ -145,7 +147,7 @@ export default function App() {
         lastScanId,
         batchSize,
         pushToast,
-        postClientRefreshed: async (sid) => { try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {} }
+  postClientRefreshed: async (sid) => { try { const last = lastReconciledTsRef.current[String(sid)] || 0; if (Date.now() - last > 10000) { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null); lastReconciledTsRef.current[String(sid)] = Date.now(); } } catch (e) {} }
       }) : helper({
         candidates,
         waitForHideEvent,
@@ -162,7 +164,7 @@ export default function App() {
         lastScanId,
         batchSize,
         pushToast,
-        postClientRefreshed: async (sid) => { try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {} }
+  postClientRefreshed: async (sid) => { try { const last = lastReconciledTsRef.current[String(sid)] || 0; if (Date.now() - last > 10000) { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null); lastReconciledTsRef.current[String(sid)] = Date.now(); } } catch (e) {} }
       })
       return !!result
     } catch (e) {
@@ -482,7 +484,14 @@ export default function App() {
                       const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`)).catch(() => ({ data: { items: [] } }))
                       const coll = pgr.data.items || []
                       try { updateScanDataAndPreserveView(m.data, coll) } catch(e) {}
-                      try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
+                      try {
+                        // avoid posting confirmation if we recently reconciled this scan
+                        const last = lastReconciledTsRef.current[String(sid)] || 0
+                        if (Date.now() - last > 10000) {
+                          await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null)
+                          lastReconciledTsRef.current[String(sid)] = Date.now()
+                        }
+                      } catch (e) {}
                     }
                   } catch (e) { /* swallow */ }
                 }
@@ -770,25 +779,27 @@ export default function App() {
       const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
       for (const sid of toReload) {
         try {
-          const m = await axios.get(API(`/scan/${sid}`))
-          const total = m.data.totalCount || 0
-          const coll = []
-          let off = 0
-          while (off < total) {
-            const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`))
-            const its = pgr.data.items || []
-            coll.push(...its)
-            off += its.length
-          }
-          if (sid === scanId || sid === lastScanId) {
-            try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
-              setScanMeta(m.data)
-              setTotal(m.data.totalCount || coll.length)
-              setItems(coll.filter(it => it && it.canonicalPath))
-              setAllItems(coll.filter(it => it && it.canonicalPath))
-              try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
-            }
-            try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
+                const m = await axios.get(API(`/scan/${sid}`))
+                // Only fetch the first page to keep reloads fast and preserve the user's
+                // scroll/search state. The server event indicates which scans were affected
+                // and clients should show the first page to reflect authoritative changes.
+                const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`))
+                const coll = (pgr && pgr.data && Array.isArray(pgr.data.items)) ? pgr.data.items : []
+                if (sid === scanId || sid === lastScanId) {
+                    try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
+                      setScanMeta(m.data)
+                      setTotal(m.data.totalCount || coll.length)
+                      setItems(coll.filter(it => it && it.canonicalPath))
+                      setAllItems(coll.filter(it => it && it.canonicalPath))
+                      try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
+                    }
+                      try {
+                        const last = lastReconciledTsRef.current[String(sid)] || 0
+                        if (Date.now() - last > 10000) {
+                          await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null)
+                          lastReconciledTsRef.current[String(sid)] = Date.now()
+                        }
+                      } catch (e) {}
           }
         } catch (e) { /* best-effort */ }
       }
@@ -1577,15 +1588,9 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   for (const sid of toReload) {
                     try {
                       const m = await axios.get(API(`/scan/${sid}`))
-                      const total = m.data.totalCount || 0
-                      const coll = []
-                      let off = 0
-                      while (off < total) {
-                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`))
-                        const its = pgr.data.items || []
-                        coll.push(...its)
-                        off += its.length
-                      }
+                      // fetch only first page to avoid long full reloads
+                      const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`))
+                      const coll = (pgr && pgr.data && Array.isArray(pgr.data.items)) ? pgr.data.items : []
                       if (sid === scanId || sid === lastScanId) {
                         try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
                           setScanMeta(m.data)
@@ -1595,7 +1600,13 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                           try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
                         }
                         // inform server we refreshed this scan so server logs can confirm client-side refresh
-                        try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
+                        try {
+                          const last = lastReconciledTsRef.current[String(sid)] || 0
+                          if (Date.now() - last > 10000) {
+                            await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null)
+                            lastReconciledTsRef.current[String(sid)] = Date.now()
+                          }
+                        } catch (e) {}
                       }
                     } catch (e) { /* best-effort */ }
                   }
@@ -1709,7 +1720,13 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                               try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
                             }
                           // inform server we refreshed this scan so server logs can confirm client-side refresh
-                          try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
+                          try {
+                            const last = lastReconciledTsRef.current[String(sid)] || 0
+                            if (Date.now() - last > 10000) {
+                              await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null)
+                              lastReconciledTsRef.current[String(sid)] = Date.now()
+                            }
+                          } catch (e) {}
                         }
                       } catch (e) {}
                     }
@@ -1731,15 +1748,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     try {
                       const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
                       if (m && m.data) {
-                        const total = m.data.totalCount || 0
-                        const coll = []
-                        let off = 0
-                        while (off < total) {
-                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
-                          const its = pgr.data.items || []
-                          coll.push(...its)
-                          off += its.length
-                        }
+                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`)).catch(() => ({ data: { items: [] } }))
+                        const coll = (pgr && pgr.data && Array.isArray(pgr.data.items)) ? pgr.data.items : []
                         if (sid === scanId || sid === lastScanId) {
                           try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
                             setScanMeta(m.data)
@@ -1759,15 +1769,9 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     try {
                       const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
                       if (m && m.data) {
-                        const total = m.data.totalCount || 0
-                        const coll = []
-                        let off = 0
-                        while (off < total) {
-                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
-                          const its = pgr.data.items || []
-                          coll.push(...its)
-                          off += its.length
-                        }
+                        // load first page only to avoid long blocking full reloads
+                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`)).catch(() => ({ data: { items: [] } }))
+                        const coll = (pgr && pgr.data && Array.isArray(pgr.data.items)) ? pgr.data.items : []
                         try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
                           // helper failed — fall back to explicit state updates
                           setScanMeta(m.data)

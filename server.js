@@ -1605,8 +1605,9 @@ app.post('/api/enrich', async (req, res) => {
             if (req && req.body && req.body.force) toUpdate2.rescanned = true;
             updateEnrichCache(key, toUpdate2);
     }
-    // If this was a client-initiated rescan, remove this path from any stored scan artifacts
-    // so clients restoring previous scans won't re-show it (treat rescanned like hidden/applied)
+    // If this was a client-initiated rescan, note which scans reference this path
+    // but do NOT remove the path from persisted scan artifacts here. Preserving
+    // the path allows unapprove to restore visibility by clearing the rescanned flag.
     try {
       if (force) {
         const modifiedScanIds = [];
@@ -1615,18 +1616,12 @@ app.post('/api/enrich', async (req, res) => {
           try {
             const s = scans[sid];
             if (!s || !Array.isArray(s.items)) continue;
-            const before = s.items.length;
-            s.items = s.items.filter(it => {
-              try { return canonicalize(it.canonicalPath) !== key } catch (e) { return true }
+            // if this scan contained the path, include it in modifiedScanIds but do not mutate the artifact
+            const found = s.items.some(it => {
+              try { return canonicalize(it.canonicalPath) === key } catch (e) { return false }
             });
-            if (s.items.length !== before) {
-              s.totalCount = s.items.length;
-              modifiedScanIds.push(sid);
-            }
+            if (found) modifiedScanIds.push(sid);
           } catch (e) {}
-        }
-        if (modifiedScanIds.length) {
-          try { writeJson(scanStoreFile, scans); appendLog(`RESCAN_UPDATED_SCANS path=${p} ids=${modifiedScanIds.join(',')}`) } catch (e) {}
         }
         // Emit an event clients poll for so they can reconcile quickly (reuse hide-events mechanism)
         try {
@@ -2633,6 +2628,8 @@ app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {
           if (enrichCache[p] && enrichCache[p].applied) {
             enrichCache[p].applied = false
             enrichCache[p].hidden = false
+            // Also clear rescanned so the item becomes visible again on restored scans
+            if (enrichCache[p].rescanned) delete enrichCache[p].rescanned
             delete enrichCache[p].appliedAt
             delete enrichCache[p].appliedTo
             changed.push(p)
@@ -2647,6 +2644,8 @@ app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {
         try {
           enrichCache[item.k].applied = false
           enrichCache[item.k].hidden = false
+          // Clear rescanned so the UI will show the item again
+          if (enrichCache[item.k].rescanned) delete enrichCache[item.k].rescanned
           delete enrichCache[item.k].appliedAt
           delete enrichCache[item.k].appliedTo
           changed.push(item.k)
