@@ -90,8 +90,6 @@ export default function App() {
   const [loadingEnrich, setLoadingEnrich] = useState({})
   // last seen hide event timestamp (ms)
   const lastHideEventTsRef = useRef(0)
-  // track last reconciled confirmations sent/seen to avoid repost loops
-  const lastReconciledTsRef = useRef({})
 
   // Wait for a hide event matching any of the provided candidate paths.
   // Returns the event object if found within timeoutMs, otherwise null.
@@ -147,7 +145,7 @@ export default function App() {
         lastScanId,
         batchSize,
         pushToast,
-  postClientRefreshed: async (sid) => { try { const last = lastReconciledTsRef.current[String(sid)] || 0; if (Date.now() - last > 10000) { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null); lastReconciledTsRef.current[String(sid)] = Date.now(); } } catch (e) {} }
+        postClientRefreshed: async (sid) => { try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {} }
       }) : helper({
         candidates,
         waitForHideEvent,
@@ -164,7 +162,7 @@ export default function App() {
         lastScanId,
         batchSize,
         pushToast,
-  postClientRefreshed: async (sid) => { try { const last = lastReconciledTsRef.current[String(sid)] || 0; if (Date.now() - last > 10000) { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null); lastReconciledTsRef.current[String(sid)] = Date.now(); } } catch (e) {} }
+        postClientRefreshed: async (sid) => { try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {} }
       })
       return !!result
     } catch (e) {
@@ -252,9 +250,9 @@ export default function App() {
   }
   const phaseStartRef = useRef({ scanStart: null, metaStart: null })
 
-  // Helper: consider an enrichment entry hidden for UI purposes if hidden, applied, or rescanned
+  // Helper: consider an enrichment entry hidden for UI purposes if hidden or applied
   function isHiddenOrApplied(enriched) {
-    return enriched && (enriched.hidden === true || enriched.applied === true || enriched.rescanned === true)
+    return enriched && (enriched.hidden === true || enriched.applied === true)
   }
 
   // Verify cached enrich entries actually exist on disk/server. If server reports missing
@@ -263,22 +261,21 @@ export default function App() {
     try {
       const keys = paths && Array.isArray(paths) && paths.length ? paths : Object.keys(enrichCache || {})
       if (!keys || !keys.length) return
-      const batch = 8
-      for (let i = 0; i < keys.length; i += batch) {
-        const chunk = keys.slice(i, i + batch)
-        const res = await Promise.all(chunk.map(p => axios.get(API('/enrich'), { params: { path: p } }).catch(e => ({ data: null }))))
-        for (let j = 0; j < chunk.length; j++) {
-          const p = chunk[j]
-          const r = res[j]
-          try {
-            if (r && r.data && r.data.missing) {
-              // remove stale cache entry and remove from visible items
-              setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
-              setItems(prev => prev.filter(it => it.canonicalPath !== p))
-            }
-          } catch (e) {}
+      try {
+        // Use bulk endpoint to check many paths at once
+        const resp = await axios.post(API('/enrich/bulk'), { paths: keys }).catch(() => null)
+        if (resp && resp.data && Array.isArray(resp.data.items)) {
+          for (const it of resp.data.items) {
+            try {
+              const p = it.path
+              if (it && it.enrichment && it.enrichment.missing) {
+                setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
+                setItems(prev => prev.filter(it2 => it2.canonicalPath !== p))
+              }
+            } catch (e) {}
+          }
         }
-      }
+      } catch (e) { /* fallback ignored */ }
     } catch (e) { /* best-effort */ }
   }
 
@@ -484,14 +481,7 @@ export default function App() {
                       const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`)).catch(() => ({ data: { items: [] } }))
                       const coll = pgr.data.items || []
                       try { updateScanDataAndPreserveView(m.data, coll) } catch(e) {}
-                      try {
-                        // avoid posting confirmation if we recently reconciled this scan
-                        const last = lastReconciledTsRef.current[String(sid)] || 0
-                        if (Date.now() - last > 10000) {
-                          await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null)
-                          lastReconciledTsRef.current[String(sid)] = Date.now()
-                        }
-                      } catch (e) {}
+                      try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
                     }
                   } catch (e) { /* swallow */ }
                 }
@@ -504,7 +494,7 @@ export default function App() {
                   const norm = auth ? normalizeEnrichResponse(auth) : null
                   if (norm) {
                     setEnrichCache(prev => ({ ...prev, [ev.path]: norm }))
-                    if (isHiddenOrApplied(norm)) {
+                    if (norm.hidden || norm.applied) {
                       setItems(prev => prev.filter(x => x.canonicalPath !== ev.path))
                       setAllItems(prev => prev.filter(x => x.canonicalPath !== ev.path))
                     }
@@ -633,37 +623,43 @@ export default function App() {
       // Now refresh client-side enrich for all collected paths and report progress
       const paths = collected.map(it => it.canonicalPath).filter(Boolean)
       if (paths.length > 0) {
-        let done = 0
-        const batch = 6
-        for (let i = 0; i < paths.length; i += batch) {
-          const chunk = paths.slice(i, i + batch)
-          await Promise.all(chunk.map(async p => {
+        try {
+          // Use bulk endpoint to reduce many individual GET requests
+          const resp = await axios.post(API('/enrich/bulk'), { paths })
+          const itemsOut = resp && resp.data && Array.isArray(resp.data.items) ? resp.data.items : []
+          let done = 0
+          for (const entry of itemsOut) {
             try {
-              const er = await axios.get(API('/enrich'), { params: { path: p } })
-                if (er.data) {
-                  if (er.data.missing) {
-                        // underlying file missing: remove any local cache and ensure UI does not show it
-                        setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
-                        setItems(prev => prev.filter(it => it.canonicalPath !== p))
-                        setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
-                  } else if (er.data.cached || er.data.enrichment) {
-                    const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
+              const p = entry.path
+              if (entry.error) {
+                // skip errored entries
+              } else if (entry.enrichment && (entry.cached || entry.enrichment)) {
+                if (entry.enrichment.missing) {
+                  setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
+                  setItems(prev => prev.filter(it => it.canonicalPath !== p))
+                  setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
+                } else {
+                  const enriched = normalizeEnrichResponse(entry.enrichment || null)
+                  if (enriched) {
                     setEnrichCache(prev => ({ ...prev, [p]: enriched }))
-                    if (isHiddenOrApplied(enriched)) {
-                          // remove hidden/applied items from both visible list and baseline
-                          setItems(prev => prev.filter(it => it.canonicalPath !== p))
-                          setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
+                    if (enriched.hidden || enriched.applied) {
+                      setItems(prev => prev.filter(it => it.canonicalPath !== p))
+                      setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
                     } else {
-                      // prepend in deduped fashion and skip any hidden/applied
-                          setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
-                          setAllItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+                      setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+                      setAllItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
                     }
                   }
                 }
+              } else {
+                // not cached: leave for individual enrichOne requests later
+              }
             } catch (e) {}
             done++
-            setMetaProgress(Math.round((done / paths.length) * 100))
-          }))
+            try { setMetaProgress(Math.round((done / paths.length) * 100)) } catch (e) {}
+          }
+        } catch (e) {
+          // fallback: ignore bulk errors and continue
         }
       }
       pushToast && pushToast('Scan', 'Provider metadata refresh complete')
@@ -674,7 +670,7 @@ export default function App() {
     // Filter out items that are marked hidden/applied in server cache and reveal
     const filtered = collected.filter(it => {
       const e = enrichCache[it.canonicalPath]
-  return !isHiddenOrApplied(e)
+      return !(e && (e.hidden === true || e.applied === true))
     })
     // set the persistent baseline and the currently-visible items
     setAllItems(filtered)
@@ -762,7 +758,7 @@ export default function App() {
       // if the applied operation marked this item hidden, remove it from visible items
       try {
         const _norm2 = (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
-        if (_norm2 && isHiddenOrApplied(_norm2)) {
+        if (_norm2 && _norm2.hidden) {
           setItems(prev => prev.filter(it => it.canonicalPath !== key))
         }
       } catch (e) {}
@@ -772,40 +768,6 @@ export default function App() {
   const _norm = (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
   const nameForToast = (_norm && (_norm.parsed?.title || _norm.provider?.title)) || (key && key.split('/')?.pop()) || key
   pushToast && pushToast('Enrich', `Updated metadata for ${nameForToast}`)
-  // If server indicated modifiedScanIds (e.g. client-requested rescan), refresh those scans
-  try {
-    const modified = (w && w.data && Array.isArray(w.data.modifiedScanIds)) ? w.data.modifiedScanIds : []
-    if (modified && modified.length) {
-      const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
-      for (const sid of toReload) {
-        try {
-                const m = await axios.get(API(`/scan/${sid}`))
-                // Only fetch the first page to keep reloads fast and preserve the user's
-                // scroll/search state. The server event indicates which scans were affected
-                // and clients should show the first page to reflect authoritative changes.
-                const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`))
-                const coll = (pgr && pgr.data && Array.isArray(pgr.data.items)) ? pgr.data.items : []
-                if (sid === scanId || sid === lastScanId) {
-                    try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
-                      setScanMeta(m.data)
-                      setTotal(m.data.totalCount || coll.length)
-                      setItems(coll.filter(it => it && it.canonicalPath))
-                      setAllItems(coll.filter(it => it && it.canonicalPath))
-                      try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
-                    }
-                      try {
-                        const last = lastReconciledTsRef.current[String(sid)] || 0
-                        if (Date.now() - last > 10000) {
-                          await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null)
-                          lastReconciledTsRef.current[String(sid)] = Date.now()
-                        }
-                      } catch (e) {}
-          }
-        } catch (e) { /* best-effort */ }
-      }
-    }
-  } catch (e) { /* swallow */ }
-
   return (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
     } catch (err) {
       setEnrichCache(prev => ({ ...prev, [key]: { error: err?.message || String(err) } }))
@@ -900,7 +862,7 @@ export default function App() {
         // fetch first page of items from server-side scan listing as fallback
         if (scanId) {
           const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: 0, limit: batchSize } })
-          const page = (r.data.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
+          const page = (r.data.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
           setItems(page)
           setTotal((scanMeta && scanMeta.totalCount) || page.length || 0)
           try { setCurrentScanPaths(new Set((r.data.items || []).map(i => i.canonicalPath).filter(Boolean))) } catch (e) {}
@@ -919,8 +881,8 @@ export default function App() {
                 if (er.data && (er.data.cached || er.data.enrichment)) {
                   const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
                   setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
-                  if (isHiddenOrApplied(norm)) {
-                    // remove hidden/applied/rescanned items from visible list
+                  if (norm && (norm.hidden || norm.applied)) {
+                    // remove hidden or applied items from visible list
                     setItems(prev => prev.filter(x => x.canonicalPath !== it.canonicalPath))
                   }
                 }
@@ -957,21 +919,21 @@ export default function App() {
           } else {
             // large baseline: fetch first page from server instead of rendering all in-memory
             const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: 0, limit: batchSize } })
-            const page = (r.data.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
+            const page = (r.data.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
             setItems(page)
             setTotal((scanMeta && scanMeta.totalCount) || page.length || 0)
             try { setCurrentScanPaths(new Set((r.data.items || []).map(i => i.canonicalPath).filter(Boolean))) } catch (e) {}
           }
         } else {
           const lowered = qq.toLowerCase()
-          const results = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
+          const results = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
           setItems(results)
           setTotal(results.length)
           for (const it of results || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
         }
       } else {
         const r = await searchScan(q, 0, batchSize)
-  const results = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
+        const results = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
         setItems(results)
         setTotal(r.total || 0)
       }
@@ -1048,13 +1010,13 @@ export default function App() {
             // If baseline is too large, fall back to server-side search
             if (allItems.length > MAX_IN_MEMORY_SEARCH) {
               const r = await searchScan(searchQuery, 0, batchSize)
-              const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
+              const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
               setItems(filtered)
               setTotal(r.total || 0)
               for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
             } else {
               const lowered = q.toLowerCase()
-              const filtered = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
+              const filtered = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
               setItems(filtered)
               setTotal(filtered.length)
               for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
@@ -1063,7 +1025,7 @@ export default function App() {
         } else {
           // perform search with cancellation via searchScan
           const r = await searchScan(searchQuery, 0, batchSize)
-          const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
+          const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
           setItems(filtered)
           setTotal(r.total || 0)
           for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
@@ -1096,7 +1058,7 @@ export default function App() {
             const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
             setEnrichCache(prev => ({ ...prev, [p]: enriched }))
             // if the item is now hidden/applied remove it from visible items
-            if (isHiddenOrApplied(enriched)) {
+            if (enriched && (enriched.hidden || enriched.applied)) {
               setItems(prev => prev.filter(it => it.canonicalPath !== p))
             } else {
               // item is unhidden (unapproved) -> ensure it's visible in the list (deduped)
@@ -1568,8 +1530,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               // Apply authoritative/optimistic changes to local cache/UI but do NOT show final toast yet.
               if (enriched) {
                 setEnrichCache(prev => ({ ...prev, [serverKey]: enriched }))
-                // remove from visible lists if hidden/applied/rescanned
-                if (isHiddenOrApplied(enriched)) {
+                // remove from visible lists if hidden/applied
+                if (enriched.hidden || enriched.applied) {
                   setItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
                   setAllItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
                 }
@@ -1588,9 +1550,15 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   for (const sid of toReload) {
                     try {
                       const m = await axios.get(API(`/scan/${sid}`))
-                      // fetch only first page to avoid long full reloads
-                      const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`))
-                      const coll = (pgr && pgr.data && Array.isArray(pgr.data.items)) ? pgr.data.items : []
+                      const total = m.data.totalCount || 0
+                      const coll = []
+                      let off = 0
+                      while (off < total) {
+                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`))
+                        const its = pgr.data.items || []
+                        coll.push(...its)
+                        off += its.length
+                      }
                       if (sid === scanId || sid === lastScanId) {
                         try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
                           setScanMeta(m.data)
@@ -1600,13 +1568,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                           try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
                         }
                         // inform server we refreshed this scan so server logs can confirm client-side refresh
-                        try {
-                          const last = lastReconciledTsRef.current[String(sid)] || 0
-                          if (Date.now() - last > 10000) {
-                            await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null)
-                            lastReconciledTsRef.current[String(sid)] = Date.now()
-                          }
-                        } catch (e) {}
+                        try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
                       }
                     } catch (e) { /* best-effort */ }
                   }
@@ -1615,8 +1577,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
 
               // Now that we've reloaded scans (if applicable), confirm final state and show a single toast.
               try {
-                // If we have an authoritative enriched object that indicates hidden/applied/rescanned, show success
-                if (isHiddenOrApplied(enriched)) {
+                // If we have an authoritative enriched object that indicates hidden/applied, show success
+                if (enriched && (enriched.hidden || enriched.applied)) {
                   pushToast && pushToast('Hide', 'Item hidden')
                   didFinalToast = true
                 } else {
@@ -1625,12 +1587,12 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   if (resp && resp.data && resp.data.path) tryPaths.push(resp.data.path)
                   tryPaths.push(originalPath)
                   let confirmed = false
-                      for (const pth of tryPaths) {
+                  for (const pth of tryPaths) {
                     try {
                       const check = await axios.get(API('/enrich'), { params: { path: pth } }).catch(() => null)
                       const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
                       const norm = auth ? normalizeEnrichResponse(auth) : null
-                      if (isHiddenOrApplied(norm)) {
+                      if (norm && (norm.hidden || norm.applied)) {
                         // server applied hide — treat as success
                         setEnrichCache(prev => ({ ...prev, [pth]: norm }))
                         setItems(prev => prev.filter(x => x.canonicalPath !== pth))
@@ -1676,8 +1638,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     const check = await axios.get(API('/enrich'), { params: { path: pth } }).catch(() => null)
                     const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
                     const norm = auth ? normalizeEnrichResponse(auth) : null
-                    if (isHiddenOrApplied(norm)) {
-                      // server likely applied hide/rescan but POST failed — treat as success
+                    if (norm && (norm.hidden || norm.applied)) {
+                      // server likely applied hide but POST failed — treat as success
                       setEnrichCache(prev => ({ ...prev, [pth]: norm }))
                       setItems(prev => prev.filter(x => x.canonicalPath !== pth))
                       setAllItems(prev => prev.filter(x => x.canonicalPath !== pth))
@@ -1720,13 +1682,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                               try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
                             }
                           // inform server we refreshed this scan so server logs can confirm client-side refresh
-                          try {
-                            const last = lastReconciledTsRef.current[String(sid)] || 0
-                            if (Date.now() - last > 10000) {
-                              await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null)
-                              lastReconciledTsRef.current[String(sid)] = Date.now()
-                            }
-                          } catch (e) {}
+                          try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
                         }
                       } catch (e) {}
                     }
@@ -1748,8 +1704,15 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     try {
                       const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
                       if (m && m.data) {
-                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`)).catch(() => ({ data: { items: [] } }))
-                        const coll = (pgr && pgr.data && Array.isArray(pgr.data.items)) ? pgr.data.items : []
+                        const total = m.data.totalCount || 0
+                        const coll = []
+                        let off = 0
+                        while (off < total) {
+                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
+                          const its = pgr.data.items || []
+                          coll.push(...its)
+                          off += its.length
+                        }
                         if (sid === scanId || sid === lastScanId) {
                           try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
                             setScanMeta(m.data)
@@ -1769,9 +1732,15 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     try {
                       const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
                       if (m && m.data) {
-                        // load first page only to avoid long blocking full reloads
-                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`)).catch(() => ({ data: { items: [] } }))
-                        const coll = (pgr && pgr.data && Array.isArray(pgr.data.items)) ? pgr.data.items : []
+                        const total = m.data.totalCount || 0
+                        const coll = []
+                        let off = 0
+                        while (off < total) {
+                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
+                          const its = pgr.data.items || []
+                          coll.push(...its)
+                          off += its.length
+                        }
                         try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
                           // helper failed — fall back to explicit state updates
                           setScanMeta(m.data)

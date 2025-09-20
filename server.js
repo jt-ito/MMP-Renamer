@@ -1112,8 +1112,7 @@ app.post('/api/scan', async (req, res) => {
           try {
             const k = canonicalize(it.canonicalPath);
             const e = enrichCache[k] || null;
-            // respect hidden, applied, and rescanned flags so restored scans don't re-show them
-            if (e && (e.hidden || e.applied || e.rescanned)) return false;
+            if (e && (e.hidden || e.applied)) return false;
             return true;
           } catch (e) { return true; }
         });
@@ -1138,8 +1137,7 @@ app.post('/api/scan', async (req, res) => {
           try {
             const k = canonicalize(it.canonicalPath);
             const e = enrichCache[k] || null;
-            // respect hidden, applied, and rescanned flags so incremental scan lists hide them too
-            if (e && (e.hidden || e.applied || e.rescanned)) return false;
+            if (e && (e.hidden || e.applied)) return false;
             return true;
           } catch (e) { return true; }
         });
@@ -1237,10 +1235,7 @@ app.post('/api/scan', async (req, res) => {
             try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
           } catch (e) {
             // if provider render fails, still persist raw provider data (preserve flags)
-            const fallback = Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' });
-            // best-effort: if this was a force/rescan request, mark rescanned
-            if (req && req.body && req.body.force) fallback.rescanned = true;
-            updateEnrichCache(key, fallback);
+            updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
           }
             // update progress for polling clients
             try { const refreshProgressKey = `refreshScan:${scanId}`; if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].processed += 1; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch(e){}
@@ -1272,8 +1267,7 @@ app.post('/api/scan', async (req, res) => {
                 const k = canonicalize(it.canonicalPath);
                 const e = enrichCache[k] || null;
                 // if hidden/applied, remove
-                // if hidden/applied/rescanned, remove
-                if (e && (e.hidden || e.applied || e.rescanned)) return false;
+                if (e && (e.hidden || e.applied)) return false;
                 // otherwise attach a snapshot of enrichment (normalized) for client hydration
                 try { it.enrichment = enrichCache[k] || null } catch (ee) { it.enrichment = null }
                 return true
@@ -1419,6 +1413,34 @@ app.get('/api/enrich/by-rendered', (req, res) => {
     if (!e) return res.json({ found: false })
     return res.json({ found: true, path: target, enrichment: e })
   } catch (e) { return res.status(500).json({ error: e.message }) }
+})
+
+// Bulk enrich lookup to reduce per-file GET traffic from the client during scan refreshes
+app.post('/api/enrich/bulk', (req, res) => {
+  try {
+    const paths = Array.isArray(req.body && req.body.paths) ? req.body.paths : null
+    if (!paths) return res.status(400).json({ error: 'paths array required' })
+    const out = []
+    for (const p of paths) {
+      try {
+        const key = canonicalize(p || '')
+        const raw = enrichCache[key] || null
+        const normalized = normalizeEnrichEntry(raw)
+        // If provider block exists but incomplete, mark as not-cached so clients will fetch externally
+        if (normalized) {
+          const prov = normalized.provider || null
+          const providerComplete = prov && prov.matched && prov.renderedName && (prov.episode == null || (prov.episodeTitle && String(prov.episodeTitle).trim()))
+          if (prov && !providerComplete) {
+            out.push({ path: p, cached: false, enrichment: normalized })
+            continue
+          }
+          if (normalized.parsed || normalized.provider) { out.push({ path: p, cached: true, enrichment: normalized }); continue }
+        }
+        out.push({ path: p, cached: false, enrichment: null })
+      } catch (e) { out.push({ path: p, error: e.message }) }
+    }
+    return res.json({ items: out })
+  } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }) }
 })
 
 app.get('/api/settings', (req, res) => { const userSettings = (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings) ? users[req.session.username].settings : {}; res.json({ serverSettings: serverSettings || {}, userSettings }); });
@@ -1582,10 +1604,7 @@ app.post('/api/enrich', async (req, res) => {
       // attach normalized provider block
   const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
   try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
-              // If this enrich was requested as a client-side rescan/force, mark rescanned so it is respected
-              const toUpdate = Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() });
-              if (req && req.body && req.body.force) toUpdate.rescanned = true;
-              updateEnrichCache(key, toUpdate);
+  updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
       } catch (e) {
   updateEnrichCache(key, Object.assign({}, { ...data, cachedAt: Date.now() }));
     }
@@ -1601,36 +1620,8 @@ app.post('/api/enrich', async (req, res) => {
         writeJson(parsedCacheFile, parsedCache)
       }
     } catch (e) {
-            const toUpdate2 = Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' });
-            if (req && req.body && req.body.force) toUpdate2.rescanned = true;
-            updateEnrichCache(key, toUpdate2);
+      updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
     }
-    // If this was a client-initiated rescan, note which scans reference this path
-    // but do NOT remove the path from persisted scan artifacts here. Preserving
-    // the path allows unapprove to restore visibility by clearing the rescanned flag.
-    try {
-      if (force) {
-        const modifiedScanIds = [];
-        const scanIds = Object.keys(scans || {});
-        for (const sid of scanIds) {
-          try {
-            const s = scans[sid];
-            if (!s || !Array.isArray(s.items)) continue;
-            // if this scan contained the path, include it in modifiedScanIds but do not mutate the artifact
-            const found = s.items.some(it => {
-              try { return canonicalize(it.canonicalPath) === key } catch (e) { return false }
-            });
-            if (found) modifiedScanIds.push(sid);
-          } catch (e) {}
-        }
-        // Emit an event clients poll for so they can reconcile quickly (reuse hide-events mechanism)
-        try {
-          hideEvents.push({ ts: Date.now(), path: key, originalPath: p, modifiedScanIds, rescanned: true });
-          if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
-        } catch (e) {}
-        return res.json({ enrichment: enrichCache[key], modifiedScanIds });
-      }
-    } catch (e) {}
     res.json({ enrichment: enrichCache[key] });
   } catch (err) { appendLog(`ENRICH_FAIL path=${key} err=${err.message}`); res.status(500).json({ error: err.message }); }
 });
@@ -1832,8 +1823,7 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
               try {
                 const k = canonicalize(it.canonicalPath);
                 const e = enrichCache[k] || null;
-                // if hidden/applied/rescanned, remove
-                if (e && (e.hidden || e.applied || e.rescanned)) return false;
+                if (e && (e.hidden || e.applied)) return false;
                 try { it.enrichment = enrichCache[k] || null } catch (ee) { it.enrichment = null }
                 return true
               } catch (e) { return true }
@@ -1919,58 +1909,42 @@ app.post('/api/debug/client-refreshed', requireAuth, (req, res) => {
     try {
       const now = Date.now()
       const WINDOW_MS = 10 * 1000 // 10s window to consider recent hides
-      const dedupeLookback = 50 // only check the most recent N events to bound work
-      // helper to decide whether a similar reconciled event already exists recently
-      function recentlyHasReconciled(match) {
-        try {
-          if (!Array.isArray(hideEvents) || hideEvents.length === 0) return false
-          const start = Math.max(0, hideEvents.length - dedupeLookback)
-          for (let i = hideEvents.length - 1; i >= start; i--) {
-            const ev = hideEvents[i]
-            if (!ev || !ev.ts) continue
-            if ((now - ev.ts) > WINDOW_MS) continue
-            if (!ev.reconciled) continue
-            // match by path or by modifiedScanIds overlap
-            if (match.path && ev.path === match.path) return true
-            if (match.scanId && Array.isArray(ev.modifiedScanIds) && ev.modifiedScanIds.map(String).indexOf(String(match.scanId)) !== -1) return true
-          }
-        } catch (e) {}
-        return false
-      }
-
+      const reconciled = []
       if (path && Array.isArray(hideEvents)) {
         const key = canonicalize(path)
-        if (!recentlyHasReconciled({ path: key })) {
-          try {
-            const confirm = { ts: now, path: key, originalPath: path, modifiedScanIds: [], reconciled: true }
-            hideEvents.push(confirm)
-            if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
-            appendLog(`HIDE_RECONCILED path=${path} via=clientRefreshed`)
-          } catch (e) {}
-        } else {
-          appendLog(`HIDE_RECONCILED_SKIPPED path=${path} reason=recently_reconciled`)
-        }
-      }
-
-      if (scanId && Array.isArray(hideEvents)) {
-        const sidStr = String(scanId)
-        // find any hide events that listed this scanId as modified within the window
-        // and emit a single reconciled confirmation only if not already emitted recently
-        for (let i = hideEvents.length - 1; i >= Math.max(0, hideEvents.length - dedupeLookback); i--) {
+        // find the most recent hide event for this path within the window
+        for (let i = hideEvents.length - 1; i >= 0; i--) {
           const ev = hideEvents[i]
           if (!ev || !ev.ts) continue
-          if ((now - ev.ts) > WINDOW_MS) continue
+          if (ev.path === key && (now - ev.ts) <= WINDOW_MS) {
+            // push a confirmation event derived from the original
+            try {
+              const confirm = { ts: now, path: key, originalPath: ev.originalPath || path, modifiedScanIds: ev.modifiedScanIds || [], reconciled: true }
+              hideEvents.push(confirm)
+              if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
+              appendLog(`HIDE_RECONCILED path=${path} via=clientRefreshed`)
+              reconciled.push(path)
+            } catch (e) {}
+            break
+          }
+          // stop searching once events are older than the window
+          if ((now - ev.ts) > WINDOW_MS) break
+        }
+      }
+      if (scanId && Array.isArray(hideEvents)) {
+        // find any hide events that listed this scanId as modified within the window
+        const sidStr = String(scanId)
+        for (let i = hideEvents.length - 1; i >= 0; i--) {
+          const ev = hideEvents[i]
+          if (!ev || !ev.ts) continue
+          if ((now - ev.ts) > WINDOW_MS) break
           try {
             if (Array.isArray(ev.modifiedScanIds) && ev.modifiedScanIds.map(String).indexOf(sidStr) !== -1) {
-              if (!recentlyHasReconciled({ scanId })) {
-                const confirm = { ts: now, path: ev.path, originalPath: ev.originalPath || null, modifiedScanIds: ev.modifiedScanIds || [], reconciled: true }
-                hideEvents.push(confirm)
-                if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
-                appendLog(`HIDE_RECONCILED scan=${scanId} path=${ev.originalPath || ev.path} via=clientRefreshed`)
-              } else {
-                appendLog(`HIDE_RECONCILED_SKIPPED scan=${scanId} path=${ev.originalPath || ev.path} reason=recently_reconciled`)
-              }
-              break
+              const confirm = { ts: now, path: ev.path, originalPath: ev.originalPath || null, modifiedScanIds: ev.modifiedScanIds || [], reconciled: true }
+              hideEvents.push(confirm)
+              if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
+              appendLog(`HIDE_RECONCILED scan=${scanId} path=${ev.originalPath || ev.path} via=clientRefreshed`)
+              reconciled.push(ev.path || ev.originalPath || sidStr)
             }
           } catch (e) {}
         }
@@ -2121,8 +2095,6 @@ function preserveAppliedFlags(prev, next) {
     next = next || {};
     if (prev.applied) next.applied = prev.applied;
     if (prev.hidden) next.hidden = prev.hidden;
-    // Preserve rescanned flag across updates so rescans remain respected like hidden/applied
-    if (prev.rescanned) next.rescanned = prev.rescanned;
     if (typeof prev.appliedAt !== 'undefined') next.appliedAt = prev.appliedAt;
     if (typeof prev.appliedTo !== 'undefined') next.appliedTo = prev.appliedTo;
     if (typeof prev.metadataFilename !== 'undefined') next.metadataFilename = prev.metadataFilename;
@@ -2628,8 +2600,6 @@ app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {
           if (enrichCache[p] && enrichCache[p].applied) {
             enrichCache[p].applied = false
             enrichCache[p].hidden = false
-            // Also clear rescanned so the item becomes visible again on restored scans
-            if (enrichCache[p].rescanned) delete enrichCache[p].rescanned
             delete enrichCache[p].appliedAt
             delete enrichCache[p].appliedTo
             changed.push(p)
@@ -2644,8 +2614,6 @@ app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {
         try {
           enrichCache[item.k].applied = false
           enrichCache[item.k].hidden = false
-          // Clear rescanned so the UI will show the item again
-          if (enrichCache[item.k].rescanned) delete enrichCache[item.k].rescanned
           delete enrichCache[item.k].appliedAt
           delete enrichCache[item.k].appliedTo
           changed.push(item.k)
@@ -2691,6 +2659,10 @@ module.exports.externalEnrich = externalEnrich;
 module.exports.metaLookup = metaLookup;
 // Export extractYear for unit testing
 module.exports.extractYear = extractYear;
+// Export normalization helper for unit tests
+module.exports.normalizeEnrichEntry = normalizeEnrichEntry;
+// Expose enrichCache for debugging/tests
+module.exports.enrichCache = enrichCache;
 // Export internal helpers for test harnesses (non-production)
 module.exports._test = module.exports._test || {};
 module.exports._test.fullScanLibrary = typeof fullScanLibrary !== 'undefined' ? fullScanLibrary : null;
