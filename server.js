@@ -1960,9 +1960,14 @@ app.post('/api/debug/client-refreshed', requireAuth, (req, res) => {
 app.get('/api/enrich/hide-events', requireAuth, (req, res) => {
   try {
     const since = parseInt(req.query.since || '0', 10) || 0
-    const ev = (hideEvents || []).filter(e => (e && e.ts && e.ts > since))
+    // defensive: ensure hideEvents is an array
+    const he = Array.isArray(hideEvents) ? hideEvents : []
+    const ev = he.filter(e => (e && e.ts && e.ts > since))
     return res.json({ ok: true, events: ev || [] })
-  } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }) }
+  } catch (e) {
+    try { console.error('hide-events failed', e && e.message ? e.message : e) } catch (ee) {}
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) })
+  }
 })
 
 // Progress endpoint for long-running scan refreshes
@@ -2629,8 +2634,13 @@ app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {
 
 // Logs endpoints
 app.get('/api/logs/recent', (req, res) => {
-  const tail = fs.existsSync(logsFile) ? fs.readFileSync(logsFile, 'utf8').split('\n').slice(-200).join('\n') : '';
-  res.json({ logs: tail });
+  try {
+    const tail = fs.existsSync(logsFile) ? fs.readFileSync(logsFile, 'utf8').split('\n').slice(-200).join('\n') : '';
+    return res.json({ logs: tail });
+  } catch (e) {
+    try { console.error('logs/recent read failed', e && e.message ? e.message : e) } catch (ee) {}
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) })
+  }
 });
 
 app.post('/api/logs/clear', (req, res) => {
