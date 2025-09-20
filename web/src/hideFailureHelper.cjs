@@ -29,7 +29,7 @@ module.exports = async function handleHideFailureCore(opts) {
         const norm = auth || null
         if (norm) {
           try { setEnrichCache && setEnrichCache(prev => ({ ...prev, [p]: norm })) } catch (e) {}
-          if (norm.hidden || norm.applied) {
+          if (norm.hidden || norm.applied || norm.rescanned) {
             try { setItems && setItems(prev => prev.filter(x => x.canonicalPath !== p)) } catch (e) {}
             try { setAllItems && setAllItems(prev => prev.filter(x => x.canonicalPath !== p)) } catch (e) {}
           }

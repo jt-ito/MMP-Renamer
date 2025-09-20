@@ -250,9 +250,9 @@ export default function App() {
   }
   const phaseStartRef = useRef({ scanStart: null, metaStart: null })
 
-  // Helper: consider an enrichment entry hidden for UI purposes if hidden or applied
+  // Helper: consider an enrichment entry hidden for UI purposes if hidden, applied, or rescanned
   function isHiddenOrApplied(enriched) {
-    return enriched && (enriched.hidden === true || enriched.applied === true)
+    return enriched && (enriched.hidden === true || enriched.applied === true || enriched.rescanned === true)
   }
 
   // Verify cached enrich entries actually exist on disk/server. If server reports missing
@@ -495,7 +495,7 @@ export default function App() {
                   const norm = auth ? normalizeEnrichResponse(auth) : null
                   if (norm) {
                     setEnrichCache(prev => ({ ...prev, [ev.path]: norm }))
-                    if (norm.hidden || norm.applied) {
+                    if (isHiddenOrApplied(norm)) {
                       setItems(prev => prev.filter(x => x.canonicalPath !== ev.path))
                       setAllItems(prev => prev.filter(x => x.canonicalPath !== ev.path))
                     }
@@ -640,7 +640,7 @@ export default function App() {
                   } else if (er.data.cached || er.data.enrichment) {
                     const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
                     setEnrichCache(prev => ({ ...prev, [p]: enriched }))
-                    if (enriched && (enriched.hidden || enriched.applied)) {
+                    if (isHiddenOrApplied(enriched)) {
                           // remove hidden/applied items from both visible list and baseline
                           setItems(prev => prev.filter(it => it.canonicalPath !== p))
                           setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
@@ -665,7 +665,7 @@ export default function App() {
     // Filter out items that are marked hidden/applied in server cache and reveal
     const filtered = collected.filter(it => {
       const e = enrichCache[it.canonicalPath]
-      return !(e && (e.hidden === true || e.applied === true))
+  return !isHiddenOrApplied(e)
     })
     // set the persistent baseline and the currently-visible items
     setAllItems(filtered)
@@ -753,7 +753,7 @@ export default function App() {
       // if the applied operation marked this item hidden, remove it from visible items
       try {
         const _norm2 = (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
-        if (_norm2 && _norm2.hidden) {
+        if (_norm2 && isHiddenOrApplied(_norm2)) {
           setItems(prev => prev.filter(it => it.canonicalPath !== key))
         }
       } catch (e) {}
@@ -857,7 +857,7 @@ export default function App() {
         // fetch first page of items from server-side scan listing as fallback
         if (scanId) {
           const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: 0, limit: batchSize } })
-          const page = (r.data.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+          const page = (r.data.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
           setItems(page)
           setTotal((scanMeta && scanMeta.totalCount) || page.length || 0)
           try { setCurrentScanPaths(new Set((r.data.items || []).map(i => i.canonicalPath).filter(Boolean))) } catch (e) {}
@@ -876,8 +876,8 @@ export default function App() {
                 if (er.data && (er.data.cached || er.data.enrichment)) {
                   const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
                   setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
-                  if (norm && (norm.hidden || norm.applied)) {
-                    // remove hidden or applied items from visible list
+                  if (isHiddenOrApplied(norm)) {
+                    // remove hidden/applied/rescanned items from visible list
                     setItems(prev => prev.filter(x => x.canonicalPath !== it.canonicalPath))
                   }
                 }
@@ -914,21 +914,21 @@ export default function App() {
           } else {
             // large baseline: fetch first page from server instead of rendering all in-memory
             const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: 0, limit: batchSize } })
-            const page = (r.data.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+            const page = (r.data.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
             setItems(page)
             setTotal((scanMeta && scanMeta.totalCount) || page.length || 0)
             try { setCurrentScanPaths(new Set((r.data.items || []).map(i => i.canonicalPath).filter(Boolean))) } catch (e) {}
           }
         } else {
           const lowered = qq.toLowerCase()
-          const results = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+          const results = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
           setItems(results)
           setTotal(results.length)
           for (const it of results || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
         }
       } else {
         const r = await searchScan(q, 0, batchSize)
-        const results = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+  const results = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
         setItems(results)
         setTotal(r.total || 0)
       }
@@ -1005,13 +1005,13 @@ export default function App() {
             // If baseline is too large, fall back to server-side search
             if (allItems.length > MAX_IN_MEMORY_SEARCH) {
               const r = await searchScan(searchQuery, 0, batchSize)
-              const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+              const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
               setItems(filtered)
               setTotal(r.total || 0)
               for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
             } else {
               const lowered = q.toLowerCase()
-              const filtered = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+              const filtered = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
               setItems(filtered)
               setTotal(filtered.length)
               for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
@@ -1020,7 +1020,7 @@ export default function App() {
         } else {
           // perform search with cancellation via searchScan
           const r = await searchScan(searchQuery, 0, batchSize)
-          const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+          const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !isHiddenOrApplied(e) })
           setItems(filtered)
           setTotal(r.total || 0)
           for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
@@ -1053,7 +1053,7 @@ export default function App() {
             const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
             setEnrichCache(prev => ({ ...prev, [p]: enriched }))
             // if the item is now hidden/applied remove it from visible items
-            if (enriched && (enriched.hidden || enriched.applied)) {
+            if (isHiddenOrApplied(enriched)) {
               setItems(prev => prev.filter(it => it.canonicalPath !== p))
             } else {
               // item is unhidden (unapproved) -> ensure it's visible in the list (deduped)
@@ -1525,8 +1525,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               // Apply authoritative/optimistic changes to local cache/UI but do NOT show final toast yet.
               if (enriched) {
                 setEnrichCache(prev => ({ ...prev, [serverKey]: enriched }))
-                // remove from visible lists if hidden/applied
-                if (enriched.hidden || enriched.applied) {
+                // remove from visible lists if hidden/applied/rescanned
+                if (isHiddenOrApplied(enriched)) {
                   setItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
                   setAllItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
                 }
@@ -1572,8 +1572,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
 
               // Now that we've reloaded scans (if applicable), confirm final state and show a single toast.
               try {
-                // If we have an authoritative enriched object that indicates hidden/applied, show success
-                if (enriched && (enriched.hidden || enriched.applied)) {
+                // If we have an authoritative enriched object that indicates hidden/applied/rescanned, show success
+                if (isHiddenOrApplied(enriched)) {
                   pushToast && pushToast('Hide', 'Item hidden')
                   didFinalToast = true
                 } else {
@@ -1582,12 +1582,12 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   if (resp && resp.data && resp.data.path) tryPaths.push(resp.data.path)
                   tryPaths.push(originalPath)
                   let confirmed = false
-                  for (const pth of tryPaths) {
+                      for (const pth of tryPaths) {
                     try {
                       const check = await axios.get(API('/enrich'), { params: { path: pth } }).catch(() => null)
                       const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
                       const norm = auth ? normalizeEnrichResponse(auth) : null
-                      if (norm && (norm.hidden || norm.applied)) {
+                      if (isHiddenOrApplied(norm)) {
                         // server applied hide — treat as success
                         setEnrichCache(prev => ({ ...prev, [pth]: norm }))
                         setItems(prev => prev.filter(x => x.canonicalPath !== pth))
@@ -1633,8 +1633,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     const check = await axios.get(API('/enrich'), { params: { path: pth } }).catch(() => null)
                     const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
                     const norm = auth ? normalizeEnrichResponse(auth) : null
-                    if (norm && (norm.hidden || norm.applied)) {
-                      // server likely applied hide but POST failed — treat as success
+                    if (isHiddenOrApplied(norm)) {
+                      // server likely applied hide/rescan but POST failed — treat as success
                       setEnrichCache(prev => ({ ...prev, [pth]: norm }))
                       setItems(prev => prev.filter(x => x.canonicalPath !== pth))
                       setAllItems(prev => prev.filter(x => x.canonicalPath !== pth))
