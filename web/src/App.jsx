@@ -177,11 +177,13 @@ export default function App() {
                   off += its.length
                 }
                 if (sid === scanId || sid === lastScanId) {
-                  setScanMeta(m.data)
-                  setTotal(m.data.totalCount || coll.length)
-                  setItems(coll.filter(it => it && it.canonicalPath))
-                  setAllItems(coll.filter(it => it && it.canonicalPath))
-                  try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                          try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
+                            setScanMeta(m.data)
+                            setTotal(m.data.totalCount || coll.length)
+                            setItems(coll.filter(it => it && it.canonicalPath))
+                            setAllItems(coll.filter(it => it && it.canonicalPath))
+                            try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
+                          }
                   try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
                 }
               }
@@ -203,11 +205,13 @@ export default function App() {
                   coll.push(...its)
                   off += its.length
                 }
-                setScanMeta(m.data)
-                setTotal(m.data.totalCount || coll.length)
-                setItems(coll.filter(it => it && it.canonicalPath))
-                setAllItems(coll.filter(it => it && it.canonicalPath))
-                try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
+                  setScanMeta(m.data)
+                  setTotal(m.data.totalCount || coll.length)
+                  setItems(coll.filter(it => it && it.canonicalPath))
+                  setAllItems(coll.filter(it => it && it.canonicalPath))
+                  try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
+                }
               }
             } catch (e) { /* swallow */ }
           }
@@ -375,6 +379,33 @@ export default function App() {
     } catch (e) { return prev || [] }
   }
 
+  // Update scan metadata and allItems, but preserve the current search/filter and view.
+  // If a search is active, re-run the search to keep results stable. If no search,
+  // update visible items based on the new allItems (or first page for large scans).
+  function updateScanDataAndPreserveView(meta, coll) {
+    try {
+      const clean = (coll || []).filter(it => it && it.canonicalPath)
+      setScanMeta(meta)
+      setTotal(meta.totalCount || clean.length)
+      // replace baseline listing
+      setAllItems(clean)
+      // If user is actively searching, re-run the search so results remain focused
+      if (searchQuery && searchQuery.length) {
+        // doSearch will update items based on searchQuery; use it to preserve behavior
+        try { doSearch(searchQuery) } catch (e) { /* best-effort */ }
+      } else {
+        // No active search: if dataset small enough, show all; otherwise show provided first page
+        if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
+          setItems(clean.slice())
+        } else {
+          // for large scans, show the provided coll as the current loaded items
+          setItems(clean.slice(0, Math.max(batchSize, 50)))
+        }
+      }
+      try { setCurrentScanPaths(new Set((clean||[]).map(x => x.canonicalPath))) } catch (e) {}
+    } catch (e) {}
+  }
+
       // Maximum number of items to perform in-memory search on; if exceeded, fall back to server search
       const MAX_IN_MEMORY_SEARCH = 20000
 
@@ -472,7 +503,6 @@ export default function App() {
 
   // On mount, verify cached paths to remove any stale entries from previous runs
   useEffect(() => { verifyCachePaths().catch(()=>{}) }, [])
-
   // Poll for hide events so client can force-refresh affected scans/items even if hide was initiated elsewhere
   useEffect(() => {
     let mounted = true
@@ -487,7 +517,7 @@ export default function App() {
             try {
               // update last seen ts
               if (ev && ev.ts && ev.ts > (lastHideEventTsRef.current || 0)) lastHideEventTsRef.current = ev.ts
-              // For each event, attempt to reload any indicated scans and authoritative enrichment for the path.
+              // Reload any indicated scans (but preserve current search/view)
               const modified = ev.modifiedScanIds || []
               if (modified && modified.length) {
                 const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
@@ -504,39 +534,34 @@ export default function App() {
                         coll.push(...its)
                         off += its.length
                       }
-                      setScanMeta(m.data)
-                      setTotal(m.data.totalCount || coll.length)
-                      setItems(coll.filter(it => it && it.canonicalPath))
-                      setAllItems(coll.filter(it => it && it.canonicalPath))
-                      try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
-                      // inform server we refreshed
+                      try { updateScanDataAndPreserveView(m.data, coll) } catch(e) {}
                       try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
                     }
                   } catch (e) { /* swallow */ }
                 }
               }
-              // also always refresh authoritative enrichment for the path to ensure hide/applied flags are in cache
-              try {
-                if (ev && ev.path) {
+              // Always refresh authoritative enrichment for the event path so hidden/applied flags are up-to-date
+              if (ev && ev.path) {
+                try {
                   const er = await axios.get(API('/enrich'), { params: { path: ev.path } }).catch(() => null)
                   const auth = er && er.data && (er.data.enrichment || er.data) ? (er.data.enrichment || er.data) : null
                   const norm = auth ? normalizeEnrichResponse(auth) : null
                   if (norm) {
                     setEnrichCache(prev => ({ ...prev, [ev.path]: norm }))
-                    // if hidden/applied remove from visible lists
                     if (norm.hidden || norm.applied) {
                       setItems(prev => prev.filter(x => x.canonicalPath !== ev.path))
                       setAllItems(prev => prev.filter(x => x.canonicalPath !== ev.path))
                     }
                   }
-                }
-              } catch (e) { /* best-effort */ }
-            } catch (e) {}
+                } catch (e) {}
+              }
+            } catch (e) { /* per-event best-effort */ }
           }
         }
-      } catch (e) {}
+      } catch (e) { /* best-effort overall */ }
+      // schedule next poll (short interval for responsive hide handling)
       if (!mounted) return
-      timer = setTimeout(poll, 2000)
+      timer = setTimeout(poll, 800)
     }
     poll()
     return () => { mounted = false; if (timer) clearTimeout(timer) }
@@ -1583,11 +1608,13 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                         off += its.length
                       }
                       if (sid === scanId || sid === lastScanId) {
-                        setScanMeta(m.data)
-                        setTotal(m.data.totalCount || coll.length)
-                        setItems(coll.filter(it => it && it.canonicalPath))
-                        setAllItems(coll.filter(it => it && it.canonicalPath))
-                        try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                        try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
+                          setScanMeta(m.data)
+                          setTotal(m.data.totalCount || coll.length)
+                          setItems(coll.filter(it => it && it.canonicalPath))
+                          setAllItems(coll.filter(it => it && it.canonicalPath))
+                          try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
+                        }
                         // inform server we refreshed this scan so server logs can confirm client-side refresh
                         try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
                       }
@@ -1695,11 +1722,13 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                           off += its.length
                         }
                         if (sid === scanId || sid === lastScanId) {
-                          setScanMeta(m.data)
-                          setTotal(m.data.totalCount || coll.length)
-                          setItems(coll.filter(it => it && it.canonicalPath))
-                          setAllItems(coll.filter(it => it && it.canonicalPath))
-                          try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                            try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
+                              setScanMeta(m.data)
+                              setTotal(m.data.totalCount || coll.length)
+                              setItems(coll.filter(it => it && it.canonicalPath))
+                              setAllItems(coll.filter(it => it && it.canonicalPath))
+                              try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
+                            }
                           // inform server we refreshed this scan so server logs can confirm client-side refresh
                           try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
                         }
@@ -1733,11 +1762,13 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                           off += its.length
                         }
                         if (sid === scanId || sid === lastScanId) {
-                          setScanMeta(m.data)
-                          setTotal(m.data.totalCount || coll.length)
-                          setItems(coll.filter(it => it && it.canonicalPath))
-                          setAllItems(coll.filter(it => it && it.canonicalPath))
-                          try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                          try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
+                            setScanMeta(m.data)
+                            setTotal(m.data.totalCount || coll.length)
+                            setItems(coll.filter(it => it && it.canonicalPath))
+                            setAllItems(coll.filter(it => it && it.canonicalPath))
+                            try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
+                          }
                         }
                       }
                     } catch (e) { /* swallow */ }
@@ -1759,10 +1790,12 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                           off += its.length
                         }
                         setScanMeta(m.data)
-                        setTotal(m.data.totalCount || coll.length)
-                        setItems(coll.filter(it => it && it.canonicalPath))
-                        setAllItems(coll.filter(it => it && it.canonicalPath))
-                        try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                          try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
+                            setTotal(m.data.totalCount || coll.length)
+                            setItems(coll.filter(it => it && it.canonicalPath))
+                            setAllItems(coll.filter(it => it && it.canonicalPath))
+                            try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
+                          }
                       }
                     } catch (e) { /* swallow */ }
                   }
