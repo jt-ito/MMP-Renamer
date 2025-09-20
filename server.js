@@ -105,6 +105,8 @@ let enrichCache = {};
 let parsedCache = {};
 let scans = {};
 let renderedIndex = {};
+// Recent hide events for client polling: { ts, path, originalPath, modifiedScanIds }
+let hideEvents = [];
 try { enrichCache = JSON.parse(fs.readFileSync(enrichStoreFile, 'utf8') || '{}') } catch (e) { enrichCache = {} }
 try { parsedCache = JSON.parse(fs.readFileSync(parsedCacheFile, 'utf8') || '{}') } catch (e) { parsedCache = {} }
 try { scans = JSON.parse(fs.readFileSync(scanStoreFile, 'utf8') || '{}') } catch (e) { scans = {} }
@@ -1461,6 +1463,12 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
     try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
   } catch (e) { returned = null }
   appendLog(`HIDE path=${p}`)
+  try {
+    // Record hide event for clients to poll and reconcile UI
+    hideEvents.push({ ts: Date.now(), path: key, originalPath: p, modifiedScanIds });
+    // keep recent events bounded
+    if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
+  } catch (e) {}
   return res.json({ ok: true, path: key, enrichment: returned, modifiedScanIds })
   } catch (e) { return res.status(500).json({ error: e.message }) }
 })
@@ -1692,6 +1700,16 @@ app.post('/api/debug/client-refreshed', requireAuth, (req, res) => {
     if (path) appendLog(`CLIENT_REFRESHED path=${path}`)
     if (scanId) appendLog(`CLIENT_REFRESHED_SCAN id=${scanId}`)
     return res.json({ ok: true })
+  } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }) }
+})
+
+// Clients can poll this endpoint to receive recent hide events and reconcile UI.
+// Query param: since (timestamp in ms) to receive events occurring after that timestamp.
+app.get('/api/enrich/hide-events', requireAuth, (req, res) => {
+  try {
+    const since = parseInt(req.query.since || '0', 10) || 0
+    const ev = (hideEvents || []).filter(e => (e && e.ts && e.ts > since))
+    return res.json({ ok: true, events: ev || [] })
   } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }) }
 })
 

@@ -102,6 +102,8 @@ export default function App() {
   const [logs, setLogs] = useState('')
   const [toasts, setToasts] = useState([])
   const [loadingEnrich, setLoadingEnrich] = useState({})
+  // last seen hide event timestamp (ms)
+  const lastHideEventTsRef = useRef(0)
 
   // computed: whether a bulk enrich/metadata refresh is in-flight
   const enrichPendingCount = Object.keys(loadingEnrich || {}).length
@@ -354,6 +356,75 @@ export default function App() {
 
   // On mount, verify cached paths to remove any stale entries from previous runs
   useEffect(() => { verifyCachePaths().catch(()=>{}) }, [])
+
+  // Poll for hide events so client can force-refresh affected scans/items even if hide was initiated elsewhere
+  useEffect(() => {
+    let mounted = true
+    let timer = null
+    async function poll() {
+      try {
+        const since = lastHideEventTsRef.current || 0
+        const r = await axios.get(API('/enrich/hide-events'), { params: { since } }).catch(() => null)
+        if (!mounted) return
+        if (r && r.data && Array.isArray(r.data.events) && r.data.events.length) {
+          for (const ev of r.data.events) {
+            try {
+              // update last seen ts
+              if (ev && ev.ts && ev.ts > (lastHideEventTsRef.current || 0)) lastHideEventTsRef.current = ev.ts
+              // For each event, attempt to reload any indicated scans and authoritative enrichment for the path.
+              const modified = ev.modifiedScanIds || []
+              if (modified && modified.length) {
+                const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
+                for (const sid of toReload) {
+                  try {
+                    const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
+                    if (m && m.data) {
+                      const total = m.data.totalCount || 0
+                      const coll = []
+                      let off = 0
+                      while (off < total) {
+                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=${off}&limit=${batchSize}`)).catch(() => ({ data: { items: [] } }))
+                        const its = pgr.data.items || []
+                        coll.push(...its)
+                        off += its.length
+                      }
+                      setScanMeta(m.data)
+                      setTotal(m.data.totalCount || coll.length)
+                      setItems(coll.filter(it => it && it.canonicalPath))
+                      setAllItems(coll.filter(it => it && it.canonicalPath))
+                      try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (e) {}
+                      // inform server we refreshed
+                      try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
+                    }
+                  } catch (e) { /* swallow */ }
+                }
+              }
+              // also always refresh authoritative enrichment for the path to ensure hide/applied flags are in cache
+              try {
+                if (ev && ev.path) {
+                  const er = await axios.get(API('/enrich'), { params: { path: ev.path } }).catch(() => null)
+                  const auth = er && er.data && (er.data.enrichment || er.data) ? (er.data.enrichment || er.data) : null
+                  const norm = auth ? normalizeEnrichResponse(auth) : null
+                  if (norm) {
+                    setEnrichCache(prev => ({ ...prev, [ev.path]: norm }))
+                    // if hidden/applied remove from visible lists
+                    if (norm.hidden || norm.applied) {
+                      setItems(prev => prev.filter(x => x.canonicalPath !== ev.path))
+                      setAllItems(prev => prev.filter(x => x.canonicalPath !== ev.path))
+                    }
+                  }
+                }
+              } catch (e) { /* best-effort */ }
+            } catch (e) {}
+          }
+        }
+      } catch (e) {}
+      if (!mounted) return
+      timer = setTimeout(poll, 2000)
+    }
+    poll()
+    return () => { mounted = false; if (timer) clearTimeout(timer) }
+  }, [scanId, lastScanId])
 
   // check auth status on load (prevents deep-link bypass)
   useEffect(() => {
