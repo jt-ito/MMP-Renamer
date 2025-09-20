@@ -187,7 +187,9 @@ async function metaLookup(title, apiKey, opts = {}) {
       out = out.replace(/\s*\(\s*Season\s*\d{1,2}(?:st|nd|rd|th)?\s*\)\s*$/i, '')
       out = out.replace(/\s+Season\s+\d{1,2}(?:st|nd|rd|th)?\s*$/i, '')
       out = out.replace(/\s+\d{1,2}(?:st|nd|rd|th)?\s+Season\s*$/i, '')
-      out = out.replace(/\s+\d+(?:st|nd|rd|th)?\s*$/i, '')
+      // Do not remove trailing numeric tokens unconditionally (e.g. "Kaiju No. 8").
+      // Only strip explicit Season tokens above. Avoid overly-aggressive stripping.
+      try { if (out !== String(name)) { try { appendLog(`STRIP_ANILIST before=${String(name).slice(0,200)} after=${out.slice(0,200)}`) } catch (e) {} } } catch (e) {}
       return out.trim()
     } catch (e) { return name }
   }
