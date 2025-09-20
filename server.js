@@ -1112,7 +1112,8 @@ app.post('/api/scan', async (req, res) => {
           try {
             const k = canonicalize(it.canonicalPath);
             const e = enrichCache[k] || null;
-            if (e && (e.hidden || e.applied)) return false;
+            // respect hidden, applied, and rescanned flags so restored scans don't re-show them
+            if (e && (e.hidden || e.applied || e.rescanned)) return false;
             return true;
           } catch (e) { return true; }
         });
@@ -1137,7 +1138,8 @@ app.post('/api/scan', async (req, res) => {
           try {
             const k = canonicalize(it.canonicalPath);
             const e = enrichCache[k] || null;
-            if (e && (e.hidden || e.applied)) return false;
+            // respect hidden, applied, and rescanned flags so incremental scan lists hide them too
+            if (e && (e.hidden || e.applied || e.rescanned)) return false;
             return true;
           } catch (e) { return true; }
         });
@@ -1235,7 +1237,10 @@ app.post('/api/scan', async (req, res) => {
             try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
           } catch (e) {
             // if provider render fails, still persist raw provider data (preserve flags)
-            updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
+            const fallback = Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' });
+            // best-effort: if this was a force/rescan request, mark rescanned
+            if (req && req.body && req.body.force) fallback.rescanned = true;
+            updateEnrichCache(key, fallback);
           }
             // update progress for polling clients
             try { const refreshProgressKey = `refreshScan:${scanId}`; if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].processed += 1; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch(e){}
@@ -1267,7 +1272,8 @@ app.post('/api/scan', async (req, res) => {
                 const k = canonicalize(it.canonicalPath);
                 const e = enrichCache[k] || null;
                 // if hidden/applied, remove
-                if (e && (e.hidden || e.applied)) return false;
+                // if hidden/applied/rescanned, remove
+                if (e && (e.hidden || e.applied || e.rescanned)) return false;
                 // otherwise attach a snapshot of enrichment (normalized) for client hydration
                 try { it.enrichment = enrichCache[k] || null } catch (ee) { it.enrichment = null }
                 return true
@@ -1576,7 +1582,10 @@ app.post('/api/enrich', async (req, res) => {
       // attach normalized provider block
   const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
   try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
-  updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+              // If this enrich was requested as a client-side rescan/force, mark rescanned so it is respected
+              const toUpdate = Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() });
+              if (req && req.body && req.body.force) toUpdate.rescanned = true;
+              updateEnrichCache(key, toUpdate);
       } catch (e) {
   updateEnrichCache(key, Object.assign({}, { ...data, cachedAt: Date.now() }));
     }
@@ -1592,8 +1601,41 @@ app.post('/api/enrich', async (req, res) => {
         writeJson(parsedCacheFile, parsedCache)
       }
     } catch (e) {
-      updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
+            const toUpdate2 = Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' });
+            if (req && req.body && req.body.force) toUpdate2.rescanned = true;
+            updateEnrichCache(key, toUpdate2);
     }
+    // If this was a client-initiated rescan, remove this path from any stored scan artifacts
+    // so clients restoring previous scans won't re-show it (treat rescanned like hidden/applied)
+    try {
+      if (force) {
+        const modifiedScanIds = [];
+        const scanIds = Object.keys(scans || {});
+        for (const sid of scanIds) {
+          try {
+            const s = scans[sid];
+            if (!s || !Array.isArray(s.items)) continue;
+            const before = s.items.length;
+            s.items = s.items.filter(it => {
+              try { return canonicalize(it.canonicalPath) !== key } catch (e) { return true }
+            });
+            if (s.items.length !== before) {
+              s.totalCount = s.items.length;
+              modifiedScanIds.push(sid);
+            }
+          } catch (e) {}
+        }
+        if (modifiedScanIds.length) {
+          try { writeJson(scanStoreFile, scans); appendLog(`RESCAN_UPDATED_SCANS path=${p} ids=${modifiedScanIds.join(',')}`) } catch (e) {}
+        }
+        // Emit an event clients poll for so they can reconcile quickly (reuse hide-events mechanism)
+        try {
+          hideEvents.push({ ts: Date.now(), path: key, originalPath: p, modifiedScanIds, rescanned: true });
+          if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
+        } catch (e) {}
+        return res.json({ enrichment: enrichCache[key], modifiedScanIds });
+      }
+    } catch (e) {}
     res.json({ enrichment: enrichCache[key] });
   } catch (err) { appendLog(`ENRICH_FAIL path=${key} err=${err.message}`); res.status(500).json({ error: err.message }); }
 });
@@ -1795,7 +1837,8 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
               try {
                 const k = canonicalize(it.canonicalPath);
                 const e = enrichCache[k] || null;
-                if (e && (e.hidden || e.applied)) return false;
+                // if hidden/applied/rescanned, remove
+                if (e && (e.hidden || e.applied || e.rescanned)) return false;
                 try { it.enrichment = enrichCache[k] || null } catch (ee) { it.enrichment = null }
                 return true
               } catch (e) { return true }
@@ -2067,6 +2110,8 @@ function preserveAppliedFlags(prev, next) {
     next = next || {};
     if (prev.applied) next.applied = prev.applied;
     if (prev.hidden) next.hidden = prev.hidden;
+    // Preserve rescanned flag across updates so rescans remain respected like hidden/applied
+    if (prev.rescanned) next.rescanned = prev.rescanned;
     if (typeof prev.appliedAt !== 'undefined') next.appliedAt = prev.appliedAt;
     if (typeof prev.appliedTo !== 'undefined') next.appliedTo = prev.appliedTo;
     if (typeof prev.metadataFilename !== 'undefined') next.metadataFilename = prev.metadataFilename;
