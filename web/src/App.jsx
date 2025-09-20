@@ -1789,13 +1789,14 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                           coll.push(...its)
                           off += its.length
                         }
-                        setScanMeta(m.data)
-                          try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
-                            setTotal(m.data.totalCount || coll.length)
-                            setItems(coll.filter(it => it && it.canonicalPath))
-                            setAllItems(coll.filter(it => it && it.canonicalPath))
-                            try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
-                          }
+                        try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
+                          // helper failed — fall back to explicit state updates
+                          setScanMeta(m.data)
+                          setTotal(m.data.totalCount || coll.length)
+                          setItems(coll.filter(it => it && it.canonicalPath))
+                          setAllItems(coll.filter(it => it && it.canonicalPath))
+                          try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
+                        }
                       }
                     } catch (e) { /* swallow */ }
                   }
