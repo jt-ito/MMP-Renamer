@@ -370,8 +370,35 @@ async function metaLookup(title, apiKey, opts = {}) {
   }
   if (!pick) return null
   // pick English when available, otherwise romaji, otherwise native
-  const name = (pick.title && (pick.title.english || pick.title.romaji || pick.title.native)) ? (pick.title.english || pick.title.romaji || pick.title.native) : null
-      return { provider: 'anilist', id: pick.id, name: name, raw: pick }
+  // If the selected pick itself is a season-specific entry (e.g. "3rd Season") but its relations include
+  // a parent/series node that does NOT contain a season token, prefer returning that parent node instead
+    try {
+    if (wantedSeason !== null && pick && pick.title) {
+      const pickCandidates = [pick.title.english, pick.title.romaji, pick.title.native]
+      let pickSeasonNum = null
+      for (const pc of pickCandidates) { try { const s = extractSeasonNumberFromTitle(pc); if (s) { pickSeasonNum = s; break } } catch (e) {} }
+      // Only prefer a related parent when the picked media explicitly indicates a different season
+      // than the requested one (e.g. AniList returned "3rd Season" but caller requested season=1).
+      if (pickSeasonNum !== null && wantedSeason !== null && pickSeasonNum !== wantedSeason && pick.relations && Array.isArray(pick.relations.nodes)) {
+        for (const rn of pick.relations.nodes) {
+          try {
+            const rCandidates = [rn && rn.title && rn.title.english, rn && rn.title && rn.title.romaji, rn && rn.title && rn.title.native]
+            let anySeason = false
+            for (const rc of rCandidates) { try { if (extractSeasonNumberFromTitle(rc)) { anySeason = true; break } } catch (e) {} }
+            if (!anySeason) {
+              // prefer this related parent node
+              pick = rn
+              break
+            }
+          } catch (e) {}
+        }
+      }
+    }
+  } catch (e) {}
+
+  const rawName = (pick && pick.title) ? (pick.title.english || pick.title.romaji || pick.title.native) : (pick && (pick.romaji || pick.english || pick.native) ? (pick.english || pick.romaji || pick.native) : null)
+  const name = stripAniListSeasonSuffix(rawName)
+  return { provider: 'anilist', id: pick.id, name: name, raw: pick }
     } catch (e) { return null }
   }
 
