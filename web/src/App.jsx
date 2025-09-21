@@ -358,8 +358,20 @@ export default function App() {
       const clean = (coll || []).filter(it => it && it.canonicalPath)
       setScanMeta(meta)
       setTotal(meta.totalCount || clean.length)
-      // replace baseline listing
-      setAllItems(clean)
+      // If coll looks like a partial first-page (fewer items than reported total)
+      // and we already have a larger baseline in `allItems`, merge instead of
+      // replacing so we don't stomp the user's current view/scroll position.
+      let baseline = clean
+      try {
+        if (meta && meta.totalCount && clean.length < meta.totalCount && allItems && allItems.length > clean.length) {
+          baseline = mergeItemsUnique(allItems || [], clean, false)
+          setAllItems(prev => mergeItemsUnique(prev || [], clean, false))
+        } else {
+          setAllItems(clean)
+        }
+      } catch (e) {
+        setAllItems(clean)
+      }
       // If user is actively searching, prefer client-side filtering when safe so
       // we don't cause a full server-side update that could reset the view.
       if (searchQuery && searchQuery.length) {
@@ -367,7 +379,9 @@ export default function App() {
           if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
             const q = searchQuery
             const lowered = q.toLowerCase()
-            const results = clean.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+            // Use the merged baseline if we computed one so search results are consistent
+            const sourceForSearch = baseline || clean
+            const results = sourceForSearch.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
             setItems(results)
             setTotal(results.length)
           } else {
@@ -378,7 +392,7 @@ export default function App() {
       } else {
         // No active search: if dataset small enough, show all; otherwise show provided first page
         if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
-          setItems(clean.slice())
+          setItems((baseline || clean).slice())
         } else {
           const firstPage = clean.slice(0, Math.max(batchSize, 50))
           setItems(prev => {
