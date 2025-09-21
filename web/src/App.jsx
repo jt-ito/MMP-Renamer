@@ -531,8 +531,8 @@ export default function App() {
                   // If the user has an active search query, skip fetching and merging
                   // scan pages so we don't stomp the server-driven search results.
                   if (searchQuery && searchQuery.length) {
-                    try { console.debug('[client] SKIP_PAGE_FETCH_DUE_TO_SEARCH', { modified, scanId, lastScanId, searchQuery }) } catch (e) {}
-                    // still notify server we refreshed client view for diagnostics
+                    try { console.debug('[client] SKIP_ALL_PAGE_FETCH_DUE_TO_SEARCH', { modified, scanId, lastScanId, searchQuery }) } catch (e) {}
+                    // Never fetch or merge scan pages if searching, regardless of item count
                     for (const sid of modified.filter(sid => sid === scanId || sid === lastScanId)) {
                       try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
                     }
