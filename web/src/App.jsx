@@ -1614,6 +1614,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
           <button title="Hide this item" className="btn-ghost" disabled={loading} onClick={async () => {
             if (!it) return
             const originalPath = it.canonicalPath
+            try { console.debug('[client] HIDE_CLICK', { path: originalPath, itemsLen: (items||[]).length, allItemsLen: (allItems||[]).length, searchQuery }) } catch (e) {}
             // guard concurrent clicks
             if (loadingEnrich && loadingEnrich[originalPath]) return
             safeSetLoadingEnrich(prev => ({ ...prev, [originalPath]: true }))
@@ -1652,6 +1653,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               try {
                 const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
                 if (modified && modified.length) {
+                  try { console.debug('[client] HIDE_MODIFIED_IDS', { path: originalPath, modified, itemsLen: (items||[]).length, allItemsLen: (allItems||[]).length, searchQuery }) } catch (e) {}
                   const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
                   for (const sid of toReload) {
                     try {
@@ -1677,6 +1679,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                       }
                     } catch (e) { /* best-effort */ }
                   }
+                } else {
+                  try { console.debug('[client] HIDE_NO_MODIFIED_IDS', { path: originalPath, itemsLen: (items||[]).length, allItemsLen: (allItems||[]).length, searchQuery }) } catch (e) {}
                 }
               } catch (e) { /* swallow */ }
 
