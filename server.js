@@ -178,11 +178,12 @@ function stripAniListSeasonSuffix(name, rawPick) {
     out = out.replace(/\s+Season\s+\d{1,2}(?:st|nd|rd|th)?\s*$/i, '')
     out = out.replace(/\s+\d{1,2}(?:st|nd|rd|th)?\s+Season\s*$/i, '')
     // Only remove ambiguous trailing numeric tokens if we have confidence it's a season token.
-  const confident = (!!rawPick && (rawPick.seasonYear || rawPick.season)) || /\bseason\b/i.test(orig)
-  try { console.log('DEBUG strip called orig="' + orig + '" confident=' + !!confident) } catch (e) {}
-    if (confident) {
-      out = out.replace(/\s+\d+(?:st|nd|rd|th)?\s*$/i, '')
-    }
+    // Only strip explicit season tokens (handled above). Avoid removing generic trailing
+    // numeric tokens (e.g., 'No. 8') because many series include numbers as part of
+    // their canonical title. We consider ourselves "confident" when AniList returned
+    // season/seasonYear or the original string contained the word 'season', but we
+    // don't remove standalone trailing digits even then.
+    const confident = (!!rawPick && (rawPick.seasonYear || rawPick.season)) || /\bseason\b/i.test(orig)
     try { if (out !== orig) { try { appendLog(`STRIP_ANILIST before=${orig.slice(0,200)} after=${out.slice(0,200)} confident=${!!confident}`) } catch (e) {} } } catch (e) {}
     return out.trim()
   } catch (e) { return name }
