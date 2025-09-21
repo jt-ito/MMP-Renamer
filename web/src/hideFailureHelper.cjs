@@ -48,10 +48,16 @@ module.exports = async function handleHideFailureCore(opts) {
             if (m) {
               const pgr = await fetchScanItemsPage(sid, 0, Math.max(batchSize, 12))
               const coll = (pgr && pgr.items) ? pgr.items : []
-              try { if (updateScanDataAndPreserveView) updateScanDataAndPreserveView(m, coll) } catch (e) {
+              try {
+                if (updateScanDataAndPreserveView) updateScanDataAndPreserveView(m, coll)
+              } catch (e) {
+                // If the shared helper fails for any reason, avoid stomping the
+                // user's current visible items (which can include an active search).
+                // Only update scan-level metadata if available; leave items/allItems
+                // unchanged so the UI preserves search and scroll context.
                 try { setScanMeta && setScanMeta(m) } catch (ee) {}
-                try { setItems && setItems(coll.filter(it => it && it.canonicalPath)) } catch (ee) {}
-                try { setAllItems && setAllItems(coll.filter(it => it && it.canonicalPath)) } catch (ee) {}
+                // don't setItems/setAllItems here — merging is best-effort and
+                // updateScanDataAndPreserveView should have handled it. Swallow.
               }
               try { postClientRefreshed && postClientRefreshed(sid) } catch (e) {}
             }
