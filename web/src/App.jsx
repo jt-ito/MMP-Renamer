@@ -375,20 +375,20 @@ export default function App() {
       // If user is actively searching, prefer client-side filtering when safe so
       // we don't cause a full server-side update that could reset the view.
       if (searchQuery && searchQuery.length) {
-        try {
-          if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
-            const q = searchQuery
-            const lowered = q.toLowerCase()
-            // Use the merged baseline if we computed one so search results are consistent
-            const sourceForSearch = baseline || clean
-            const results = sourceForSearch.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
-            setItems(results)
-            setTotal(results.length)
-          } else {
-            // baseline too large for in-memory search: delegate to doSearch
-            try { doSearch(searchQuery) } catch (e) { /* best-effort */ }
-          }
-        } catch (e) { /* best-effort */ }
+          try {
+            if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
+              const q = searchQuery
+              const lowered = q.toLowerCase()
+              // choose sourceForSearch carefully: prefer baseline only if present
+              const sourceForSearch = (allItems && allItems.length) ? (baseline || clean) : (baseline || clean)
+              const results = clean.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+              setItems(results)
+              setTotal(results.length)
+            } else {
+              // baseline too large for in-memory search: delegate to doSearch
+              try { doSearch(searchQuery) } catch (e) { /* best-effort */ }
+            }
+          } catch (e) { /* best-effort */ }
       } else {
         // No active search: if dataset small enough, show all; otherwise show provided first page
         if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
