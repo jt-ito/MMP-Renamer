@@ -924,6 +924,155 @@ function canonicalize(p) {
   return path.resolve(p).replace(/\\/g, '/');
 }
 
+// Helper: decide whether a provider block is complete (no need to re-query)
+function isProviderComplete(provider) {
+  try {
+    if (!provider) return false;
+    const matched = !!provider.matched;
+    const hasRendered = !!provider.renderedName;
+    const episodeOk = (provider.episode == null) || (provider.episodeTitle && String(provider.episodeTitle).trim());
+    return matched && hasRendered && episodeOk;
+  } catch (e) { return false }
+}
+
+// Render provider-based filename using a template and provider data
+function renderProviderName(data, key, session) {
+  try {
+    const userTemplate = (session && session.username && users[session.username] && users[session.username].settings && users[session.username].settings.rename_template) ? users[session.username].settings.rename_template : null;
+    const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
+    const rawTitle = data.title || '';
+    const yearToken = data.year || extractYear(data, key) || '';
+    function pad(n){ return String(n).padStart(2,'0') }
+    let epLabel = '';
+    if (data.episodeRange) epLabel = data.season != null ? `S${pad(data.season)}E${data.episodeRange}` : `E${data.episodeRange}`
+    else if (data.episode != null) epLabel = data.season != null ? `S${pad(data.season)}E${pad(data.episode)}` : `E${pad(data.episode)}`
+    const titleToken = cleanTitleForRender(rawTitle, epLabel, data.episodeTitle || '');
+    const nameWithoutExtRaw = String(baseNameTemplate)
+      .replace('{title}', sanitize(titleToken))
+      .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
+      .replace('{year}', yearToken || '')
+      .replace('{epLabel}', sanitize(epLabel))
+      .replace('{episodeTitle}', sanitize(data.episodeTitle || ''))
+      .replace('{season}', data.season != null ? String(data.season) : '')
+      .replace('{episode}', data.episode != null ? String(data.episode) : '')
+      .replace('{episodeRange}', data.episodeRange || '')
+      .replace('{tmdbId}', (data.tmdb && data.tmdb.raw && (data.tmdb.raw.id || data.tmdb.raw.seriesId)) ? String(data.tmdb.raw.id || data.tmdb.raw.seriesId) : '')
+    let providerRendered = String(nameWithoutExtRaw)
+      .replace(/\s*\(\s*\)\s*/g, '')
+      .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
+      .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    return providerRendered;
+  } catch (e) { return '' }
+}
+
+// Centralized parsed item processing used by scans: parse filename, update parsedCache & enrichCache
+function doProcessParsedItem(it, session) {
+  try {
+    const parseFilename = require('./lib/filename-parser');
+    const base = path.basename(it.canonicalPath, path.extname(it.canonicalPath));
+    const key = canonicalize(it.canonicalPath);
+    let parsed = parsedCache[key] || null;
+    if (!parsed) {
+      try {
+        const guess = parseFilename(base);
+        parsed = { title: guess.title, parsedName: guess.parsedName, season: guess.season, episode: guess.episode, episodeRange: guess.episodeRange || null, timestamp: Date.now() };
+        parsedCache[key] = parsed;
+      } catch (e) { parsed = null }
+    }
+    if (parsed) {
+      try {
+        // render parsed name using template from session or server
+        const userTemplate = (session && session.username && users[session.username] && users[session.username].settings && users[session.username].settings.rename_template) ? users[session.username].settings.rename_template : null;
+        const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
+        function pad(n){ return String(n).padStart(2,'0') }
+        let parsedEpLabel = '';
+        if (parsed.episodeRange) parsedEpLabel = parsed.season != null ? `S${pad(parsed.season)}E${parsed.episodeRange}` : `E${parsed.episodeRange}`
+        else if (parsed.episode != null) parsedEpLabel = parsed.season != null ? `S${pad(parsed.season)}E${pad(parsed.episode)}` : `E${pad(parsed.episode)}`
+        const titleToken = cleanTitleForRender(parsed.title || '', parsedEpLabel, '');
+        const nameWithoutExtRaw = String(baseNameTemplate)
+          .replace('{title}', sanitize(titleToken))
+          .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
+          .replace('{year}', parsed.year || '')
+          .replace('{epLabel}', sanitize(parsedEpLabel))
+          .replace('{episodeTitle}', '')
+          .replace('{season}', parsed.season != null ? String(parsed.season) : '')
+          .replace('{episode}', parsed.episode != null ? String(parsed.episode) : '')
+          .replace('{episodeRange}', parsed.episodeRange || '')
+          .replace('{tmdbId}', '')
+        let parsedRendered = String(nameWithoutExtRaw).replace(/\s{2,}/g, ' ').trim();
+        try { parsedRendered = parsedRendered.replace(/\s*\(\s*\)\s*/g, '').replace(/\s*[-–—]\s*$/g, '').replace(/\s{2,}/g, ' ').trim(); } catch (e) {}
+        parsedCache[key] = Object.assign({}, parsedCache[key] || {}, { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() });
+        const parsedBlock = { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() };
+        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
+      } catch (e) {
+        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeTitle: '', language: 'en', timestamp: Date.now() }));
+      }
+    }
+  } catch (e) { appendLog(`PARSE_ITEM_FAIL path=${it && it.canonicalPath} err=${e && e.message ? e.message : String(e)}`) }
+}
+
+// Background enricher: enrich up to first N candidates, update caches and write progress
+async function backgroundEnrichFirstN(scanId, enrichCandidates, session, libPath, lockKey, N = 12) {
+  try {
+    const first = (enrichCandidates && Array.isArray(enrichCandidates) ? enrichCandidates : (scans[scanId] && scans[scanId].items) || []).slice(0, N);
+    const username = session && session.username;
+    let tmdbKey = null;
+    try { if (username && users[username] && users[username].settings && users[username].settings.tmdb_api_key) tmdbKey = users[username].settings.tmdb_api_key; else if (serverSettings && serverSettings.tmdb_api_key) tmdbKey = serverSettings.tmdb_api_key; } catch (e) { tmdbKey = null }
+    const refreshProgressKey = `refreshScan:${scanId}`;
+    try { refreshProgress[refreshProgressKey] = { processed: 0, total: first.length, lastUpdated: Date.now(), status: 'running' }; } catch (e) {}
+    for (const it of first) {
+      try {
+        const key = canonicalize(it.canonicalPath);
+        const existing = enrichCache[key] || null;
+        const prov = existing && existing.provider ? existing.provider : null;
+        if (isProviderComplete(prov)) { continue; }
+        const data = await externalEnrich(key, tmdbKey, { username });
+        if (!data) { continue; }
+        try {
+          const providerRendered = renderProviderName(data, key, session);
+          const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
+          try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
+          updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+        } catch (e) {
+          updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { sourceId: 'provider', cachedAt: Date.now() }));
+        }
+        try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
+        try { if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].processed += 1; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch (e) {}
+      } catch (e) { appendLog(`BACKGROUND_ENRICH_FAIL path=${it && it.canonicalPath} err=${e && e.message ? e.message : String(e)}`); }
+    }
+    try { if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].status = 'complete'; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } setTimeout(() => { try { delete refreshProgress[refreshProgressKey]; } catch (e) {} }, 30*1000) } catch (e) {}
+    // release lock and persist scans after enrichment
+    try { activeScans.delete(lockKey); appendLog(`SCAN_LOCK_RELEASED path=${libPath}`); } catch (e) {}
+    try {
+      const modified = [];
+      const sids = Object.keys(scans || {});
+      for (const sid of sids) {
+        try {
+          const s = scans[sid];
+          if (!s || !Array.isArray(s.items)) continue;
+          const before = s.items.length;
+          s.items = s.items.map(it => (it && it.canonicalPath) ? Object.assign({}, it) : it).filter(it => {
+            try {
+              const k = canonicalize(it.canonicalPath);
+              const e = enrichCache[k] || null;
+              if (e && (e.hidden || e.applied)) return false;
+              try { it.enrichment = enrichCache[k] || null } catch (ee) { it.enrichment = null }
+              return true;
+            } catch (e) { return true }
+          });
+          if (s.items.length !== before) { s.totalCount = s.items.length; modified.push(sid); } else {
+            let anySnapshot = false; for (const it of s.items) { try { if (it && it.enrichment) { anySnapshot = true; break } } catch (e) {} }
+            if (anySnapshot) modified.push(sid);
+          }
+        } catch (e) {}
+      }
+      if (modified.length) { try { writeJson(scanStoreFile, scans); appendLog(`POST_BACKGROUND_ENRICH_SCANS_UPDATED ids=${modified.join(',')}`) } catch (e) {} }
+    } catch (e) {}
+  } catch (e) { appendLog(`BACKGROUND_FIRSTN_ENRICH_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
+}
+
 // Endpoint: list libraries (just a sample folder picker)
 app.get('/api/libraries', (req, res) => {
   // Let user choose an existing folder under cwd or provide custom path via config later
@@ -1014,52 +1163,7 @@ app.post('/api/scan', async (req, res) => {
   function saveScanCache(obj) { return scanLib.saveScanCache(scanCacheFile, obj); }
 
   // Reusable per-item parsing + enrich-cache update logic (extracted from full scan flow)
-  function processParsedItem(it, session) {
-    try {
-      const parseFilename = require('./lib/filename-parser');
-      const base = path.basename(it.canonicalPath, path.extname(it.canonicalPath));
-      const key = canonicalize(it.canonicalPath);
-      let parsed = parsedCache[key] || null
-      if (!parsed) {
-        try {
-          parsed = parseFilename(base)
-          parsedCache[key] = { title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }
-        } catch (e) { parsed = null }
-      }
-      // Render parsed name using existing template logic (reuse existing helpers)
-      try {
-        const userTemplate = (session && session.username && users[session.username] && users[session.username].settings && users[session.username].settings.rename_template) ? users[session.username].settings.rename_template : null;
-        const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
-        if (parsed) {
-          function pad(n){ return String(n).padStart(2,'0') }
-          let parsedEpLabel = '';
-          if (parsed.episodeRange) parsedEpLabel = parsed.season != null ? `S${pad(parsed.season)}E${parsed.episodeRange}` : `E${parsed.episodeRange}`
-          else if (parsed.episode != null) parsedEpLabel = parsed.season != null ? `S${pad(parsed.season)}E${pad(parsed.episode)}` : `E${pad(parsed.episode)}`
-          const titleToken = cleanTitleForRender(parsed.title || '', parsedEpLabel, '');
-          const nameWithoutExtRaw = String(baseNameTemplate)
-            .replace('{title}', sanitize(titleToken))
-            .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
-            .replace('{year}', parsed.year || '')
-            .replace('{epLabel}', sanitize(parsedEpLabel))
-            .replace('{episodeTitle}', '')
-            .replace('{season}', parsed.season != null ? String(parsed.season) : '')
-            .replace('{episode}', parsed.episode != null ? String(parsed.episode) : '')
-            .replace('{episodeRange}', parsed.episodeRange || '')
-            .replace('{tmdbId}', '')
-          let parsedRendered = String(nameWithoutExtRaw).replace(/\s{2,}/g, ' ').trim();
-          // strip empty parentheses (e.g., 'Title () - ...') and trailing hyphens left by empty tokens
-          try { parsedRendered = parsedRendered.replace(/\s*\(\s*\)\s*/g, '').replace(/\s*[-–—]\s*$/g, '').replace(/\s{2,}/g, ' ').trim(); } catch (e) {}
-          parsedCache[key] = Object.assign({}, parsedCache[key] || {}, { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() })
-          const parsedBlock = { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() }
-          updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
-        }
-      } catch (e) {
-        if (parsed) {
-          updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeTitle: '', language: 'en', timestamp: Date.now() }));
-        }
-      }
-    } catch (e) { appendLog(`PARSE_ITEM_FAIL path=${it.canonicalPath} err=${e && e.message ? e.message : String(e)}`); }
-  }
+  // Use central parsed-item processor (doProcessParsedItem)
 
   // Use scan library implementations
   function fullScanLibrary(libPath) { return scanLib.fullScanLibrary(libPath, { ignoredDirs: IGNORED_DIRS, videoExts: VIDEO_EXTS, canonicalize: canonicalize, uuidv4 }); }
@@ -1100,9 +1204,9 @@ app.post('/api/scan', async (req, res) => {
   try {
     const session = req.session || {};
     const priorCache2 = loadScanCache();
-    if (!priorCache2 || !priorCache2.files || Object.keys(priorCache2.files).length === 0) {
-      // first full run - process everything
-      for (const it of items) processParsedItem(it, session);
+  if (!priorCache2 || !priorCache2.files || Object.keys(priorCache2.files).length === 0) {
+  // first full run - process everything
+  for (const it of items) doProcessParsedItem(it, session);
       // build current cache map (files + dirs) and save
       const curFiles = {};
       const curDirs = {};
@@ -1132,10 +1236,10 @@ app.post('/api/scan', async (req, res) => {
         const prior = loadScanCache();
         if (prior && prior.initialScanAt && !currentCache.initialScanAt) currentCache.initialScanAt = prior.initialScanAt;
       } catch (e) {}
-      // remove stale entries
-      for (const r of removed) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
-      // process new/changed items
-      for (const it of toProcess) processParsedItem(it, session);
+  // remove stale entries
+  for (const r of removed) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
+  // process new/changed items
+  for (const it of toProcess) doProcessParsedItem(it, session);
       // persist current cache map (currentCache is { files, dirs })
       saveScanCache(currentCache);
       // build items array for artifact from currentCache.files
@@ -1167,140 +1271,11 @@ app.post('/api/scan', async (req, res) => {
   // Auto-sweep stale enrich cache entries after a scan completes
   try { const removed = sweepEnrichCache(); if (removed && removed.length) appendLog(`AUTOSWEEP_AFTER_SCAN removed=${removed.length}`); } catch (e) {}
   res.json({ scanId, totalCount: items.length });
-  // Kick off a background enrichment pass for the first N items (non-blocking).
-  // This will call the external provider for up to the first 12 items and cache provider-rendered names
-  // The activeScans lock will be released when this background pass completes.
-  (async function backgroundFirstNEnrich() {
-    try {
-      backgroundStarted = true;
-      const N = 12;
-  // Only enrich the first N candidates from the chosen candidate set (prefer new/changed)
-  const first = (enrichCandidates && Array.isArray(enrichCandidates) ? enrichCandidates : artifact.items).slice(0, N);
-  // pick tmdb key similar to other endpoints (prefer session user's key, then server)
-  let tmdbKey = null;
-      try {
-        const username = req.session && req.session.username;
-  if (username && users[username] && users[username].settings && (users[username].settings.tmdb_api_key)) tmdbKey = users[username].settings.tmdb_api_key;
-  else if (serverSettings && serverSettings.tmdb_api_key) tmdbKey = serverSettings.tmdb_api_key;
-  } catch (e) { tmdbKey = null }
-
-      // create a lightweight progress tracker so clients can poll this initial background pass
-      try {
-        const refreshProgressKey = `refreshScan:${scanId}`;
-        refreshProgress[refreshProgressKey] = { processed: 0, total: first.length, lastUpdated: Date.now(), status: 'running' };
-      } catch (e) {}
-
-      for (const it of first) {
-        try {
-          const key = canonicalize(it.canonicalPath);
-          // skip if we already have authoritative provider data cached
-          const existing = enrichCache[key] || null;
-          // Consider a cached provider "complete" only when it has a renderedName
-          // and, when it represents an episode (season/episode present), also has an episodeTitle.
-          const prov = existing && existing.provider ? existing.provider : null;
-          const providerComplete = prov && prov.matched && prov.renderedName && (prov.episode == null || (prov.episodeTitle && String(prov.episodeTitle).trim()));
-          if (providerComplete) continue;
-          const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username });
-          if (!data) continue;
-          // compute provider-rendered name using effective template
-          try {
-            const userTemplate = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.rename_template) ? users[req.session.username].settings.rename_template : null;
-            const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
-            // build tokens from provider data
-            const rawTitle = data.title || '';
-            const yearToken = data.year || extractYear(data, key) || '';
-            function pad(n){ return String(n).padStart(2,'0') }
-            let epLabel = '';
-            if (data.episodeRange) epLabel = data.season != null ? `S${pad(data.season)}E${data.episodeRange}` : `E${data.episodeRange}`
-            else if (data.episode != null) epLabel = data.season != null ? `S${pad(data.season)}E${pad(data.episode)}` : `E${pad(data.episode)}`
-            const titleToken = cleanTitleForRender(rawTitle, epLabel, data.episodeTitle || '');
-            const nameWithoutExtRaw = String(baseNameTemplate)
-              .replace('{title}', sanitize(titleToken))
-              .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
-              .replace('{year}', yearToken || '')
-              .replace('{epLabel}', sanitize(epLabel))
-              .replace('{episodeTitle}', sanitize(data.episodeTitle || ''))
-              .replace('{season}', data.season != null ? String(data.season) : '')
-              .replace('{episode}', data.episode != null ? String(data.episode) : '')
-              .replace('{episodeRange}', data.episodeRange || '')
-              .replace('{tmdbId}', (data.tmdb && data.tmdb.raw && (data.tmdb.raw.id || data.tmdb.raw.seriesId)) ? String(data.tmdb.raw.id || data.tmdb.raw.seriesId) : '')
-            let providerRendered = String(nameWithoutExtRaw)
-              .replace(/\s*\(\s*\)\s*/g, '')
-              .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
-              .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
-              .replace(/\s{2,}/g, ' ')
-              .trim();
-            // ...existing code...
-            // write into enrich cache: add provider block and keep parsed block intact
-            try {
-              const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title }
-              try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
-              updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
-            } catch (e) {
-              updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { providerRenderedName: providerRendered, sourceId: 'provider', cachedAt: Date.now() }));
-            }
-            // persist caches
-            try { writeJson(enrichStoreFile, enrichCache) } catch (e) {}
-          } catch (e) {
-            // if provider render fails, still persist raw provider data (preserve flags)
-            updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
-          }
-            // update progress for polling clients
-            try { const refreshProgressKey = `refreshScan:${scanId}`; if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].processed += 1; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch(e){}
-        } catch (e) { appendLog(`BACKGROUND_ENRICH_FAIL path=${it.canonicalPath} err=${e.message}`); }
-      }
-        // mark progress complete for this background pass and schedule cleanup
-        try { const refreshProgressKey = `refreshScan:${scanId}`; if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].status = 'complete'; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } setTimeout(() => { try { delete refreshProgress[refreshProgressKey]; } catch(e){} }, 30*1000) } catch(e){}
-    } catch (e) { appendLog(`BACKGROUND_FIRSTN_ENRICH_FAIL scan=${scanId} err=${e.message}`); }
-    finally {
-      try {
-        activeScans.delete(lockKey);
-        appendLog(`SCAN_LOCK_RELEASED path=${libPath}`);
-      } catch (ee) {}
-      // After background enrichment completes, ensure stored scan artifacts do not contain
-      // items that were marked hidden or applied during the enrichment. Remove such items
-      // from persisted scan artifacts and persist scans.json when modified so clients
-      // restoring a scan will not see items the user has hidden/applied.
-      try {
-        const modified = [];
-        const sids = Object.keys(scans || {});
-        for (const sid of sids) {
-          try {
-            const s = scans[sid];
-            if (!s || !Array.isArray(s.items)) continue;
-            const before = s.items.length;
-            // filter out hidden/applied and snapshot any available enrichment into item.enrichment
-            s.items = s.items.map(it => (it && it.canonicalPath) ? Object.assign({}, it) : it).filter(it => {
-              try {
-                const k = canonicalize(it.canonicalPath);
-                const e = enrichCache[k] || null;
-                // if hidden/applied, remove
-                if (e && (e.hidden || e.applied)) return false;
-                // otherwise attach a snapshot of enrichment (normalized) for client hydration
-                try { it.enrichment = enrichCache[k] || null } catch (ee) { it.enrichment = null }
-                return true
-              } catch (e) { return true }
-            });
-            if (s.items.length !== before) {
-              s.totalCount = s.items.length;
-              modified.push(sid);
-            } else {
-              // Even if count didn't change, we may have enriched items to snapshot; mark modified
-              // when any item gained an enrichment snapshot
-              let anySnapshot = false
-              for (const it of s.items) {
-                try { if (it && it.enrichment) { anySnapshot = true; break } } catch (e) {}
-              }
-              if (anySnapshot) modified.push(sid)
-            }
-          } catch (e) {}
-        }
-        if (modified.length) {
-          try { writeJson(scanStoreFile, scans); appendLog(`POST_BACKGROUND_ENRICH_SCANS_UPDATED ids=${modified.join(',')}`) } catch (e) {}
-        }
-      } catch (e) {}
-    }
-  })();
+  // Launch background enrichment (first N items) using centralized helper. Keep behavior identical.
+  try {
+    backgroundStarted = true;
+    void backgroundEnrichFirstN(scanId, enrichCandidates, req.session, libPath, lockKey, 12);
+  } catch (e) { appendLog(`BACKGROUND_FIRSTN_LAUNCH_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); activeScans.delete(lockKey); appendLog(`SCAN_LOCK_RELEASED path=${libPath}`); }
   } catch (err) {
     try { appendLog(`SCAN_HANDLER_FAIL scan=${scanId} err=${err && err.message ? err.message : String(err)}`); } catch (e) {}
     try { if (!backgroundStarted) { activeScans.delete(lockKey); appendLog(`SCAN_LOCK_RELEASED path=${libPath}`); } } catch (ee) {}
