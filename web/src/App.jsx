@@ -590,9 +590,27 @@ export default function App() {
   setMetaProgress(0)
     const collected = []
     let offset = 0
+    // guard against a server returning empty pages (which would cause an infinite loop
+    // because offset wouldn't advance). Allow a few transient empty responses before
+    // giving up so slow backends can recover.
+    let emptyStreak = 0
+    const MAX_EMPTY_STREAK = 8
     while (offset < meta.data.totalCount) {
       const page = await axios.get(API(`/scan/${r.data.scanId}/items?offset=${offset}&limit=${batchSize}`))
       const pageItems = page.data.items || []
+      // if we received no items for this offset, increment streak and bail out after a few tries
+      if (!pageItems.length) {
+        emptyStreak++
+        if (emptyStreak >= MAX_EMPTY_STREAK) {
+          // stop collecting more pages to avoid hang; proceed with what we have
+          try { pushToast && pushToast('Scan', `Aborting page fetch after ${MAX_EMPTY_STREAK} empty responses (offset=${offset})`) } catch (e) {}
+          break
+        }
+        // small delay to allow transient backend state to settle
+        await new Promise(r => setTimeout(r, 250))
+      } else {
+        emptyStreak = 0
+      }
       collected.push(...pageItems)
       offset += pageItems.length
       setScanLoaded(prev => {
