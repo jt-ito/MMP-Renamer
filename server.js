@@ -154,6 +154,29 @@ function normalizeEnrichEntry(entry) {
   }
 }
 
+// Top-level helper: strip season-like suffix tokens that AniList might include in returned titles.
+// Accepts optional rawPick (AniList media node) to allow confidence checks (seasonYear/season).
+function stripAniListSeasonSuffix(name, rawPick) {
+  try {
+    if (!name) return name
+    const orig = String(name)
+    let out = orig
+    // remove parenthetical Season tokens: " (Season 2)"
+    out = out.replace(/\s*\(\s*Season\s*\d{1,2}(?:st|nd|rd|th)?\s*\)\s*$/i, '')
+    // remove trailing 'Season N' or 'Nth Season' or '2nd Season' forms
+    out = out.replace(/\s+Season\s+\d{1,2}(?:st|nd|rd|th)?\s*$/i, '')
+    out = out.replace(/\s+\d{1,2}(?:st|nd|rd|th)?\s+Season\s*$/i, '')
+    // Only remove ambiguous trailing numeric tokens if we have confidence it's a season token.
+  const confident = (!!rawPick && (rawPick.seasonYear || rawPick.season)) || /\bseason\b/i.test(orig)
+  try { console.log('DEBUG strip called orig="' + orig + '" confident=' + !!confident) } catch (e) {}
+    if (confident) {
+      out = out.replace(/\s+\d+(?:st|nd|rd|th)?\s*$/i, '')
+    }
+    try { if (out !== orig) { try { appendLog(`STRIP_ANILIST before=${orig.slice(0,200)} after=${out.slice(0,200)} confident=${!!confident}`) } catch (e) {} } } catch (e) {}
+    return out.trim()
+  } catch (e) { return name }
+}
+
 
 async function metaLookup(title, apiKey, opts = {}) {
   // Lightweight, rate-limited meta lookup using AniList -> Kitsu -> TMDb fallback.
@@ -178,21 +201,7 @@ async function metaLookup(title, apiKey, opts = {}) {
   // Build simple variants to try (original, cleaned, stripped parentheses, lowercase)
   function makeVariants(t){ const s = String(t || '').trim(); const variants = []; if (!s) return variants; variants.push(s); const cleaned = s.replace(/[._\-:]+/g,' ').replace(/\s+/g,' ').trim(); variants.push(cleaned); const stripped = cleaned.replace(/\s*[\[(].*?[\])]/g, '').replace(/\s+/g,' ').trim(); if (stripped && stripped !== cleaned) variants.push(stripped); variants.push(stripped.toLowerCase()); return [...new Set(variants)].slice(0,5) }
 
-  // Strip season-like suffix tokens that AniList might include in titles, e.g. " (Season 2)", "Season 2", "2nd".
-  // This helper is available to the whole metaLookup function so downstream TMDb/Kitsu lookups don't receive AniList's season-suffixed titles.
-  function stripAniListSeasonSuffix(name) {
-    try {
-      if (!name) return name
-      let out = String(name)
-      out = out.replace(/\s*\(\s*Season\s*\d{1,2}(?:st|nd|rd|th)?\s*\)\s*$/i, '')
-      out = out.replace(/\s+Season\s+\d{1,2}(?:st|nd|rd|th)?\s*$/i, '')
-      out = out.replace(/\s+\d{1,2}(?:st|nd|rd|th)?\s+Season\s*$/i, '')
-      // Do not remove trailing numeric tokens unconditionally (e.g. "Kaiju No. 8").
-      // Only strip explicit Season tokens above. Avoid overly-aggressive stripping.
-      try { if (out !== String(name)) { try { appendLog(`STRIP_ANILIST before=${String(name).slice(0,200)} after=${out.slice(0,200)}`) } catch (e) {} } } catch (e) {}
-      return out.trim()
-    } catch (e) { return name }
-  }
+  // Use top-level stripAniListSeasonSuffix helper
 
   // Simple HTTP helpers
   const https = require('https')
@@ -298,21 +307,7 @@ async function metaLookup(title, apiKey, opts = {}) {
     return null
   }
 
-  // Strip season suffix tokens that AniList might include in a returned title (e.g. "Show 2nd Season", "Show Season 2")
-  function stripAniListSeasonSuffix(name) {
-    try {
-      if (!name) return name
-      let out = String(name)
-      // remove parenthetical Season tokens: " (Season 2)"
-      out = out.replace(/\s*\(\s*Season\s*\d{1,2}(?:st|nd|rd|th)?\s*\)\s*$/i, '')
-      // remove trailing 'Season N' or 'Nth Season' or '2nd Season' forms
-  out = out.replace(/\s+Season\s+\d{1,2}(?:st|nd|rd|th)?\s*$/i, '')
-  out = out.replace(/\s+\d{1,2}(?:st|nd|rd|th)?\s+Season\s*$/i, '')
-  // remove trailing numeric ordinals like ' 2nd' or ' 3rd' at end of title
-  out = out.replace(/\s+\d+(?:st|nd|rd|th)?\s*$/i, '')
-      return out.trim()
-    } catch (e) { return name }
-  }
+  // Use top-level stripAniListSeasonSuffix helper
 
   // prefer items whose seasonYear or title/relations indicate the requested season/year
   let pick = null
@@ -399,7 +394,7 @@ async function metaLookup(title, apiKey, opts = {}) {
   } catch (e) {}
 
   const rawName = (pick && pick.title) ? (pick.title.english || pick.title.romaji || pick.title.native) : (pick && (pick.romaji || pick.english || pick.native) ? (pick.english || pick.romaji || pick.native) : null)
-  const name = stripAniListSeasonSuffix(rawName)
+  const name = stripAniListSeasonSuffix(rawName, pick)
   return { provider: 'anilist', id: pick.id, name: name, raw: pick }
     } catch (e) { return null }
   }
@@ -478,7 +473,7 @@ async function metaLookup(title, apiKey, opts = {}) {
         let ep = null
         try {
             if (apiKey) {
-            const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name) : v
+            const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
             try { appendLog(`META_TMDB_EP_AFTER_ANILIST tmLookup=${tmLookupName} anilist=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
             const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
             if (tmEp && tmEp.episode) {
@@ -491,14 +486,14 @@ async function metaLookup(title, apiKey, opts = {}) {
               if (!ep) {
             // If no TMDb key is present, explicitly log that we will use Kitsu
             if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY q=${a.name || v}`) } catch (e) {} }
-              ep = await fetchKitsuEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name) : v, opts && opts.episode != null ? opts.episode : null)
+              ep = await fetchKitsuEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v, opts && opts.episode != null ? opts.episode : null)
             try { appendLog(`META_KITSU_EP q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
           }
         } catch (e) { ep = null; try { appendLog(`META_EP_AFTER_ANILIST_ERROR q=${a.name || v} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
         // If Kitsu didn't return an episode title and we have a TMDb key, try TMDb episode endpoint as a fallback
         try {
             if (!ep && apiKey) {
-              const tmLookupNameFb = (a && a.name) ? stripAniListSeasonSuffix(a.name) : v
+              const tmLookupNameFb = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
               try { appendLog(`META_TMDB_EP_FALLBACK tmLookup=${tmLookupNameFb} anilist=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
             const tmEp = await searchTmdbAndEpisode(tmLookupNameFb, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
             if (tmEp && tmEp.episode) {
@@ -527,7 +522,7 @@ async function metaLookup(title, apiKey, opts = {}) {
           let ep = null
           try {
             if (apiKey) {
-              const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name) : parentCandidate
+              const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
               try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT tmLookup=${tmLookupName} anilist=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
               const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
               if (tmEp && tmEp.episode) {
@@ -540,13 +535,13 @@ async function metaLookup(title, apiKey, opts = {}) {
               if (!ep) {
               // If no TMDb key is present, explicitly log that we will use Kitsu
               if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY_PARENT q=${a.name || parentCandidate}`) } catch (e) {} }
-              ep = await fetchKitsuEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name) : parentCandidate, opts && opts.episode != null ? opts.episode : null)
+              ep = await fetchKitsuEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate, opts && opts.episode != null ? opts.episode : null)
               try { appendLog(`META_KITSU_EP_PARENT q=${a.name || parentCandidate} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
             }
           } catch (e) { ep = null; try { appendLog(`META_EP_AFTER_ANILIST_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
           try {
             if (!ep && apiKey) {
-              const tmLookupNameFb = (a && a.name) ? stripAniListSeasonSuffix(a.name) : parentCandidate
+              const tmLookupNameFb = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
               try { appendLog(`META_TMDB_EP_FALLBACK_PARENT tmLookup=${tmLookupNameFb} anilist=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
               const tmEp = await searchTmdbAndEpisode(tmLookupNameFb, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
               if (tmEp && tmEp.episode) {
@@ -2705,6 +2700,8 @@ module.exports._test.incrementalScanLibrary = typeof incrementalScanLibrary !== 
 module.exports._test.loadScanCache = typeof loadScanCache !== 'undefined' ? loadScanCache : null;
 module.exports._test.saveScanCache = typeof saveScanCache !== 'undefined' ? saveScanCache : null;
 module.exports._test.processParsedItem = typeof processParsedItem !== 'undefined' ? processParsedItem : null;
+// expose internal helpers for unit tests
+module.exports._test.stripAniListSeasonSuffix = typeof stripAniListSeasonSuffix !== 'undefined' ? stripAniListSeasonSuffix : null;
 
 // Only start the HTTP server when this file is run directly, not when required as a module
 if (require.main === module) {
