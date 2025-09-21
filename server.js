@@ -120,26 +120,34 @@ let scans = {};
 let renderedIndex = {};
 // Recent hide events for client polling: { ts, path, originalPath, modifiedScanIds }
 let hideEvents = [];
+// Require DB at startup. Fail fast if DB init or cache loads fail so we don't silently fall back to JSON files.
 try {
+  const dbLib = require('./lib/db');
   try {
-    const dbLib = require('./lib/db');
-    try { dbLib.init(path.join(DATA_DIR, 'scans.db')); db = dbLib; appendLog('DB_INIT_SUCCESS'); } catch (e) { appendLog('DB_INIT_FAIL ' + (e && e.message ? e.message : String(e))); db = null; }
-  } catch (e) { db = null }
-  // load caches either from DB KV or from JSON files
-  if (db) {
-    try { enrichCache = db.getKV('enrichCache') || {}; } catch (e) { enrichCache = {}; }
-    try { parsedCache = db.getKV('parsedCache') || {}; } catch (e) { parsedCache = {}; }
-    try { renderedIndex = db.getKV('renderedIndex') || {}; } catch (e) { renderedIndex = {}; }
-    try { hideEvents = db.getHideEvents() || []; } catch (e) { hideEvents = []; }
-    try { scans = db.loadScansObject() || {}; } catch (e) { scans = {}; }
-  } else {
-    try { enrichCache = JSON.parse(fs.readFileSync(enrichStoreFile, 'utf8') || '{}') } catch (e) { enrichCache = {} }
-    try { parsedCache = JSON.parse(fs.readFileSync(parsedCacheFile, 'utf8') || '{}') } catch (e) { parsedCache = {} }
-    try { renderedIndex = JSON.parse(fs.readFileSync(renderedIndexFile, 'utf8') || '{}') } catch (e) { renderedIndex = {} }
-    hideEvents = [];
-    try { scans = JSON.parse(fs.readFileSync(scanStoreFile, 'utf8') || '{}') || {}; } catch (e) { scans = {}; }
+    dbLib.init(path.join(DATA_DIR, 'scans.db'));
+    db = dbLib;
+    appendLog('DB_INIT_SUCCESS');
+  } catch (e) {
+    appendLog('DB_INIT_FAIL ' + (e && e.message ? e.message : String(e)));
+    console.error('DB_INIT_FAIL', e && e.message ? e.message : e);
+    process.exit(1);
   }
-} catch (e) { enrichCache = {}; parsedCache = {}; renderedIndex = {}; hideEvents = []; scans = {}; }
+  try {
+    enrichCache = db.getKV('enrichCache') || {};
+    parsedCache = db.getKV('parsedCache') || {};
+    renderedIndex = db.getKV('renderedIndex') || {};
+    hideEvents = db.getHideEvents() || [];
+    scans = db.loadScansObject() || {};
+  } catch (e) {
+    appendLog('DB_LOAD_FAIL ' + (e && e.message ? e.message : String(e)));
+    console.error('DB_LOAD_FAIL', e && e.message ? e.message : e);
+    process.exit(1);
+  }
+} catch (e) {
+  console.error('DB_MODULE_LOAD_FAIL', e && e.message ? e.message : e);
+  appendLog('DB_MODULE_LOAD_FAIL ' + (e && e.message ? e.message : String(e)));
+  process.exit(1);
+}
 
 // Initialize DB for scans if available
 // (DB was initialized above; this later duplicate block removed)

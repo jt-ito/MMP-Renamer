@@ -56,6 +56,7 @@ node .\scripts\migrate-scans-to-sqlite.js --yes
 Verify results
 
 - After migration, `data/scans.db` should exist and be a SQLite file.
+ - Note: the server now requires the SQLite native module (`better-sqlite3`). If you run the server locally without building the Docker image (which compiles native modules) you will get an error like "better-sqlite3 not installed" and the process will exit. Build the Docker image using the updated `Dockerfile` or install/compile `better-sqlite3` locally before running the server.
 - You can inspect it with the `sqlite3` CLI or a GUI tool. Example with sqlite3 (if available):
 
 ```powershell
