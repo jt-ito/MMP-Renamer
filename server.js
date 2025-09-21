@@ -1922,11 +1922,24 @@ app.post('/api/debug/client-refreshed', requireAuth, (req, res) => {
             // push a confirmation event derived from the original
             try {
               const confirm = { ts: now, path: key, originalPath: ev.originalPath || path, modifiedScanIds: ev.modifiedScanIds || [], reconciled: true }
-              hideEvents.push(confirm)
-              try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
-              if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
-              appendLog(`HIDE_RECONCILED path=${path} via=clientRefreshed`)
-              reconciled.push(path)
+              // avoid appending near-duplicate confirmations (clients may post repeatedly)
+              let shouldAppend = true
+              try {
+                const last = Array.isArray(hideEvents) && hideEvents.length ? hideEvents[hideEvents.length - 1] : null
+                const DUP_MS = 2000
+                if (last && last.reconciled && last.path === confirm.path && Math.abs(now - last.ts) <= DUP_MS) {
+                  shouldAppend = false
+                }
+              } catch (e) { /* non-fatal duplicate check */ }
+              if (shouldAppend) {
+                hideEvents.push(confirm)
+                try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
+                if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
+                appendLog(`HIDE_RECONCILED path=${path} via=clientRefreshed`)
+                reconciled.push(path)
+              } else {
+                appendLog && appendLog(`HIDE_RECONCILED_SKIPPED path=${path} reason=dupe`)
+              }
             } catch (e) {}
             break
           }
@@ -1944,11 +1957,24 @@ app.post('/api/debug/client-refreshed', requireAuth, (req, res) => {
           try {
             if (Array.isArray(ev.modifiedScanIds) && ev.modifiedScanIds.map(String).indexOf(sidStr) !== -1) {
               const confirm = { ts: now, path: ev.path, originalPath: ev.originalPath || null, modifiedScanIds: ev.modifiedScanIds || [], reconciled: true }
-              hideEvents.push(confirm)
-              try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
-              if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
-              appendLog(`HIDE_RECONCILED scan=${scanId} path=${ev.originalPath || ev.path} via=clientRefreshed`)
-              reconciled.push(ev.path || ev.originalPath || sidStr)
+              // avoid appending near-duplicate confirmations for scanId branch
+              let shouldAppend2 = true
+              try {
+                const last2 = Array.isArray(hideEvents) && hideEvents.length ? hideEvents[hideEvents.length - 1] : null
+                const DUP_MS2 = 2000
+                if (last2 && last2.reconciled && last2.path === confirm.path && Math.abs(now - last2.ts) <= DUP_MS2) {
+                  shouldAppend2 = false
+                }
+              } catch (e) { /* non-fatal */ }
+              if (shouldAppend2) {
+                hideEvents.push(confirm)
+                try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
+                if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
+                appendLog(`HIDE_RECONCILED scan=${scanId} path=${ev.originalPath || ev.path} via=clientRefreshed`)
+                reconciled.push(ev.path || ev.originalPath || sidStr)
+              } else {
+                appendLog && appendLog(`HIDE_RECONCILED_SKIPPED scan=${scanId} path=${ev.originalPath || ev.path} reason=dupe`)
+              }
             }
           } catch (e) {}
         }
