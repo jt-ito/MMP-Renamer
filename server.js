@@ -75,6 +75,17 @@ const renderedIndexFile = path.join(DATA_DIR, 'rendered-index.json');
 const parsedCacheFile = path.join(DATA_DIR, 'parsed-cache.json');
 const scanCacheFile = path.join(DATA_DIR, 'scan-cache.json');
 
+// Process-level handlers to capture and log uncaught errors which can otherwise manifest as 502s upstream
+process.on('uncaughtException', (err) => {
+  try { console.error('uncaughtException', err && err.stack ? err.stack : err) } catch (e) {}
+  try { appendLog(`UNCATCHED_EXCEPTION ${err && err.message ? err.message : String(err)}`) } catch (e) {}
+  // allow process to continue for now; container/host should restart if desired
+})
+process.on('unhandledRejection', (reason, p) => {
+  try { console.error('unhandledRejection', reason) } catch (e) {}
+  try { appendLog(`UNHANDLED_REJECTION ${reason && reason.message ? reason.message : String(reason)}`) } catch (e) {}
+})
+
 // Ensure essential data files exist so server can write to them even when they're not in repo
 function ensureFile(filePath, defaultContent) {
   try {
@@ -1952,11 +1963,20 @@ app.post('/api/debug/client-refreshed', requireAuth, (req, res) => {
   } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }) }
 })
 
+// Lightweight health check for probes
+app.get('/api/_health', (req, res) => {
+  try {
+    const lastHide = (Array.isArray(hideEvents) && hideEvents.length) ? hideEvents[hideEvents.length - 1].ts : null
+    const logStat = fs.existsSync(logsFile) ? fs.statSync(logsFile) : null
+    return res.json({ ok: true, lastHideEventTs: lastHide, logsSize: logStat ? logStat.size : 0 })
+  } catch (e) { return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) }) }
+})
+
 // Clients can poll this endpoint to receive recent hide events and reconcile UI.
 // Query param: since (timestamp in ms) to receive events occurring after that timestamp.
 // Use a light per-client cache to avoid log spam when clients poll frequently with the same since value.
 const hideEventsClientCache = new Map(); // key -> { ts, resp, lastHit }
-const HIDE_EVENTS_CACHE_WINDOW_MS = 2000; // 2 seconds
+const HIDE_EVENTS_CACHE_WINDOW_MS = 5000; // 5 seconds - slightly larger to tolerate aggressive polling
 
 app.get('/api/enrich/hide-events', requireAuth, (req, res) => {
   try {
@@ -1974,6 +1994,16 @@ app.get('/api/enrich/hide-events', requireAuth, (req, res) => {
         return res.json(cached.resp)
       }
     } catch (e) { /* non-fatal cache read failure: continue */ }
+
+    // Fast-path: if client asks since=0 and we have no recent hide events, return immediately
+    // This avoids heavy logging and work when a misbehaving client polls aggressively with since=0
+    try {
+      if ((since === 0) && (!Array.isArray(hideEvents) || hideEvents.length === 0)) {
+        const resp = { ok: true, events: [] }
+        try { hideEventsClientCache.set(clientKey, { ts: since, resp, lastHit: now }) } catch (e) {}
+        return res.json(resp)
+      }
+    } catch (e) { /* continue to normal path */ }
 
     try { appendLog(`HIDE_EVENTS_REQ user=${uname} since=${since} hideEventsLen=${Array.isArray(hideEvents) ? hideEvents.length : 'na'}`) } catch (e) {}
 
