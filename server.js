@@ -177,6 +177,11 @@ function stripAniListSeasonSuffix(name, rawPick) {
     // remove trailing 'Season N' or 'Nth Season' or '2nd Season' forms
     out = out.replace(/\s+Season\s+\d{1,2}(?:st|nd|rd|th)?\s*$/i, '')
     out = out.replace(/\s+\d{1,2}(?:st|nd|rd|th)?\s+Season\s*$/i, '')
+    // remove textual ordinal season tokens like 'Third Season' or 'Second Season'
+    out = out.replace(/\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+Season\s*$/i, '')
+    out = out.replace(/\s+Season\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s*$/i, '')
+    // remove trailing S## tokens (e.g., ' S02') or 'S02E03' if left at the end
+    out = out.replace(/\s+S\d{1,2}(?:E\d{1,3})?\s*$/i, '')
     // Only remove ambiguous trailing numeric tokens if we have confidence it's a season token.
     // Only strip explicit season tokens (handled above). Avoid removing generic trailing
     // numeric tokens (e.g., 'No. 8') because many series include numbers as part of
