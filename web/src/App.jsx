@@ -1665,49 +1665,24 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 setAllItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
               }
 
-              // refresh affected scans if server indicates modification and wait for them to complete
+              // Refresh affected scans: perform optimistic local removal, then
+              // always trigger background rescan + authoritative per-path enrich
+              // update and notify the server. Do NOT fetch or merge scan pages
+              // here — that can stomp the user's current view/scroll/pagination.
               try {
                 const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
                 if (modified && modified.length) {
-                  try { console.debug('[client] HIDE_MODIFIED_IDS', { path: originalPath, modified, itemsLen: (items||[]).length, allItemsLen: (allItems||[]).length, searchQuery }) } catch (e) {}
-                  const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
-                  for (const sid of toReload) {
-                    try {
-                      // If user is actively searching, avoid fetching/merging pages
-                      // which could replace the current search results. Instead start
-                      // a background server-side refresh (rescan) and then refresh
-                      // authoritative enrichment for the affected path so the
-                      // hidden flag is applied without touching the visible list.
-                      if (searchQuery && searchQuery.length) {
-                        try { console.debug('[client] START_BG_REFRESH_DUE_TO_SEARCH', { sid, path: serverKey || originalPath }) } catch (e) {}
-                        ;(async () => {
-                          try {
-                            await refreshScan(sid)
-                          } catch (e) {}
-                          try { await refreshEnrichForPaths([ serverKey || originalPath ]) } catch (e) {}
-                        })()
-                        try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                        continue
-                      }
-                      // Otherwise perform fast first-page fetch & merge as before
-                      const m = await axios.get(API(`/scan/${sid}`))
-                      const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,50)}`)).catch(() => ({ data: { items: [] } }))
-                      const coll = pgr.data.items || []
-                      if (sid === scanId || sid === lastScanId) {
-                        try {
-                          try { setScanMeta(m.data) } catch (e) {}
-                          try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {}
-                          try { setAllItems(prev => {
-                            const base = (prev && prev.length) ? prev : (items || [])
-                            return mergeItemsUnique(base, coll, false)
-                          }) } catch (e) {}
-                        } catch (e) { /* swallow */ }
-                        try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                      }
-                    } catch (e) { /* best-effort */ }
+                  try { console.debug('[client] HIDE_MODIFIED_IDS_BG_REFRESH', { path: originalPath, modified }) } catch (e) {}
+                  const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
+                  for (const sid of toNotify) {
+                    ;(async () => {
+                      try { await refreshScan(sid) } catch (e) {}
+                      try { await refreshEnrichForPaths([ serverKey || originalPath ]) } catch (e) {}
+                    })()
+                    try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
                   }
                 } else {
-                  try { console.debug('[client] HIDE_NO_MODIFIED_IDS', { path: originalPath, itemsLen: (items||[]).length, allItemsLen: (allItems||[]).length, searchQuery }) } catch (e) {}
+                  try { console.debug('[client] HIDE_NO_MODIFIED_IDS_BG', { path: originalPath }) } catch (e) {}
                 }
               } catch (e) { /* swallow */ }
 
@@ -1792,30 +1767,18 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                         if (!handled) pushToast && pushToast('Hide', 'Failed to hide')
                       } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
                     }
-                // If POST did return modifiedScanIds before network error, reload those scans
+                // If POST did return modifiedScanIds before network error, trigger
+                // background rescan + per-path enrich refresh and notify server.
                 try {
                   const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
-                    if (modified && modified.length) {
-                    const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
-                    for (const sid of toReload) {
-                      try {
-                        if (searchQuery && searchQuery.length) {
-                          ;(async () => { try { await refreshScan(sid) } catch (e) {} try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {} })()
-                          try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                          continue
-                        }
-                        const m = await axios.get(API(`/scan/${sid}`))
-                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,50)}`)).catch(() => ({ data: { items: [] } }))
-                        const coll = pgr.data.items || []
-                        if (sid === scanId || sid === lastScanId) {
-                          try {
-                            try { setScanMeta(m.data) } catch (e) {}
-                            try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {}
-                            try { setAllItems(prev => mergeItemsUnique((prev && prev.length) ? prev : (items || []), coll, false)) } catch (e) {}
-                          } catch (e) { /* swallow */ }
-                          try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                        }
-                      } catch (e) {}
+                  if (modified && modified.length) {
+                    const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
+                    for (const sid of toNotify) {
+                      ;(async () => {
+                        try { await refreshScan(sid) } catch (e) {}
+                        try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {}
+                      })()
+                      try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
                     }
                   }
                 } catch (ee) {}
@@ -1827,57 +1790,24 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               }
             } finally {
               // Always attempt to refresh affected scans so UI matches server state.
-              try {
-                const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
-                if (modified && modified.length) {
-                  const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
-                  for (const sid of toReload) {
-                    try {
-                      // If the user is actively searching, never fetch/merge pages here.
-                      if (searchQuery && searchQuery.length) {
-                        try { console.debug('[client] SKIP_FINAL_SCAN_FETCH_DUE_TO_SEARCH', { sid, modified, searchQuery }) } catch (e) {}
-                        ;(async () => { try { await refreshScan(sid) } catch (e) {} try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {} })()
-                        try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                        continue
-                      }
-                      const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
-                      if (m && m.data) {
-                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,50)}`)).catch(() => ({ data: { items: [] } }))
-                        const coll = pgr.data.items || []
-                        if (sid === scanId || sid === lastScanId) {
-                          try {
-                            try { setScanMeta(m.data) } catch (e) {}
-                            try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {}
-                            try { setAllItems(prev => mergeItemsUnique((prev && prev.length) ? prev : (items || []), coll, false)) } catch (e) {}
-                          } catch (e) { /* swallow */ }
-                        }
-                      }
-                    } catch (e) { /* swallow */ }
+                try {
+                  const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
+                  if (modified && modified.length) {
+                    const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
+                    for (const sid of toNotify) {
+                      ;(async () => {
+                        try { await refreshScan(sid) } catch (e) {}
+                        try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {}
+                      })()
+                      try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
+                    }
+                  } else {
+                    const sid = scanId || lastScanId
+                    if (sid) {
+                      ;(async () => { try { await refreshScan(sid) } catch (e) {} try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {} })()
+                    }
                   }
-                } else {
-                  // Fallback: if server didn't return modifiedScanIds (or POST failed), reload first page for the current scan
-                  const sid = scanId || lastScanId
-                  if (sid) {
-                    try {
-                      // If user is actively searching, don't fetch/merge the first page
-                      // (it can stomp search results). Instead start background refresh
-                      // and refresh authoritative enrichment for the hidden path.
-                      if (searchQuery && searchQuery.length) {
-                        try { console.debug('[client] SKIP_FINAL_FALLBACK_FETCH_DUE_TO_SEARCH', { sid, searchQuery }) } catch (e) {}
-                        ;(async () => { try { await refreshScan(sid) } catch (e) {} try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {} })()
-                        try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                      } else {
-                        const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
-                        if (m && m.data) {
-                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,50)}`)).catch(() => ({ data: { items: [] } }))
-                          const coll = pgr.data.items || []
-                          try { try { setScanMeta(m.data) } catch (e) {} try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {} try { setAllItems(prev => mergeItemsUnique((prev && prev.length) ? prev : (items || []), coll, false)) } catch (e) {} } catch (e) {}
-                        }
-                      }
-                    } catch (e) { /* swallow */ }
-                  }
-                }
-              } catch (ee) { /* best-effort refresh */ }
+                } catch (ee) { /* best-effort refresh */ }
               safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[originalPath]; return n })
             }
           }}>{loading ? <Spinner/> : <><IconCopy/> <span>Hide</span></>}</button>
