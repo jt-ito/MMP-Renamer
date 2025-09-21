@@ -1833,6 +1833,13 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
                   for (const sid of toReload) {
                     try {
+                      // If the user is actively searching, never fetch/merge pages here.
+                      if (searchQuery && searchQuery.length) {
+                        try { console.debug('[client] SKIP_FINAL_SCAN_FETCH_DUE_TO_SEARCH', { sid, modified, searchQuery }) } catch (e) {}
+                        ;(async () => { try { await refreshScan(sid) } catch (e) {} try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {} })()
+                        try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
+                        continue
+                      }
                       const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
                       if (m && m.data) {
                         const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,50)}`)).catch(() => ({ data: { items: [] } }))
@@ -1856,7 +1863,9 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                       // (it can stomp search results). Instead start background refresh
                       // and refresh authoritative enrichment for the hidden path.
                       if (searchQuery && searchQuery.length) {
+                        try { console.debug('[client] SKIP_FINAL_FALLBACK_FETCH_DUE_TO_SEARCH', { sid, searchQuery }) } catch (e) {}
                         ;(async () => { try { await refreshScan(sid) } catch (e) {} try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {} })()
+                        try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
                       } else {
                         const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
                         if (m && m.data) {
