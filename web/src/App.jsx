@@ -345,17 +345,31 @@ export default function App() {
       setTotal(meta.totalCount || clean.length)
       // replace baseline listing
       setAllItems(clean)
-      // If user is actively searching, re-run the search so results remain focused
+      // If user is actively searching, prefer client-side filtering when safe so
+      // we don't cause a full server-side update that could reset the view.
       if (searchQuery && searchQuery.length) {
-        // doSearch will update items based on searchQuery; use it to preserve behavior
-        try { doSearch(searchQuery) } catch (e) { /* best-effort */ }
+        try {
+          if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
+            const q = searchQuery
+            const lowered = q.toLowerCase()
+            const results = clean.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+            setItems(results)
+            setTotal(results.length)
+          } else {
+            // baseline too large for in-memory search: delegate to doSearch
+            try { doSearch(searchQuery) } catch (e) { /* best-effort */ }
+          }
+        } catch (e) { /* best-effort */ }
       } else {
         // No active search: if dataset small enough, show all; otherwise show provided first page
         if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
           setItems(clean.slice())
         } else {
-          // for large scans, show the provided coll as the current loaded items
-          setItems(clean.slice(0, Math.max(batchSize, 50)))
+          const firstPage = clean.slice(0, Math.max(batchSize, 50))
+          setItems(prev => {
+            try { if (prev && prev.length > (firstPage || []).length) return mergeItemsUnique(prev, firstPage, false) } catch (e) {}
+            return firstPage
+          })
         }
       }
       try { setCurrentScanPaths(new Set((clean||[]).map(x => x.canonicalPath))) } catch (e) {}
