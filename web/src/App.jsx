@@ -84,6 +84,7 @@ export default function App() {
   const [searching, setSearching] = useState(false)
   const searchAbortRef = React.useRef(null)
   const searchTimeoutRef = React.useRef(null)
+  const loadingMoreRef = React.useRef(false)
   const [enrichCache, setEnrichCache] = useLocalState('enrichCache', {})
   const [logs, setLogs] = useState('')
   const [toasts, setToasts] = useState([])
@@ -492,7 +493,25 @@ export default function App() {
                       if (m && m.data) {
                         const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`)).catch(() => ({ data: { items: [] } }))
                         const coll = pgr.data.items || []
-                        try { updateScanDataAndPreserveView(m.data, coll) } catch(e) {}
+                        try {
+                          // If the client already has more items loaded than this first-page reload,
+                          // avoid stomping the user's current view. Instead, update meta/total and
+                          // merge any new items into the existing lists so the visible list is
+                          // preserved while keeping server metadata in sync.
+                          if (items && items.length > (coll || []).length) {
+                            try { setScanMeta(m.data) } catch (e) {}
+                            try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {}
+                            try {
+                              // ensure allItems reflects any newly-provided page rows without replacing
+                              setAllItems(prev => {
+                                const base = (prev && prev.length) ? prev : (items || [])
+                                return mergeItemsUnique(base, coll, false)
+                              })
+                            } catch (e) {}
+                          } else {
+                            try { updateScanDataAndPreserveView(m.data, coll) } catch(e) {}
+                          }
+                        } catch(e) {}
                         try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
                       }
                     } catch (e) { /* swallow */ }
@@ -820,6 +839,8 @@ export default function App() {
 
   const handleScrollNearEnd = async () => {
     if (!scanId) return
+    if (loadingMoreRef.current) return
+    loadingMoreRef.current = true
     // Attempt to fetch pages until we either find visible items or reach a reasonable attempt limit.
     // This handles cases where the server reports a non-zero total but the first N pages contain
     // only items that are hidden/applied on the client and therefore filtered out locally.
@@ -885,6 +906,7 @@ export default function App() {
         else if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
       }
     } catch (e) {}
+    finally { loadingMoreRef.current = false }
   }
 
   // run a fresh search and replace visible items with results
@@ -1601,13 +1623,26 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                         off += its.length
                       }
                       if (sid === scanId || sid === lastScanId) {
-                        try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
-                          setScanMeta(m.data)
-                          setTotal(m.data.totalCount || coll.length)
-                          setItems(coll.filter(it => it && it.canonicalPath))
-                          setAllItems(coll.filter(it => it && it.canonicalPath))
-                          try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
-                        }
+                        try {
+                          if (items && items.length > (coll || []).length) {
+                            try { setScanMeta(m.data) } catch (e) {}
+                            try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {}
+                            try {
+                              setAllItems(prev => {
+                                const base = (prev && prev.length) ? prev : (items || [])
+                                return mergeItemsUnique(base, coll, false)
+                              })
+                            } catch (e) {}
+                          } else {
+                            try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
+                              setScanMeta(m.data)
+                              setTotal(m.data.totalCount || coll.length)
+                              setItems(coll.filter(it => it && it.canonicalPath))
+                              setAllItems(coll.filter(it => it && it.canonicalPath))
+                              try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
+                            }
+                          }
+                        } catch (e) { /* swallow */ }
                         // inform server we refreshed this scan so server logs can confirm client-side refresh
                         try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
                       }
@@ -1715,13 +1750,21 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                           off += its.length
                         }
                         if (sid === scanId || sid === lastScanId) {
-                            try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
-                              setScanMeta(m.data)
-                              setTotal(m.data.totalCount || coll.length)
-                              setItems(coll.filter(it => it && it.canonicalPath))
-                              setAllItems(coll.filter(it => it && it.canonicalPath))
-                              try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
-                            }
+                            try {
+                              if (items && items.length > (coll || []).length) {
+                                try { setScanMeta(m.data) } catch (e) {}
+                                try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {}
+                                try { setAllItems(prev => mergeItemsUnique((prev && prev.length) ? prev : (items || []), coll, false)) } catch (e) {}
+                              } else {
+                                try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
+                                  setScanMeta(m.data)
+                                  setTotal(m.data.totalCount || coll.length)
+                                  setItems(coll.filter(it => it && it.canonicalPath))
+                                  setAllItems(coll.filter(it => it && it.canonicalPath))
+                                  try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
+                                }
+                              }
+                            } catch (e) { /* swallow */ }
                           // inform server we refreshed this scan so server logs can confirm client-side refresh
                           try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
                         }
@@ -1755,13 +1798,21 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                           off += its.length
                         }
                         if (sid === scanId || sid === lastScanId) {
-                          try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
-                            setScanMeta(m.data)
-                            setTotal(m.data.totalCount || coll.length)
-                            setItems(coll.filter(it => it && it.canonicalPath))
-                            setAllItems(coll.filter(it => it && it.canonicalPath))
-                            try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
-                          }
+                          try {
+                            if (items && items.length > (coll || []).length) {
+                              try { setScanMeta(m.data) } catch (e) {}
+                              try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {}
+                              try { setAllItems(prev => mergeItemsUnique((prev && prev.length) ? prev : (items || []), coll, false)) } catch (e) {}
+                            } else {
+                              try { updateScanDataAndPreserveView(m.data, coll) } catch (e) {
+                                setScanMeta(m.data)
+                                setTotal(m.data.totalCount || coll.length)
+                                setItems(coll.filter(it => it && it.canonicalPath))
+                                setAllItems(coll.filter(it => it && it.canonicalPath))
+                                try { setCurrentScanPaths(new Set((coll||[]).map(x => x.canonicalPath))) } catch (ee) {}
+                              }
+                            }
+                          } catch (e) { /* swallow */ }
                         }
                       }
                     } catch (e) { /* swallow */ }
