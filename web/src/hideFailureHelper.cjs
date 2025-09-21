@@ -58,21 +58,18 @@ module.exports = async function handleHideFailureCore(opts) {
           } catch (e) { /* swallow */ }
         }
       } else {
+        // Fallback: fetch only the first page and merge it into baseline instead
+        // of walking the entire scan (this avoids stomping the current view/scroll).
         const sid = scanId || lastScanId
         if (sid) {
           try {
             const m = await fetchScanMeta(sid)
             if (m) {
-              const total = m.totalCount || 0
-              const coll = []
-              let off = 0
-              while (off < total) {
-                const pgr = await fetchScanItemsPage(sid, off, batchSize)
-                const its = (pgr && pgr.items) ? pgr.items : []
-                coll.push(...its)
-                off += its.length
-              }
-              try { if (updateScanDataAndPreserveView) updateScanDataAndPreserveView(m, coll) } catch (e) {
+              const pgr = await fetchScanItemsPage(sid, 0, Math.max(batchSize, 12))
+              const coll = (pgr && pgr.items) ? pgr.items : []
+              try {
+                if (updateScanDataAndPreserveView) updateScanDataAndPreserveView(m, coll)
+              } catch (e) {
                 try { setItems && setItems(coll.filter(it => it && it.canonicalPath)) } catch (ee) {}
                 try { setAllItems && setAllItems(coll.filter(it => it && it.canonicalPath)) } catch (ee) {}
               }
