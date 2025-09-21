@@ -89,7 +89,7 @@ export default function App() {
   const [toasts, setToasts] = useState([])
   const [loadingEnrich, setLoadingEnrich] = useState({})
   // last seen hide event timestamp (ms)
-  const lastHideEventTsRef = useRef(0)
+  const lastHideEventTsRef = useRef( Number(localStorage.getItem('lastHideEventTs') || '0') || 0 )
 
   // Wait for a hide event matching any of the provided candidate paths.
   // Returns the event object if found within timeoutMs, otherwise null.
@@ -104,7 +104,10 @@ export default function App() {
             for (const ev of r.data.events) {
               try {
                 // update last seen ts
-                if (ev && ev.ts && ev.ts > (lastHideEventTsRef.current || 0)) lastHideEventTsRef.current = ev.ts
+                if (ev && ev.ts && ev.ts > (lastHideEventTsRef.current || 0)) {
+                  lastHideEventTsRef.current = ev.ts
+                  try { localStorage.setItem('lastHideEventTs', String(lastHideEventTsRef.current)) } catch (e) {}
+                }
                 // match by canonical path or originalPath if provided
                 if (!ev) continue
                 const p = ev.path || ev.originalPath || ''
@@ -460,54 +463,74 @@ export default function App() {
     let mounted = true
     let timer = null
     async function poll() {
-      try {
-        const since = lastHideEventTsRef.current || 0
-        const r = await axios.get(API('/enrich/hide-events'), { params: { since } }).catch(() => null)
-        if (!mounted) return
-        if (r && r.data && Array.isArray(r.data.events) && r.data.events.length) {
-          for (const ev of r.data.events) {
-            try {
-              // update last seen ts
-              if (ev && ev.ts && ev.ts > (lastHideEventTsRef.current || 0)) lastHideEventTsRef.current = ev.ts
-              // Reload any indicated scans (but preserve current search/view)
-              const modified = ev.modifiedScanIds || []
-                if (modified && modified.length) {
-                // keep reloads fast by fetching only the first page for the affected scans
-                const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
-                for (const sid of toReload) {
-                  try {
-                    const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
-                    if (m && m.data) {
-                      const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`)).catch(() => ({ data: { items: [] } }))
-                      const coll = pgr.data.items || []
-                      try { updateScanDataAndPreserveView(m.data, coll) } catch(e) {}
-                      try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
-                    }
-                  } catch (e) { /* swallow */ }
+      // Exponential backoff parameters
+      let interval = 800
+      const maxInterval = 30000
+      while (mounted) {
+        try {
+          const since = lastHideEventTsRef.current || 0
+          const r = await axios.get(API('/enrich/hide-events'), { params: { since } }).catch(() => null)
+          if (!mounted) return
+          let hadEvents = false
+          if (r && r.data && Array.isArray(r.data.events) && r.data.events.length) {
+            hadEvents = true
+            for (const ev of r.data.events) {
+              try {
+                // update last seen ts and persist
+                if (ev && ev.ts && ev.ts > (lastHideEventTsRef.current || 0)) {
+                  lastHideEventTsRef.current = ev.ts
+                  try { localStorage.setItem('lastHideEventTs', String(lastHideEventTsRef.current)) } catch (e) {}
                 }
-              }
-              // Always refresh authoritative enrichment for the event path so hidden/applied flags are up-to-date
-              if (ev && ev.path) {
-                try {
-                  const er = await axios.get(API('/enrich'), { params: { path: ev.path } }).catch(() => null)
-                  const auth = er && er.data && (er.data.enrichment || er.data) ? (er.data.enrichment || er.data) : null
-                  const norm = auth ? normalizeEnrichResponse(auth) : null
-                  if (norm) {
-                    setEnrichCache(prev => ({ ...prev, [ev.path]: norm }))
-                    if (norm.hidden || norm.applied) {
-                      setItems(prev => prev.filter(x => x.canonicalPath !== ev.path))
-                      setAllItems(prev => prev.filter(x => x.canonicalPath !== ev.path))
-                    }
+                // Reload any indicated scans (but preserve current search/view)
+                const modified = ev.modifiedScanIds || []
+                if (modified && modified.length) {
+                  // keep reloads fast by fetching only the first page for the affected scans
+                  const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
+                  for (const sid of toReload) {
+                    try {
+                      const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
+                      if (m && m.data) {
+                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`)).catch(() => ({ data: { items: [] } }))
+                        const coll = pgr.data.items || []
+                        try { updateScanDataAndPreserveView(m.data, coll) } catch(e) {}
+                        try { await axios.post(API('/debug/client-refreshed'), { scanId: sid }).catch(()=>null) } catch (e) {}
+                      }
+                    } catch (e) { /* swallow */ }
                   }
-                } catch (e) {}
-              }
-            } catch (e) { /* per-event best-effort */ }
+                }
+                // Always refresh authoritative enrichment for the event path so hidden/applied flags are up-to-date
+                if (ev && ev.path) {
+                  try {
+                    const er = await axios.get(API('/enrich'), { params: { path: ev.path } }).catch(() => null)
+                    const auth = er && er.data && (er.data.enrichment || er.data) ? (er.data.enrichment || er.data) : null
+                    const norm = auth ? normalizeEnrichResponse(auth) : null
+                    if (norm) {
+                      setEnrichCache(prev => ({ ...prev, [ev.path]: norm }))
+                      if (norm.hidden || norm.applied) {
+                        setItems(prev => prev.filter(x => x.canonicalPath !== ev.path))
+                        setAllItems(prev => prev.filter(x => x.canonicalPath !== ev.path))
+                      }
+                    }
+                  } catch (e) {}
+                }
+              } catch (e) { /* per-event best-effort */ }
+            }
           }
+          // adjust polling based on whether we received events
+          if (hadEvents) {
+            interval = 800 // reset to responsive interval
+          } else {
+            // exponential backoff up to maxInterval when there are no events
+            interval = Math.min(maxInterval, Math.max(800, interval * 2))
+          }
+        } catch (e) {
+          // on error, back off as well
+          interval = Math.min(30000, (interval || 800) * 2)
         }
-      } catch (e) { /* best-effort overall */ }
-      // schedule next poll (short interval for responsive hide handling)
-      if (!mounted) return
-      timer = setTimeout(poll, 800)
+        // schedule next poll
+        if (!mounted) return
+        await new Promise(r => timer = setTimeout(r, interval))
+      }
     }
     poll()
     return () => { mounted = false; if (timer) clearTimeout(timer) }

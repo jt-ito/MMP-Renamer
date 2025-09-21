@@ -1954,16 +1954,38 @@ app.post('/api/debug/client-refreshed', requireAuth, (req, res) => {
 
 // Clients can poll this endpoint to receive recent hide events and reconcile UI.
 // Query param: since (timestamp in ms) to receive events occurring after that timestamp.
+// Use a light per-client cache to avoid log spam when clients poll frequently with the same since value.
+const hideEventsClientCache = new Map(); // key -> { ts, resp, lastHit }
+const HIDE_EVENTS_CACHE_WINDOW_MS = 2000; // 2 seconds
+
 app.get('/api/enrich/hide-events', requireAuth, (req, res) => {
   try {
     const since = parseInt(req.query.since || '0', 10) || 0
     const uname = req.session && req.session.username ? String(req.session.username) : '<anon>'
+    const clientIp = req.ip || (req.connection && req.connection.remoteAddress) || 'unknown'
+    const clientKey = `${clientIp}|${uname}`
+
+    const now = Date.now()
+    try {
+      const cached = hideEventsClientCache.get(clientKey)
+      if (cached && cached.ts === since && (now - cached.lastHit) < HIDE_EVENTS_CACHE_WINDOW_MS) {
+        // refresh lastHit and return cached response to avoid duplicate logs
+        cached.lastHit = now
+        return res.json(cached.resp)
+      }
+    } catch (e) { /* non-fatal cache read failure: continue */ }
+
     try { appendLog(`HIDE_EVENTS_REQ user=${uname} since=${since} hideEventsLen=${Array.isArray(hideEvents) ? hideEvents.length : 'na'}`) } catch (e) {}
+
     // defensive: ensure hideEvents is an array
     const he = Array.isArray(hideEvents) ? hideEvents : []
     const ev = he.filter(e => (e && e.ts && e.ts > since))
+    const resp = { ok: true, events: ev || [] }
+
     try { appendLog(`HIDE_EVENTS_RESP user=${uname} since=${since} matched=${(ev && ev.length) || 0}`) } catch (e) {}
-    return res.json({ ok: true, events: ev || [] })
+
+    try { hideEventsClientCache.set(clientKey, { ts: since, resp, lastHit: now }) } catch (e) {}
+    return res.json(resp)
   } catch (e) {
     try { appendLog(`HIDE_EVENTS_ERR err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
     try { console.error('hide-events failed', e && e.message ? e.message : e) } catch (ee) {}
@@ -2636,8 +2658,34 @@ app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {
 // Logs endpoints
 app.get('/api/logs/recent', (req, res) => {
   try {
-    const tail = fs.existsSync(logsFile) ? fs.readFileSync(logsFile, 'utf8').split('\n').slice(-200).join('\n') : '';
-    return res.json({ logs: tail });
+    // Read only the last ~100KB from the logs file to avoid loading very large files into memory.
+    if (!fs.existsSync(logsFile)) return res.json({ logs: '' })
+    const stat = fs.statSync(logsFile)
+    const maxBytes = 100 * 1024 // 100 KB
+    const start = Math.max(0, stat.size - maxBytes)
+    const stream = fs.createReadStream(logsFile, { start, end: stat.size })
+    let sb = ''
+    stream.setEncoding('utf8')
+    stream.on('data', d => sb += d)
+    stream.on('error', (err) => {
+      try { console.error('logs/recent stream failed', err && err.message ? err.message : err) } catch (ee) {}
+      try {
+        const stat2 = fs.existsSync(logsFile) ? fs.statSync(logsFile) : null
+        const info = stat2 ? { size: stat2.size, mtime: stat2.mtimeMs } : { size: 0 }
+        return res.json({ logs: '', fallback: true, message: 'logs temporarily unavailable', info })
+      } catch (ee) {
+        return res.json({ logs: '', fallback: true, message: 'logs temporarily unavailable' })
+      }
+    })
+    stream.on('end', () => {
+      try {
+        const tail = String(sb || '').split('\n').slice(-200).join('\n')
+        return res.json({ logs: tail })
+      } catch (e) {
+        try { console.error('logs/recent post-process failed', e && e.message ? e.message : e) } catch (ee) {}
+        return res.status(500).json({ error: e && e.message ? e.message : String(e) })
+      }
+    })
   } catch (e) {
     try { console.error('logs/recent read failed', e && e.message ? e.message : e) } catch (ee) {}
     return res.status(500).json({ error: e && e.message ? e.message : String(e) })
