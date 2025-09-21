@@ -528,36 +528,46 @@ export default function App() {
                 // Reload any indicated scans (but preserve current search/view)
                 const modified = ev.modifiedScanIds || []
                 if (modified && modified.length) {
-                  // keep reloads fast by fetching only the first page for the affected scans
-                                  const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
-                  for (const sid of toReload) {
-                    try {
-                      const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
-                      if (m && m.data) {
-                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`)).catch(() => ({ data: { items: [] } }))
-                        const coll = pgr.data.items || []
-                        try {
-                          // If the client already has more items loaded than this first-page reload,
-                          // avoid stomping the user's current view. Instead, update meta/total and
-                          // merge any new items into the existing lists so the visible list is
-                          // preserved while keeping server metadata in sync.
-                          if (items && items.length > (coll || []).length) {
-                            try { setScanMeta(m.data) } catch (e) {}
-                            try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {}
-                            try {
-                              // ensure allItems reflects any newly-provided page rows without replacing
-                              setAllItems(prev => {
-                                const base = (prev && prev.length) ? prev : (items || [])
-                                return mergeItemsUnique(base, coll, false)
-                              })
-                            } catch (e) {}
-                          } else {
-                            try { updateScanDataAndPreserveView(m.data, coll) } catch(e) {}
-                          }
-                        } catch(e) {}
-                        try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                      }
-                    } catch (e) { /* swallow */ }
+                  // If the user has an active search query, skip fetching and merging
+                  // scan pages so we don't stomp the server-driven search results.
+                  if (searchQuery && searchQuery.length) {
+                    try { console.debug('[client] SKIP_PAGE_FETCH_DUE_TO_SEARCH', { modified, scanId, lastScanId, searchQuery }) } catch (e) {}
+                    // still notify server we refreshed client view for diagnostics
+                    for (const sid of modified.filter(sid => sid === scanId || sid === lastScanId)) {
+                      try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
+                    }
+                  } else {
+                    // keep reloads fast by fetching only the first page for the affected scans
+                    const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
+                    for (const sid of toReload) {
+                      try {
+                        const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
+                        if (m && m.data) {
+                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`)).catch(() => ({ data: { items: [] } }))
+                          const coll = pgr.data.items || []
+                          try {
+                            // If the client already has more items loaded than this first-page reload,
+                            // avoid stomping the user's current view. Instead, update meta/total and
+                            // merge any new items into the existing lists so the visible list is
+                            // preserved while keeping server metadata in sync.
+                            if (items && items.length > (coll || []).length) {
+                              try { setScanMeta(m.data) } catch (e) {}
+                              try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {}
+                              try {
+                                // ensure allItems reflects any newly-provided page rows without replacing
+                                setAllItems(prev => {
+                                  const base = (prev && prev.length) ? prev : (items || [])
+                                  return mergeItemsUnique(base, coll, false)
+                                })
+                              } catch (e) {}
+                            } else {
+                              try { updateScanDataAndPreserveView(m.data, coll) } catch(e) {}
+                            }
+                          } catch(e) {}
+                          try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
+                        }
+                      } catch (e) { /* swallow */ }
+                    }
                   }
                 }
                 // Always refresh authoritative enrichment for the event path so hidden/applied flags are up-to-date
@@ -1142,6 +1152,12 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery])
 
+  // Expose a global flag for helpers to determine if client is actively searching.
+  React.useEffect(() => {
+    try { if (typeof window !== 'undefined') window.__CLIENT_ACTIVE_SEARCH__ = !!(searchQuery && searchQuery.length) } catch (e) {}
+    return () => { try { if (typeof window !== 'undefined' && window.__CLIENT_ACTIVE_SEARCH__) window.__CLIENT_ACTIVE_SEARCH__ = false } catch (e) {} }
+  }, [searchQuery])
+
   async function previewRename(selected, template) {
   // include configured output path from local storage (client preference), server will also accept its persisted setting
   const outputPath = (() => { try { return localStorage.getItem('scan_output_path') || '' } catch { return '' } })()
@@ -1657,24 +1673,35 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
                   for (const sid of toReload) {
                     try {
-                      // Fetch only first page for a fast, non-stomping refresh
+                      // If user is actively searching, avoid fetching/merging pages
+                      // which could replace the current search results. Instead start
+                      // a background server-side refresh (rescan) and then refresh
+                      // authoritative enrichment for the affected path so the
+                      // hidden flag is applied without touching the visible list.
+                      if (searchQuery && searchQuery.length) {
+                        try { console.debug('[client] START_BG_REFRESH_DUE_TO_SEARCH', { sid, path: serverKey || originalPath }) } catch (e) {}
+                        ;(async () => {
+                          try {
+                            await refreshScan(sid)
+                          } catch (e) {}
+                          try { await refreshEnrichForPaths([ serverKey || originalPath ]) } catch (e) {}
+                        })()
+                        try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
+                        continue
+                      }
+                      // Otherwise perform fast first-page fetch & merge as before
                       const m = await axios.get(API(`/scan/${sid}`))
                       const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,50)}`)).catch(() => ({ data: { items: [] } }))
                       const coll = pgr.data.items || []
                       if (sid === scanId || sid === lastScanId) {
                         try {
-                          // Update scan meta and total, but avoid replacing the user's current items
                           try { setScanMeta(m.data) } catch (e) {}
                           try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {}
-                          // Merge the first-page rows into allItems without stomping the visible list
-                          try {
-                            setAllItems(prev => {
-                              const base = (prev && prev.length) ? prev : (items || [])
-                              return mergeItemsUnique(base, coll, false)
-                            })
-                          } catch (e) {}
+                          try { setAllItems(prev => {
+                            const base = (prev && prev.length) ? prev : (items || [])
+                            return mergeItemsUnique(base, coll, false)
+                          }) } catch (e) {}
                         } catch (e) { /* swallow */ }
-                        // inform server we refreshed this scan so server logs can confirm client-side refresh
                         try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
                       }
                     } catch (e) { /* best-effort */ }
@@ -1768,10 +1795,15 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 // If POST did return modifiedScanIds before network error, reload those scans
                 try {
                   const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
-                  if (modified && modified.length) {
+                    if (modified && modified.length) {
                     const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
                     for (const sid of toReload) {
                       try {
+                        if (searchQuery && searchQuery.length) {
+                          ;(async () => { try { await refreshScan(sid) } catch (e) {} try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {} })()
+                          try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
+                          continue
+                        }
                         const m = await axios.get(API(`/scan/${sid}`))
                         const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,50)}`)).catch(() => ({ data: { items: [] } }))
                         const coll = pgr.data.items || []
@@ -1820,15 +1852,18 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   const sid = scanId || lastScanId
                   if (sid) {
                     try {
-                      const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
-                      if (m && m.data) {
-                        const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,50)}`)).catch(() => ({ data: { items: [] } }))
-                        const coll = pgr.data.items || []
-                        try {
-                          try { setScanMeta(m.data) } catch (e) {}
-                          try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {}
-                          try { setAllItems(prev => mergeItemsUnique((prev && prev.length) ? prev : (items || []), coll, false)) } catch (e) {}
-                        } catch (e) { /* swallow */ }
+                      // If user is actively searching, don't fetch/merge the first page
+                      // (it can stomp search results). Instead start background refresh
+                      // and refresh authoritative enrichment for the hidden path.
+                      if (searchQuery && searchQuery.length) {
+                        ;(async () => { try { await refreshScan(sid) } catch (e) {} try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {} })()
+                      } else {
+                        const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
+                        if (m && m.data) {
+                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,50)}`)).catch(() => ({ data: { items: [] } }))
+                          const coll = pgr.data.items || []
+                          try { try { setScanMeta(m.data) } catch (e) {} try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {} try { setAllItems(prev => mergeItemsUnique((prev && prev.length) ? prev : (items || []), coll, false)) } catch (e) {} } catch (e) {}
+                        }
                       }
                     } catch (e) { /* swallow */ }
                   }
