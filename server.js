@@ -174,12 +174,18 @@ function stripAniListSeasonSuffix(name, rawPick) {
     let out = orig
     // remove parenthetical Season tokens: " (Season 2)"
     out = out.replace(/\s*\(\s*Season\s*\d{1,2}(?:st|nd|rd|th)?\s*\)\s*$/i, '')
+    // also remove parenthetical season tokens when followed by a year (e.g. 'Title (Season 2) 2025')
+    // replace with a single space to avoid joining words and the year
+    out = out.replace(/\s*\(\s*Season\s*\d{1,2}(?:st|nd|rd|th)?\s*\)\s*(?=\d{4}\b)/i, ' ')
     // remove trailing 'Season N' or 'Nth Season' or '2nd Season' forms
     out = out.replace(/\s+Season\s+\d{1,2}(?:st|nd|rd|th)?\s*$/i, '')
     out = out.replace(/\s+\d{1,2}(?:st|nd|rd|th)?\s+Season\s*$/i, '')
     // remove textual ordinal season tokens like 'Third Season' or 'Second Season'
     out = out.replace(/\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+Season\s*$/i, '')
     out = out.replace(/\s+Season\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s*$/i, '')
+    // also strip textual ordinals if they are followed by a year token; leave a space
+    out = out.replace(/\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+Season\s*(?=\d{4}\b)/i, ' ')
+    out = out.replace(/\s+Season\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s*(?=\d{4}\b)/i, ' ')
     // remove trailing S## tokens (e.g., ' S02') or 'S02E03' if left at the end
     out = out.replace(/\s+S\d{1,2}(?:E\d{1,3})?\s*$/i, '')
     // Only remove ambiguous trailing numeric tokens if we have confidence it's a season token.
@@ -189,8 +195,10 @@ function stripAniListSeasonSuffix(name, rawPick) {
     // season/seasonYear or the original string contained the word 'season', but we
     // don't remove standalone trailing digits even then.
     const confident = (!!rawPick && (rawPick.seasonYear || rawPick.season)) || /\bseason\b/i.test(orig)
-    try { if (out !== orig) { try { appendLog(`STRIP_ANILIST before=${orig.slice(0,200)} after=${out.slice(0,200)} confident=${!!confident}`) } catch (e) {} } } catch (e) {}
-    return out.trim()
+  // collapse multiple spaces into one and trim
+  out = out.replace(/\s{2,}/g, ' ').trim()
+  try { if (out !== orig) { try { appendLog(`STRIP_ANILIST before=${orig.slice(0,200)} after=${out.slice(0,200)} confident=${!!confident}`) } catch (e) {} } } catch (e) {}
+  return out
   } catch (e) { return name }
 }
 
