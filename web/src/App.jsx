@@ -1374,24 +1374,44 @@ export default function App() {
                 {/* Rescan selected: appears only in select mode and when items are selected; does not reserve space when hidden */}
                 {selectMode && Object.keys(selected).length ? (
                   <button
-                    className={"btn-ghost approve-button visible"}
-                    onClick={async () => {
-                      try {
-                        const selectedPaths = Object.keys(selected).filter(Boolean)
-                        if (!selectedPaths.length) return
-                        pushToast && pushToast('Rescan', `Rescanning ${selectedPaths.length} items...`)
-                        // set per-item loading while refresh happens
-                        const loadingMap = {}
-                        for (const p of selectedPaths) loadingMap[p] = true
-                        safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
-                        await refreshEnrichForPaths(selectedPaths)
-                        safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
-                        setSelected({})
-                        pushToast && pushToast('Rescan', 'Rescan complete')
-                      } catch (e) { pushToast && pushToast('Rescan', 'Rescan failed') }
-                    }}
-                    title="Rescan selected"
-                  >Rescan selected</button>
+                      className={"btn-ghost approve-button visible"}
+                      onClick={async () => {
+                        try {
+                          const selectedPaths = Object.keys(selected).filter(Boolean)
+                          if (!selectedPaths.length) return
+                          pushToast && pushToast('Rescan', `Rescanning ${selectedPaths.length} items...`)
+                          // set per-item loading while refresh happens
+                          const loadingMap = {}
+                          for (const p of selectedPaths) loadingMap[p] = true
+                          safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
+                          // Perform the same operation as the per-item Rescan button: call enrichOne(item, true)
+                          // Limit concurrency by batching into small groups to avoid overwhelming providers.
+                          const BATCH_SIZE = 6
+                          try {
+                            for (let i = 0; i < selectedPaths.length; i += BATCH_SIZE) {
+                              const batch = selectedPaths.slice(i, i + BATCH_SIZE)
+                              await Promise.all(batch.map(async (p) => {
+                                try { await enrichOne({ canonicalPath: p }, true) } catch (e) { /* per-item best-effort */ }
+                              }))
+                            }
+                          } catch (e) { /* overall best-effort */ }
+                          // clear loading flags
+                          safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+                          // If any of the rescanned paths belong to the active scan, trigger a single background server-side refresh
+                          try {
+                            const sid = scanId || (scanMeta && scanMeta.id) || lastScanId
+                            if (sid && currentScanPaths && selectedPaths.some(p => currentScanPaths.has(p))) {
+                              try { console.debug('[client] RESCAN_SELECTED -> refreshScan', { sid, count: selectedPaths.length }) } catch (e) {}
+                              ;(async () => { try { await refreshScan(sid) } catch (e) {} })()
+                              try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
+                            }
+                          } catch (e) {}
+                          setSelected({})
+                          pushToast && pushToast('Rescan', 'Rescan complete')
+                        } catch (e) { pushToast && pushToast('Rescan', 'Rescan failed') }
+                      }}
+                      title="Rescan selected"
+                    >Rescan selected</button>
                 ) : null}
               <button className={"btn-ghost" + (selectMode ? ' active' : '')} onClick={() => { setSelectMode(s => { if (s) setSelected({}); return !s }) }} title={selectMode ? 'Exit select mode' : 'Select items'}>Select</button>
             </div>
