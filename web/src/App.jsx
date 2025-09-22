@@ -528,46 +528,20 @@ export default function App() {
                 // Reload any indicated scans (but preserve current search/view)
                 const modified = ev.modifiedScanIds || []
                 if (modified && modified.length) {
-                  // If the user has an active search query, skip fetching and merging
-                  // scan pages so we don't stomp the server-driven search results.
-                  if (searchQuery && searchQuery.length) {
-                    try { console.debug('[client] SKIP_ALL_PAGE_FETCH_DUE_TO_SEARCH', { modified, scanId, lastScanId, searchQuery }) } catch (e) {}
-                    // Never fetch or merge scan pages if searching, regardless of item count
-                    for (const sid of modified.filter(sid => sid === scanId || sid === lastScanId)) {
+                  // Do NOT fetch or merge scan pages here. Always perform a
+                  // non-stomping background refresh + authoritative per-path enrichment
+                  // update and notify the server. This preserves the user's current
+                  // view/scroll regardless of search state.
+                  try { console.debug('[client] HIDE_EVENTS_BG_ONLY', { modified, scanId, lastScanId }) } catch (e) {}
+                  const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
+                  for (const sid of toNotify) {
+                    try {
+                      ;(async () => {
+                        try { await refreshScan(sid) } catch (e) {}
+                        try { if (ev && ev.path) await refreshEnrichForPaths([ev.path]) } catch (e) {}
+                      })()
                       try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                    }
-                  } else {
-                    // keep reloads fast by fetching only the first page for the affected scans
-                    const toReload = modified.filter(sid => sid === scanId || sid === lastScanId)
-                    for (const sid of toReload) {
-                      try {
-                        const m = await axios.get(API(`/scan/${sid}`)).catch(() => null)
-                        if (m && m.data) {
-                          const pgr = await axios.get(API(`/scan/${sid}/items?offset=0&limit=${Math.max(batchSize,12)}`)).catch(() => ({ data: { items: [] } }))
-                          const coll = pgr.data.items || []
-                          try {
-                            // If the client already has more items loaded than this first-page reload,
-                            // avoid stomping the user's current view. Instead, update meta/total and
-                            // merge any new items into the existing lists so the visible list is
-                            // preserved while keeping server metadata in sync.
-                            if (items && items.length > (coll || []).length) {
-                              try { setScanMeta(m.data) } catch (e) {}
-                              try { setTotal(m.data.totalCount || Math.max((items || []).length, (coll || []).length)) } catch (e) {}
-                              try {
-                                // ensure allItems reflects any newly-provided page rows without replacing
-                                setAllItems(prev => {
-                                  const base = (prev && prev.length) ? prev : (items || [])
-                                  return mergeItemsUnique(base, coll, false)
-                                })
-                              } catch (e) {}
-                            } else {
-                              try { updateScanDataAndPreserveView(m.data, coll) } catch(e) {}
-                            }
-                          } catch(e) {}
-                          try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                        }
-                      } catch (e) { /* swallow */ }
-                    }
+                    } catch (e) {}
                   }
                 }
                 // Always refresh authoritative enrichment for the event path so hidden/applied flags are up-to-date
@@ -642,7 +616,10 @@ export default function App() {
       return
     }
 
-    const r = await axios.post(API('/scan'), { libraryId: lib?.id, path: configuredPath })
+  // If we have a lastScanId or this client has run a scan before, prefer the
+  // incremental scan endpoint which avoids a full filesystem walk.
+  const endpoint = lastScanId ? API('/scan/incremental') : API('/scan')
+  const r = await axios.post(endpoint, { libraryId: lib?.id, path: configuredPath })
     // set the current scan id and persist last library id so rescan works across reloads
   setScanId(r.data.scanId)
   try { setLastScanId(r.data.scanId) } catch (e) {}

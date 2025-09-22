@@ -1349,6 +1349,62 @@ app.post('/api/scan', async (req, res) => {
   }
 });
 
+// Lightweight incremental scan trigger: prefer incremental scan behavior and avoid
+// performing a full walk when a prior cache exists. This endpoint is used by the
+// client when it wants to resync current files (detect additions/removals/changes)
+// without forcing a full main scan that can be expensive.
+app.post('/api/scan/incremental', async (req, res) => {
+  const { libraryId, path: libraryPath } = req.body || {};
+  let libPath = null;
+  if (libraryPath) libPath = path.resolve(libraryPath);
+  else if (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.scan_input_path) libPath = path.resolve(users[req.session.username].settings.scan_input_path);
+  if (!libPath) return res.status(400).json({ error: 'library path required' });
+  try {
+    if (!fs.existsSync(libPath)) return res.status(400).json({ error: 'path does not exist', path: libPath });
+    const st = fs.statSync(libPath);
+    if (!st.isDirectory()) return res.status(400).json({ error: 'path is not a directory', path: libPath });
+    try { fs.accessSync(libPath, fs.constants.R_OK); } catch (accErr) { return res.status(400).json({ error: 'path is not readable', path: libPath, detail: accErr.message }); }
+  } catch (err) { appendLog(`SCAN_VALIDATION_ERROR path=${libPath} err=${err.message}`); return res.status(400).json({ error: 'invalid path', detail: err.message }); }
+
+  appendLog(`INCREMENTAL_SCAN_START library=${libraryId || 'local'} path=${libPath}`);
+  const scanLib = require('./lib/scan');
+  function loadScanCache() { return scanLib.loadScanCache(scanCacheFile); }
+  function saveScanCache(obj) { return scanLib.saveScanCache(scanCacheFile, obj); }
+
+  // if no prior cache exists, fall back to full scan to collect candidates
+  let items = [];
+  try {
+    const prior = loadScanCache();
+    if (!prior || !prior.files || Object.keys(prior.files).length === 0) {
+      // fallback to full scan
+      items = scanLib.fullScanLibrary(libPath, { ignoredDirs: new Set(['node_modules','.git','.svn','__pycache__']), videoExts: ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'], canonicalize, uuidv4 });
+    } else {
+      const inc = scanLib.incrementalScanLibrary(libPath, { scanCacheFile, ignoredDirs: new Set(['node_modules','.git','.svn','__pycache__']), videoExts: ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'], canonicalize, uuidv4 });
+      // incremental returns { toProcess, currentCache, removed }
+      const { toProcess, currentCache, removed } = inc || {};
+      // remove stale entries
+      for (const r of (removed || [])) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
+      // do minimal parsing for new/changed entries
+      for (const it of (toProcess || [])) doProcessParsedItem(it, req.session || {});
+      // persist new cache and build items array from currentCache
+      if (currentCache) saveScanCache(currentCache);
+      items = Object.keys((currentCache && currentCache.files) || {}).map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }));
+    }
+  } catch (e) {
+    appendLog(`INCREMENTAL_SCAN_FAIL err=${e && e.message ? e.message : String(e)}`);
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+
+  // proceed to create artifact and background enrich similar to /api/scan
+  const scanId = uuidv4();
+  const artifact = { id: scanId, libraryId: libraryId || 'local', totalCount: items.length, items, generatedAt: Date.now() };
+  scans[scanId] = artifact;
+  try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); } catch (e) {}
+  appendLog(`INCREMENTAL_SCAN_COMPLETE id=${scanId} total=${items.length}`);
+  res.json({ scanId, totalCount: items.length });
+  try { void backgroundEnrichFirstN(scanId, items, req.session, libPath, `scanPath:${libPath}`, 12); } catch (e) { appendLog(`INCREMENTAL_BACKGROUND_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
+});
+
 app.get('/api/scan/:scanId', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
 app.get('/api/scan/:scanId/items', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); const offset = parseInt(req.query.offset || '0', 10); const limit = Math.min(parseInt(req.query.limit || '50', 10), 500); const slice = s.items.slice(offset, offset + limit); res.json({ items: slice, offset, limit, total: s.totalCount }); });
 
