@@ -1743,47 +1743,54 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
     const p = req.body && req.body.path ? req.body.path : null
     if (!p) return res.status(400).json({ error: 'path required' })
   const key = canonicalize(p)
-  // set hidden flag while preserving applied/metadata fields
-  updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { hidden: true }));
-  // Remove this path from any existing stored scan artifacts so clients restoring a previous scan won't see it
-  let modifiedScanIds = [];
+  // Fast response path: update in-memory cache immediately so clients see instant hide
   try {
-    const scanIds = Object.keys(scans || {});
-    for (const sid of scanIds) {
+    updateEnrichCacheInMemory(key, Object.assign({}, enrichCache[key] || {}, { hidden: true }));
+    // schedule a quick persist (debounced) so disk write is batched and fast
+    schedulePersistEnrichCache(300);
+  } catch (e) { appendLog(`HIDE_INMEM_FAIL path=${p} err=${e && e.message ? e.message : String(e)}`) }
+
+  // respond immediately to the client so UI hides instantly
+  res.json({ ok: true, path: key, enrichment: enrichCache[key] || null, modifiedScanIds: [] });
+
+  // Background: remove this path from stored scan artifacts and record hide event
+  (async () => {
+    try {
+      const modifiedScanIds = [];
       try {
-        const s = scans[sid];
-        if (!s || !Array.isArray(s.items)) continue;
-        const before = s.items.length;
-        s.items = s.items.filter(it => {
-          try { return canonicalize(it.canonicalPath) !== key } catch (e) { return true }
-        });
-        if (s.items.length !== before) {
-          s.totalCount = s.items.length;
-          modifiedScanIds.push(sid);
+        const scanIds = Object.keys(scans || {});
+        for (const sid of scanIds) {
+          try {
+            const s = scans[sid];
+            if (!s || !Array.isArray(s.items)) continue;
+            const before = s.items.length;
+            s.items = s.items.filter(it => {
+              try { return canonicalize(it.canonicalPath) !== key } catch (e) { return true }
+            });
+            if (s.items.length !== before) {
+              s.totalCount = s.items.length;
+              modifiedScanIds.push(sid);
+            }
+          } catch (e) {}
+        }
+        // persist updated scans store if any modified
+        if (modifiedScanIds.length) {
+          try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); appendLog(`HIDE_UPDATED_SCANS path=${p} ids=${modifiedScanIds.join(',')}`) } catch (e) {}
         }
       } catch (e) {}
+
+      appendLog(`HIDE path=${p}`)
+      try {
+        // Record hide event for clients to poll and reconcile UI
+        hideEvents.push({ ts: Date.now(), path: key, originalPath: p, modifiedScanIds });
+        try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
+        // keep recent events bounded
+        if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
+      } catch (e) {}
+    } catch (e) {
+      appendLog(`HIDE_BG_FAIL path=${p} err=${e && e.message ? e.message : String(e)}`)
     }
-    // persist updated scans store if any modified
-    if (modifiedScanIds.length) {
-  try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); appendLog(`HIDE_UPDATED_SCANS path=${p} ids=${modifiedScanIds.join(',')}`) } catch (e) {}
-    }
-  } catch (e) {}
-  // ensure we return the authoritative enrichment object as persisted
-  let returned = null
-  try {
-    returned = enrichCache[key] || null
-    // persist has already been attempted by updateEnrichCache; attempt best-effort write again
-  try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
-  } catch (e) { returned = null }
-  appendLog(`HIDE path=${p}`)
-  try {
-    // Record hide event for clients to poll and reconcile UI
-  hideEvents.push({ ts: Date.now(), path: key, originalPath: p, modifiedScanIds });
-  try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
-    // keep recent events bounded
-    if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
-  } catch (e) {}
-  return res.json({ ok: true, path: key, enrichment: returned, modifiedScanIds })
+  })();
   } catch (e) { return res.status(500).json({ error: e.message }) }
 })
 
@@ -2281,6 +2288,33 @@ function updateEnrichCache(key, nextObj) {
   } catch (e) {
     return nextObj;
   }
+}
+
+// Fast path updater: update in-memory enrichCache and debounce disk persistence.
+let _enrichPersistTimeout = null;
+function persistEnrichCacheNow() {
+  try {
+    if (db) db.setKV('enrichCache', enrichCache);
+    else writeJson(enrichStoreFile, enrichCache);
+  } catch (e) { /* best-effort */ }
+  try { if (_enrichPersistTimeout) { clearTimeout(_enrichPersistTimeout); _enrichPersistTimeout = null; } } catch (e) {}
+}
+
+function schedulePersistEnrichCache(delayMs = 500) {
+  try {
+    if (_enrichPersistTimeout) clearTimeout(_enrichPersistTimeout);
+    _enrichPersistTimeout = setTimeout(() => { try { persistEnrichCacheNow(); } catch (e) {} }, delayMs);
+  } catch (e) { try { persistEnrichCacheNow(); } catch (ee) {} }
+}
+
+function updateEnrichCacheInMemory(key, nextObj) {
+  try {
+    const prev = enrichCache[key] || {};
+    const merged = Object.assign({}, prev, nextObj || {});
+    const normalized = normalizeEnrichEntry(merged);
+    enrichCache[key] = preserveAppliedFlags(prev, normalized);
+    return enrichCache[key];
+  } catch (e) { return nextObj; }
 }
 
 // Helper: clean series title to avoid duplicated episode label or episode title fragments
