@@ -96,6 +96,10 @@ export default function App() {
   // last seen hide event timestamp (ms)
   const lastHideEventTsRef = useRef( Number(localStorage.getItem('lastHideEventTs') || '0') || 0 )
 
+  // Debug flag: enable verbose debug logs by setting window.__RENAMER_DEBUG__ = true
+  const DEBUG = (typeof window !== 'undefined' && !!window.__RENAMER_DEBUG__) || false
+  function dlog(...args) { try { if (DEBUG && console && console.debug) console.debug(...args) } catch (e) {} }
+
   // Wait for a hide event matching any of the provided candidate paths.
   // Returns the event object if found within timeoutMs, otherwise null.
   async function waitForHideEvent(candidates = [], timeoutMs = 5000, interval = 400) {
@@ -538,6 +542,15 @@ export default function App() {
                   lastHideEventTsRef.current = ev.ts
                   try { localStorage.setItem('lastHideEventTs', String(lastHideEventTsRef.current)) } catch (e) {}
                 }
+                // If this event pertains to a path we're already optimistically hiding,
+                // skip processing to avoid duplicate work and noisy logs.
+                try {
+                  const evPath = ev && (ev.path || ev.originalPath)
+                  if (evPath && pendingHiddenRef.current && pendingHiddenRef.current.has(evPath)) {
+                    dlog('[client] HIDE_EVENTS_SKIPPING_PENDING', evPath)
+                    continue
+                  }
+                } catch (e) {}
                 // Reload any indicated scans (but preserve current search/view)
                 const modified = ev.modifiedScanIds || []
                 if (modified && modified.length) {
@@ -545,7 +558,7 @@ export default function App() {
                   // non-stomping background refresh + authoritative per-path enrichment
                   // update and notify the server. This preserves the user's current
                   // view/scroll regardless of search state.
-                  try { console.debug('[client] HIDE_EVENTS_BG_ONLY', { modified, scanId, lastScanId }) } catch (e) {}
+                  dlog('[client] HIDE_EVENTS_BG_ONLY', { modified, scanId, lastScanId })
                   const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
                   for (const sid of toNotify) {
                     try {
@@ -1415,7 +1428,7 @@ export default function App() {
                           try {
                             const sid = scanId || (scanMeta && scanMeta.id) || lastScanId
                             if (sid && currentScanPaths && selectedPaths.some(p => currentScanPaths.has(p))) {
-                              try { console.debug('[client] RESCAN_SELECTED -> refreshScan', { sid, count: selectedPaths.length }) } catch (e) {}
+                              try { dlog('[client] RESCAN_SELECTED -> refreshScan', { sid, count: selectedPaths.length }) } catch (e) {}
                               ;(async () => { try { await refreshScan(sid, true) } catch (e) {} })()
                               try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
                             }
@@ -1623,7 +1636,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
           <button title="Hide this item" className="btn-ghost" disabled={loading} onClick={async () => {
             if (!it) return
             const originalPath = it.canonicalPath
-            try { console.debug('[client] HIDE_CLICK', { path: originalPath, itemsLen: (items||[]).length, allItemsLen: (allItems||[]).length, searchQuery }) } catch (e) {}
+            try { dlog('[client] HIDE_CLICK', { path: originalPath, itemsLen: (items||[]).length, allItemsLen: (allItems||[]).length, searchQuery }) } catch (e) {}
             // guard concurrent clicks
             if (loadingEnrich && loadingEnrich[originalPath]) return
             safeSetLoadingEnrich(prev => ({ ...prev, [originalPath]: true }))
@@ -1636,7 +1649,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               pendingHideTimeoutsRef.current[originalPath] = setTimeout(() => {
                 try { pendingHiddenRef.current.delete(originalPath) } catch (e) {}
                 try { delete pendingHideTimeoutsRef.current[originalPath] } catch (e) {}
-              }, 5000)
+              }, 2000)
             } catch (e) {}
             let resp = null
             let didFinalToast = false
@@ -1680,7 +1693,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               try {
                 const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
                 if (modified && modified.length) {
-                  try { console.debug('[client] HIDE_MODIFIED_IDS_BG_REFRESH', { path: originalPath, modified }) } catch (e) {}
+                  try { dlog('[client] HIDE_MODIFIED_IDS_BG_REFRESH', { path: originalPath, modified }) } catch (e) {}
                   const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
                   for (const sid of toNotify) {
                     // Only refresh per-path enrichment for the affected items.
@@ -1691,7 +1704,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
                   }
                 } else {
-                  try { console.debug('[client] HIDE_NO_MODIFIED_IDS_BG', { path: originalPath }) } catch (e) {}
+                  try { dlog('[client] HIDE_NO_MODIFIED_IDS_BG', { path: originalPath }) } catch (e) {}
                 }
               } catch (e) { /* swallow */ }
 
@@ -1727,13 +1740,13 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   if (!confirmed && !didFinalToast) {
                     // genuine failure — but wait briefly for any server-side hide event before giving up
                     try {
-                      const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
-                      if (!handled) {
-                        pushToast && pushToast('Hide', 'Failed to hide')
+                        const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
+                        if (!handled) {
+                          dlog('[client] HIDE_FAILED_NO_TOAST', { path: originalPath })
+                        }
+                      } catch (e) {
+                        dlog('[client] HIDE_FAILED_NO_TOAST_ERR', { path: originalPath, err: String(e) })
                       }
-                    } catch (e) {
-                      pushToast && pushToast('Hide', 'Failed to hide')
-                    }
                     didFinalToast = true
                   }
                 }
@@ -1741,8 +1754,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 if (!didFinalToast) {
                   try {
                     const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
-                    if (!handled) pushToast && pushToast('Hide', 'Failed to hide')
-                  } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
+                    if (!handled) dlog('[client] HIDE_FAILED_NO_TOAST', { path: originalPath })
+                    } catch (e) { dlog('[client] HIDE_FAILED_NO_TOAST_ERR', { path: originalPath, err: String(e) }) }
                 }
                 didFinalToast = true
               }
@@ -1772,8 +1785,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     if (!confirmed) {
                       // genuine failure — wait for server hide event briefly before declaring failure
                       try {
-                        const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
-                        if (!handled) pushToast && pushToast('Hide', 'Failed to hide')
+                const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
+                if (!handled) dlog('[client] HIDE_FAILED_NO_TOAST', { path: originalPath })
                       } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
                     }
                 // If POST did return modifiedScanIds before network error, trigger
@@ -1793,8 +1806,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               } catch (ee) {
                 try {
                   const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
-                  if (!handled) pushToast && pushToast('Hide', 'Failed to hide')
-                } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
+                  if (!handled) dlog('[client] HIDE_FAILED_NO_TOAST', { path: originalPath })
+                } catch (e) { dlog('[client] HIDE_FAILED_NO_TOAST_ERR', { path: originalPath, err: String(e) }) }
               }
             } finally {
               // Always attempt to refresh affected scans so UI matches server state.
