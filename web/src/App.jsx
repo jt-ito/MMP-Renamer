@@ -228,6 +228,10 @@ export default function App() {
   const providerKey = (tmdbKey && String(tmdbKey).length) ? tmdbKey : (legacyTvdbKey || '')
   const scanOptionsRef = React.useRef({})
   const batchSize = 12
+  // When we create a new scan in this session, suppress the mount-effect that
+  // would eagerly fetch all pages for the persisted lastScanId so we don't
+  // duplicate work or trigger many paged GETs immediately after scanning.
+  const newScanJustCreatedRef = React.useRef(false)
   // guard map to avoid posting repeated client-refreshed for same scanId/path
   const clientRefreshedMapRef = useRef({})
 
@@ -620,6 +624,9 @@ export default function App() {
   const r = await axios.post(API('/scan/incremental'), { libraryId: lib?.id, path: configuredPath })
     // set the current scan id and persist last library id so rescan works across reloads
   setScanId(r.data.scanId)
+  // mark that we've just created a scan in this session so mount effects avoid
+  // eagerly loading many pages for the persisted lastScanId
+  try { newScanJustCreatedRef.current = true } catch (e) {}
   try { setLastScanId(r.data.scanId) } catch (e) {}
     const libId = lib?.id || (r.data && r.data.libraryId) || (scanMeta && scanMeta.libraryId) || ''
     try { setLastLibraryId(libId) } catch (e) {}
@@ -629,145 +636,67 @@ export default function App() {
     setScanMeta(meta.data)
     setTotal(meta.data.totalCount)
 
-  // Collect all pages before revealing any items to the UI
+  // Fetch only the first page to populate the initial view. The server-side
+  // incremental scan will process new items in the background; we avoid
+  // collecting all pages up front to prevent the client from fetching huge
+  // numbers of rows and stomping the visible UI.
+  try {
     setScanning(true)
-  setScanLoaded(0)
-  setScanProgress(0)
-  setMetaPhase(false)
-  setMetaProgress(0)
-    const collected = []
-    let offset = 0
-    // guard against a server returning empty pages (which would cause an infinite loop
-    // because offset wouldn't advance). Allow a few transient empty responses before
-    // giving up so slow backends can recover.
-    let emptyStreak = 0
-    const MAX_EMPTY_STREAK = 8
-    while (offset < meta.data.totalCount) {
-      const page = await axios.get(API(`/scan/${r.data.scanId}/items?offset=${offset}&limit=${batchSize}`))
-      const pageItems = page.data.items || []
-      // if we received no items for this offset, increment streak and bail out after a few tries
-      if (!pageItems.length) {
-        emptyStreak++
-        if (emptyStreak >= MAX_EMPTY_STREAK) {
-          // stop collecting more pages to avoid hang; proceed with what we have
-          try { pushToast && pushToast('Scan', `Aborting page fetch after ${MAX_EMPTY_STREAK} empty responses (offset=${offset})`) } catch (e) {}
-          break
-        }
-        // small delay to allow transient backend state to settle
-        await new Promise(r => setTimeout(r, 250))
-      } else {
-        emptyStreak = 0
-      }
-      collected.push(...pageItems)
-      offset += pageItems.length
-      setScanLoaded(prev => {
-        const n = prev + pageItems.length
-        try { setScanProgress(Math.min(100, Math.round((n / Math.max(1, meta.data.totalCount)) * 100))) } catch(e){}
-        return n
-      })
-    }
-  // record scan start time
-  try { phaseStartRef.current.scanStart = Date.now() } catch (e) {}
-    // Persist options
-    scanOptionsRef.current = options || {}
+    setScanLoaded(0)
+    setScanProgress(0)
+    setMetaPhase(false)
+    setMetaProgress(0)
 
-    // After collecting all items, run the same server-side refresh the rescan uses so parsing is consistent
+    const firstPageSize = Math.min(meta.data.totalCount || 0, Math.max(batchSize, 50))
+    const firstPage = await axios.get(API(`/scan/${r.data.scanId}/items`), { params: { offset: 0, limit: firstPageSize } }).catch(() => ({ data: { items: [] } }))
+    const first = firstPage.data.items || []
+    setAllItems(first)
+    setItems(first)
+    setCurrentScanPaths(new Set((first || []).map(i => i.canonicalPath)))
+    setScanLoaded(first.length)
+    setScanProgress(first.length && meta.data.totalCount ? Math.round((first.length / Math.max(1, meta.data.totalCount)) * 100) : 0)
+
+    // Start background server-side refresh but don't await it here — let the
+    // server process new items incrementally. Also bulk-enrich the visible
+    // first page so metadata appears quickly in the UI.
+    void (async () => { try { await refreshScan(r.data.scanId) } catch (e) {} })()
     try {
-      pushToast && pushToast('Scan', 'Refreshing metadata (server-side) — this may take a while')
-  // enter metadata phase and reset metadata progress
-  setMetaPhase(true)
-  setMetaProgress(0)
-  try { phaseStartRef.current.metaStart = Date.now() } catch (e) {}
-      // Start a background poll to update header progress during the full refresh.
-      // This mirrors the progress the notification would show but only updates the header state
-      // (no toasts) so the header progress doesn't stay at 0% for large scans.
-      (async () => {
-        try {
-          await pollRefreshProgress(r.data.scanId, (prog) => {
-            const pct = Math.round((prog.processed / Math.max(1, prog.total)) * 100)
-            try { setMetaProgress(pct) } catch (e) {}
-          })
-        } catch (e) {
-          // ignore background poll errors; refreshScan will still handle toasts/errors
-        }
-      })();
-
-      await refreshScan(r.data.scanId)
-      // record durations after metadata refresh completes
-      try {
-        const now = Date.now()
-        const scanStart = phaseStartRef.current.scanStart
-        const metaStart = phaseStartRef.current.metaStart
-        if (scanStart && metaStart) {
-          const scanDur = metaStart - scanStart
-          const metaDur = now - metaStart
-          const hist = timingHistoryRef.current || { scanDurations: [], metaDurations: [] }
-          hist.scanDurations = (hist.scanDurations || []).concat([scanDur]).slice(-10)
-          hist.metaDurations = (hist.metaDurations || []).concat([metaDur]).slice(-10)
-          timingHistoryRef.current = hist
-          saveTimingHistory()
-        }
-      } catch (e) {}
-      // Now refresh client-side enrich for all collected paths and report progress
-      const paths = collected.map(it => it.canonicalPath).filter(Boolean)
-      if (paths.length > 0) {
-        try {
-          // Use bulk endpoint to reduce many individual GET requests
-          const resp = await axios.post(API('/enrich/bulk'), { paths })
-          const itemsOut = resp && resp.data && Array.isArray(resp.data.items) ? resp.data.items : []
-          let done = 0
-          for (const entry of itemsOut) {
-            try {
-              const p = entry.path
-              if (entry.error) {
-                // skip errored entries
-              } else if (entry.enrichment && (entry.cached || entry.enrichment)) {
-                if (entry.enrichment.missing) {
-                  setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
-                  setItems(prev => prev.filter(it => it.canonicalPath !== p))
-                  setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
-                } else {
-                  const enriched = normalizeEnrichResponse(entry.enrichment || null)
-                  if (enriched) {
-                    setEnrichCache(prev => ({ ...prev, [p]: enriched }))
-                    if (enriched.hidden || enriched.applied) {
-                      setItems(prev => prev.filter(it => it.canonicalPath !== p))
-                      setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
-                    } else {
-                      setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
-                      setAllItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
-                    }
+      const paths = first.map(it => it.canonicalPath).filter(Boolean)
+      if (paths.length) {
+        const resp = await axios.post(API('/enrich/bulk'), { paths })
+        const itemsOut = resp && resp.data && Array.isArray(resp.data.items) ? resp.data.items : []
+        for (const entry of itemsOut) {
+          try {
+            const p = entry.path
+            if (entry.error) continue
+            if (entry.enrichment && (entry.cached || entry.enrichment)) {
+              if (entry.enrichment.missing) {
+                setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
+                setItems(prev => prev.filter(it => it.canonicalPath !== p))
+                setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
+              } else {
+                const enriched = normalizeEnrichResponse(entry.enrichment || null)
+                if (enriched) {
+                  setEnrichCache(prev => ({ ...prev, [p]: enriched }))
+                  if (enriched.hidden || enriched.applied) {
+                    setItems(prev => prev.filter(it => it.canonicalPath !== p))
+                    setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
+                  } else {
+                    setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+                    setAllItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
                   }
                 }
-              } else {
-                // not cached: leave for individual enrichOne requests later
               }
-            } catch (e) {}
-            done++
-            try { setMetaProgress(Math.round((done / paths.length) * 100)) } catch (e) {}
-          }
-        } catch (e) {
-          // fallback: ignore bulk errors and continue
+            }
+          } catch (e) {}
         }
       }
-      pushToast && pushToast('Scan', 'Provider metadata refresh complete')
-    } catch (e) {
-      pushToast && pushToast('Scan', 'Provider refresh failed')
-    }
-
-    // Filter out items that are marked hidden/applied in server cache and reveal
-    const filtered = collected.filter(it => {
-      const e = enrichCache[it.canonicalPath]
-      return !(e && (e.hidden === true || e.applied === true))
-    })
-    // set the persistent baseline and the currently-visible items
-    setAllItems(filtered)
-    setItems(filtered)
-    // record current scan canonical paths so cached enrichments not present in the scan are ignored
-    try { setCurrentScanPaths(new Set((collected || []).map(i => i.canonicalPath).filter(Boolean))) } catch (e) {}
+    } catch (e) { /* best-effort */ }
+  } finally {
     setMetaPhase(false)
     setScanning(false)
     setScanProgress(100)
+  }
 
   // return created scan id for callers that want to act on it
   return r.data.scanId
@@ -1298,6 +1227,22 @@ export default function App() {
         setScanMeta(metaRes.data)
         const totalCount = metaRes.data.totalCount || 0
         setTotal(totalCount)
+        // if we just created a scan in this session, avoid eager fetching all pages
+        // — the triggerScan flow already populated the first page and started
+        // background work on the server. This prevents duplicate paging requests.
+        if (newScanJustCreatedRef.current) {
+          if (!mounted) return
+          // fetch first page only for UI hydration
+          const r = await axios.get(API(`/scan/${lastScanId}/items`), { params: { offset: 0, limit: 500 } }).catch(() => ({ data: { items: [] } }))
+          if (!mounted) return
+          const first = r.data.items || []
+          setAllItems(first)
+          setItems(first)
+          setCurrentScanPaths(new Set((first || []).map(i => i.canonicalPath)))
+          // clear the flag so later mounts behave normally
+          try { newScanJustCreatedRef.current = false } catch (e) {}
+          return
+        }
         // if the scan is small enough, fetch all items in one go; otherwise, fetch first page only
         if (totalCount <= MAX_IN_MEMORY_SEARCH) {
           // fetch in pages of 500

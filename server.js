@@ -130,7 +130,8 @@ try {
   } catch (e) {
     appendLog('DB_INIT_FAIL ' + (e && e.message ? e.message : String(e)));
     console.error('DB_INIT_FAIL', e && e.message ? e.message : e);
-    process.exit(1);
+      // When server.js is required by tests, don't exit the process on DB init failure.
+      if (require.main === module) process.exit(1);
   }
   try {
     enrichCache = db.getKV('enrichCache') || {};
@@ -141,12 +142,13 @@ try {
   } catch (e) {
     appendLog('DB_LOAD_FAIL ' + (e && e.message ? e.message : String(e)));
     console.error('DB_LOAD_FAIL', e && e.message ? e.message : e);
-    process.exit(1);
+      // When required as a module (tests), avoid exiting; let tests proceed.
+      if (require.main === module) process.exit(1);
   }
 } catch (e) {
   console.error('DB_MODULE_LOAD_FAIL', e && e.message ? e.message : e);
   appendLog('DB_MODULE_LOAD_FAIL ' + (e && e.message ? e.message : String(e)));
-  process.exit(1);
+    if (require.main === module) process.exit(1);
 }
 
 // Initialize DB for scans if available
