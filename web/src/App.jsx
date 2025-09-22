@@ -616,10 +616,8 @@ export default function App() {
       return
     }
 
-  // If we have a lastScanId or this client has run a scan before, prefer the
-  // incremental scan endpoint which avoids a full filesystem walk.
-  const endpoint = lastScanId ? API('/scan/incremental') : API('/scan')
-  const r = await axios.post(endpoint, { libraryId: lib?.id, path: configuredPath })
+  // Always prefer the incremental scan endpoint to avoid full filesystem walks.
+  const r = await axios.post(API('/scan/incremental'), { libraryId: lib?.id, path: configuredPath })
     // set the current scan id and persist last library id so rescan works across reloads
   setScanId(r.data.scanId)
   try { setLastScanId(r.data.scanId) } catch (e) {}

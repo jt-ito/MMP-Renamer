@@ -1374,9 +1374,36 @@ app.post('/api/scan/incremental', async (req, res) => {
   // if no prior cache exists, fall back to full scan to collect candidates
   let items = [];
   try {
-    const prior = loadScanCache();
+    let prior = loadScanCache();
+    // If scan cache is missing but we have a prior saved scan artifact, bootstrap
+    // a prior cache from the latest scan so incremental scanning can proceed
+    // without doing a full filesystem walk.
+    if ((!prior || !prior.files || Object.keys(prior.files).length === 0) && scans && Object.keys(scans || {}).length) {
+      try {
+        // pick the most recent scan by generatedAt
+        const allIds = Object.keys(scans || {}).map(k => scans[k]).filter(Boolean);
+        allIds.sort((a,b) => (b.generatedAt || 0) - (a.generatedAt || 0));
+        const recent = allIds[0];
+        if (recent && Array.isArray(recent.items) && recent.items.length) {
+          const priorFiles = {};
+          for (const it of recent.items) {
+            try {
+              const p = it.canonicalPath;
+              const stat = fs.statSync(p);
+              priorFiles[p] = { mtime: stat.mtimeMs || Date.now(), size: stat.size || 0, id: (it.id || (String(stat.size || 0) + ':' + String(Math.floor((stat.mtimeMs||Date.now()))))) };
+            } catch (e) {
+              // if stat fails, still include an entry with timestamp now so incremental can compare
+              try { priorFiles[it.canonicalPath] = { mtime: Date.now(), size: 0, id: it.id || String(Math.random()).slice(2) } } catch (ee) {}
+            }
+          }
+          prior = { files: priorFiles, dirs: {} };
+          try { saveScanCache(prior); appendLog(`BOOTSTRAPPED_SCAN_CACHE from_scan=${recent.id} entries=${Object.keys(priorFiles).length}`); } catch (e) {}
+        }
+      } catch (e) { /* best-effort */ }
+    }
+
     if (!prior || !prior.files || Object.keys(prior.files).length === 0) {
-      // fallback to full scan
+      // fallback to full scan if we couldn't bootstrap prior cache
       items = scanLib.fullScanLibrary(libPath, { ignoredDirs: new Set(['node_modules','.git','.svn','__pycache__']), videoExts: ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'], canonicalize, uuidv4 });
     } else {
       const inc = scanLib.incrementalScanLibrary(libPath, { scanCacheFile, ignoredDirs: new Set(['node_modules','.git','.svn','__pycache__']), videoExts: ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'], canonicalize, uuidv4 });
