@@ -11,14 +11,15 @@ function run() {
   assert.ok(res.title && res.title.toLowerCase().includes('aparida'), `expected title to contain 'aparida', got '${res.title}'`)
 
   // Season/Episode should be parsed
-  // Per project policy: do NOT infer season/episode from filename for regular
-  // numbered episodes. Only season 0 or decimal (e.g. 11.5) episodes are
-  // considered. Therefore this filename should NOT produce a parsed episode.
-  assert.strictEqual(res.season, null, `expected season null got ${res.season}`)
-  assert.strictEqual(res.episode, null, `expected episode null got ${res.episode}`)
+  // The filename contains an explicit S01E01 marker; we should preserve
+  // explicit markers (but still avoid pulling the episode title from the RHS).
+  assert.strictEqual(res.season, 1, `expected season 1 got ${res.season}`)
+  assert.strictEqual(res.episode, 1, `expected episode 1 got ${res.episode}`)
 
-  // parsedName should not contain the episode title 'Clover Is Born'
+  // parsedName should not contain the episode title 'Clover Is Born', but
+  // should include an S01E01 label constructed from the explicit marker.
   assert.ok(!/Clover Is Born/i.test(res.parsedName), `parsedName should not include episode title, got '${res.parsedName}'`)
+  assert.ok(/S01E01/.test(res.parsedName), `parsedName should include S01E01, got '${res.parsedName}'`)
 
   console.log('filename-parser tests passed')
 }
