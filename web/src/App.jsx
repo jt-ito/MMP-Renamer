@@ -89,6 +89,10 @@ export default function App() {
   const [logs, setLogs] = useState('')
   const [toasts, setToasts] = useState([])
   const [loadingEnrich, setLoadingEnrich] = useState({})
+  // recently hidden items pending authoritative confirmation; prevents re-inserts during background merges
+  const pendingHiddenRef = useRef(new Set())
+  // map of path -> timeout id to clear pending flags after a grace period
+  const pendingHideTimeoutsRef = useRef({})
   // last seen hide event timestamp (ms)
   const lastHideEventTsRef = useRef( Number(localStorage.getItem('lastHideEventTs') || '0') || 0 )
 
@@ -308,6 +312,7 @@ export default function App() {
     try {
       const seen = new Set()
       const out = []
+      const pending = pendingHiddenRef.current || new Set()
       if (prepend) {
         for (const it of (newItems || [])) {
           if (!it || !it.canonicalPath) continue
@@ -325,6 +330,8 @@ export default function App() {
           if (seen.has(it.canonicalPath)) continue
           // ensure prev items are also part of the active scan if present
           if (currentScanPaths && currentScanPaths.size > 0 && !currentScanPaths.has(it.canonicalPath)) continue
+          // don't reinsert items that we've optimistically hidden but not yet confirmed
+          if (pending && pending.has(it.canonicalPath)) continue
           const e = enrichCache && enrichCache[it.canonicalPath]
           if (isHiddenOrApplied(e)) continue
           seen.add(it.canonicalPath)
@@ -335,6 +342,8 @@ export default function App() {
           if (!it || !it.canonicalPath) continue
           if (seen.has(it.canonicalPath)) continue
           if (currentScanPaths && currentScanPaths.size > 0 && !currentScanPaths.has(it.canonicalPath)) continue
+          // don't reinsert items that we've optimistically hidden but not yet confirmed
+          if (pending && pending.has(it.canonicalPath)) continue
           const e = enrichCache && enrichCache[it.canonicalPath]
           if (isHiddenOrApplied(e)) continue
           seen.add(it.canonicalPath)
@@ -1618,6 +1627,17 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
             // guard concurrent clicks
             if (loadingEnrich && loadingEnrich[originalPath]) return
             safeSetLoadingEnrich(prev => ({ ...prev, [originalPath]: true }))
+            // mark as pending-hidden to avoid background merges re-adding it
+            try {
+              pendingHiddenRef.current.add(originalPath)
+              // clear any existing timeout
+              try { if (pendingHideTimeoutsRef.current[originalPath]) clearTimeout(pendingHideTimeoutsRef.current[originalPath]) } catch (e) {}
+              // clear pending after grace period if no authoritative confirmation arrives
+              pendingHideTimeoutsRef.current[originalPath] = setTimeout(() => {
+                try { pendingHiddenRef.current.delete(originalPath) } catch (e) {}
+                try { delete pendingHideTimeoutsRef.current[originalPath] } catch (e) {}
+              }, 10000)
+            } catch (e) {}
             let resp = null
             let didFinalToast = false
             try {
@@ -1636,6 +1656,9 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
 
               // Apply authoritative/optimistic changes to local cache/UI but do NOT show final toast yet.
               if (enriched) {
+                // authoritative enrichment arrived: clear pending flag for this path
+                try { pendingHiddenRef.current.delete(serverKey) } catch (e) {}
+                try { if (pendingHideTimeoutsRef.current[serverKey]) { clearTimeout(pendingHideTimeoutsRef.current[serverKey]); delete pendingHideTimeoutsRef.current[serverKey] } } catch (e) {}
                 setEnrichCache(prev => ({ ...prev, [serverKey]: enriched }))
                 // remove from visible lists if hidden/applied
                 if (enriched.hidden || enriched.applied) {
@@ -1644,6 +1667,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 }
               } else {
                 // no authoritative enrichment — fallback to optimistic hide but still attempt to refresh scans
+                try { pendingHiddenRef.current.add(originalPath) } catch (e) {}
                 setEnrichCache(prev => ({ ...prev, [originalPath]: Object.assign({}, prev && prev[originalPath] ? prev[originalPath] : {}, { hidden: true }) }))
                 setItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
                 setAllItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
