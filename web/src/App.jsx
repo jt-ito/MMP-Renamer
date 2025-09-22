@@ -1651,6 +1651,12 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 try { delete pendingHideTimeoutsRef.current[originalPath] } catch (e) {}
               }, 2000)
             } catch (e) {}
+            // optimistic UI update: remove the item immediately so hide feels instant
+            try {
+              setEnrichCache(prev => ({ ...prev, [originalPath]: Object.assign({}, prev && prev[originalPath] ? prev[originalPath] : {}, { hidden: true }) }))
+              setItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
+              setAllItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
+            } catch (e) {}
             let resp = null
             let didFinalToast = false
             try {
