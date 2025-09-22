@@ -1271,6 +1271,45 @@ export default function App() {
     return () => { mounted = false }
   }, [lastScanId])
 
+  // When a scan is active, poll its metadata for a short window after creation
+  // to detect server-side updates (new items discovered by background work).
+  // If the server scan artifact changes, fetch the first page and merge so the
+  // UI shows new items without requiring a manual reload.
+  useEffect(() => {
+    if (!scanId) return
+    let stopped = false
+    const POLL_INTERVAL = 5000
+    const POLL_DURATION = 30 * 1000 // poll for first 30s
+    const start = Date.now()
+    const doPoll = async () => {
+      try {
+        const metaRes = await axios.get(API(`/scan/${scanId}`)).catch(() => null)
+        if (!metaRes || !metaRes.data) return
+        const serverMeta = metaRes.data
+        // If server reports a different generatedAt or a larger totalCount, refresh first page
+        const localGenerated = (scanMeta && scanMeta.generatedAt) || 0
+        const localTotal = (scanMeta && scanMeta.totalCount) || 0
+        if ((serverMeta.generatedAt && serverMeta.generatedAt !== localGenerated) || (serverMeta.totalCount && serverMeta.totalCount > localTotal)) {
+          try {
+            const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: 0, limit: Math.max(batchSize, 50) } }).catch(() => ({ data: { items: [] } }))
+            const page = (r && r.data && r.data.items) ? r.data.items : []
+            // Merge while preserving current view/search
+            try { updateScanDataAndPreserveView(serverMeta, page) } catch (e) {}
+            try { setScanMeta(serverMeta); setTotal(serverMeta.totalCount || page.length || 0) } catch (e) {}
+          } catch (e) {}
+        }
+      } catch (e) {}
+    }
+    const id = setInterval(() => {
+      if (stopped) return
+      if (Date.now() - start > POLL_DURATION) { clearInterval(id); stopped = true; return }
+      void doPoll()
+    }, POLL_INTERVAL)
+    // run an immediate check once
+    void doPoll()
+    return () => { stopped = true; try { clearInterval(id) } catch (e) {} }
+  }, [scanId])
+
   const selectedCount = Object.keys(selected || {}).length
   return (
   <div className={"app" + (selectMode && selectedCount ? ' select-mode-shrink' : '')}>
