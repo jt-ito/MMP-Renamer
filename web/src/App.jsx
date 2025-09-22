@@ -549,8 +549,8 @@ export default function App() {
                   const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
                   for (const sid of toNotify) {
                     try {
+                      // Avoid triggering a full scan refresh here; only refresh per-path enrichment
                       ;(async () => {
-                        try { await refreshScan(sid) } catch (e) {}
                         try { if (ev && ev.path) await refreshEnrichForPaths([ev.path]) } catch (e) {}
                       })()
                       try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
@@ -1683,10 +1683,11 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   try { console.debug('[client] HIDE_MODIFIED_IDS_BG_REFRESH', { path: originalPath, modified }) } catch (e) {}
                   const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
                   for (const sid of toNotify) {
+                    // Only refresh per-path enrichment for the affected items.
                     ;(async () => {
-                      try { await refreshScan(sid, true) } catch (e) {}
                       try { await refreshEnrichForPaths([ serverKey || originalPath ]) } catch (e) {}
                     })()
+                    // Notify server the client refreshed the item for this scan id
                     try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
                   }
                 } else {
@@ -1783,7 +1784,6 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
                     for (const sid of toNotify) {
                       ;(async () => {
-                        try { await refreshScan(sid, true) } catch (e) {}
                         try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {}
                       })()
                       try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
@@ -1804,7 +1804,6 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
                     for (const sid of toNotify) {
                       ;(async () => {
-                        try { await refreshScan(sid, true) } catch (e) {}
                         try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {}
                       })()
                       try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
@@ -1812,7 +1811,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   } else {
                     const sid = scanId || lastScanId
                     if (sid) {
-                      ;(async () => { try { await refreshScan(sid, true) } catch (e) {} try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {} })()
+                      ;(async () => { try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {} })()
+                      try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
                     }
                   }
                 } catch (ee) { /* best-effort refresh */ }
