@@ -659,7 +659,7 @@ export default function App() {
     // Start background server-side refresh but don't await it here — let the
     // server process new items incrementally. Also bulk-enrich the visible
     // first page so metadata appears quickly in the UI.
-    void (async () => { try { await refreshScan(r.data.scanId) } catch (e) {} })()
+  void (async () => { try { await refreshScan(r.data.scanId, true) } catch (e) {} })()
     try {
       const paths = first.map(it => it.canonicalPath).filter(Boolean)
       if (paths.length) {
@@ -1119,23 +1119,28 @@ export default function App() {
     }
   }
 
-  async function refreshScan(scanId) {
+  async function refreshScan(scanId, silent = false) {
     if (!scanId) throw new Error('no scan id')
     try {
       const r = await axios.post(API(`/scan/${scanId}/refresh`), { tmdb_api_key: providerKey || undefined })
       // If server started background work, poll for progress
       if (r.status === 202 && r.data && r.data.background) {
-        const toastId = pushToast && pushToast('Refresh','Refresh started on server', { sticky: true, spinner: true })
-        try {
-          await pollRefreshProgress(scanId, (prog) => {
-            // update toast with percent
-            const pct = Math.round((prog.processed / Math.max(1, prog.total)) * 100)
-            try { setMetaProgress(pct) } catch(e){}
-            if (pushToast) pushToast('Refresh', `Refreshing metadata: ${pct}% (${prog.processed}/${prog.total})`, { id: toastId, sticky: true, spinner: true })
-          })
-          if (pushToast) pushToast('Refresh','Server-side refresh complete')
-        } catch (e) {
-          if (pushToast) pushToast('Refresh','Server-side refresh failed')
+        if (!silent) {
+          const toastId = pushToast && pushToast('Refresh','Refresh started on server', { sticky: true, spinner: true })
+          try {
+            await pollRefreshProgress(scanId, (prog) => {
+              // update toast with percent
+              const pct = Math.round((prog.processed / Math.max(1, prog.total)) * 100)
+              try { setMetaProgress(pct) } catch(e){}
+              if (pushToast) pushToast('Refresh', `Refreshing metadata: ${pct}% (${prog.processed}/${prog.total})`, { id: toastId, sticky: true, spinner: true })
+            })
+            if (pushToast) pushToast('Refresh','Server-side refresh complete')
+          } catch (e) {
+            if (pushToast) pushToast('Refresh','Server-side refresh failed')
+          }
+        } else {
+          // silent background refresh: still wait for completion but do not show toasts or update meta UI
+          try { await pollRefreshProgress(scanId) } catch (e) { /* swallow */ }
         }
         // after background run completes, fetch latest enrich entries for items
         try {
@@ -1402,7 +1407,7 @@ export default function App() {
                             const sid = scanId || (scanMeta && scanMeta.id) || lastScanId
                             if (sid && currentScanPaths && selectedPaths.some(p => currentScanPaths.has(p))) {
                               try { console.debug('[client] RESCAN_SELECTED -> refreshScan', { sid, count: selectedPaths.length }) } catch (e) {}
-                              ;(async () => { try { await refreshScan(sid) } catch (e) {} })()
+                              ;(async () => { try { await refreshScan(sid, true) } catch (e) {} })()
                               try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
                             }
                           } catch (e) {}
@@ -1655,7 +1660,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
                   for (const sid of toNotify) {
                     ;(async () => {
-                      try { await refreshScan(sid) } catch (e) {}
+                      try { await refreshScan(sid, true) } catch (e) {}
                       try { await refreshEnrichForPaths([ serverKey || originalPath ]) } catch (e) {}
                     })()
                     try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
@@ -1754,7 +1759,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
                     for (const sid of toNotify) {
                       ;(async () => {
-                        try { await refreshScan(sid) } catch (e) {}
+                        try { await refreshScan(sid, true) } catch (e) {}
                         try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {}
                       })()
                       try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
@@ -1775,7 +1780,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
                     for (const sid of toNotify) {
                       ;(async () => {
-                        try { await refreshScan(sid) } catch (e) {}
+                        try { await refreshScan(sid, true) } catch (e) {}
                         try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {}
                       })()
                       try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
@@ -1783,7 +1788,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   } else {
                     const sid = scanId || lastScanId
                     if (sid) {
-                      ;(async () => { try { await refreshScan(sid) } catch (e) {} try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {} })()
+                      ;(async () => { try { await refreshScan(sid, true) } catch (e) {} try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {} })()
                     }
                   }
                 } catch (ee) { /* best-effort refresh */ }
