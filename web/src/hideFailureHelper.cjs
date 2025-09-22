@@ -64,7 +64,8 @@ module.exports = async function handleHideFailureCore(opts) {
       } catch (e) { /* swallow */ }
     }
 
-    try { pushToast && pushToast('Hide', 'Item hidden (server event)') } catch (e) {}
+  // Intentionally do not emit a toast here to avoid duplicate/spammy notifications.
+  // The caller will handle user-facing toasts based on authoritative checks.
     return true
   } catch (e) {
     return false

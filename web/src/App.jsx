@@ -1636,7 +1636,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               pendingHideTimeoutsRef.current[originalPath] = setTimeout(() => {
                 try { pendingHiddenRef.current.delete(originalPath) } catch (e) {}
                 try { delete pendingHideTimeoutsRef.current[originalPath] } catch (e) {}
-              }, 10000)
+              }, 5000)
             } catch (e) {}
             let resp = null
             let didFinalToast = false
