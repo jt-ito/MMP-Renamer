@@ -986,7 +986,9 @@ function renderProviderName(data, key, session) {
     const userTemplate = (session && session.username && users[session.username] && users[session.username].settings && users[session.username].settings.rename_template) ? users[session.username].settings.rename_template : null;
     const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
     const rawTitle = data.title || '';
-    const yearToken = data.year || extractYear(data, key) || '';
+  // Only use an explicit year returned by provider; do not heuristically extract a year
+  // from titles or filenames here — parsed-only results should not show a year.
+  const yearToken = data.year || '';
     function pad(n){ return String(n).padStart(2,'0') }
     let epLabel = '';
     if (data.episodeRange) epLabel = data.season != null ? `S${pad(data.season)}E${data.episodeRange}` : `E${data.episodeRange}`
@@ -2176,7 +2178,8 @@ app.post('/api/rename/preview', (req, res) => {
     const meta = enrichCache[fromPath] || {};
   // prefer enrichment title (provider token) -> parsed/title/basename
   const rawTitle = (meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath));
-  const year = (meta && (meta.year || (meta.extraGuess && meta.extraGuess.year))) ? (meta.year || (meta.extraGuess && meta.extraGuess.year)) : extractYear(meta, fromPath);
+  // Only use explicit year from enrichment or extraGuess; do not fall back to filename heuristics here
+  const year = (meta && (meta.year || (meta.extraGuess && meta.extraGuess.year))) ? (meta.year || (meta.extraGuess && meta.extraGuess.year)) : '';
     const ext = path.extname(fromPath);
   // support {year} token in template; choose effective template in order: request -> user setting -> server setting -> default
   const userTemplate = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.rename_template) ? users[req.session.username].settings.rename_template : null;
@@ -2509,7 +2512,7 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const rawTitle2 = (enrichment && (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title))) ? (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title)) : path.basename(from, ext2)
               // reuse cleaning logic from preview to avoid duplicated episode labels/titles in rendered filenames
               const titleToken2 = cleanTitleForRender(rawTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
-              const yearToken2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : (extractYear(enrichment, from) || '')
+              const yearToken2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : ''
               const nameWithoutExtRaw2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
                 .replace('{basename}', sanitize(path.basename(from, ext2)))
                 .replace('{year}', yearToken2)
@@ -2531,7 +2534,7 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               if (enrichment && enrichment.provider && enrichment.provider.renderedName) {
                 // use provider tokens to construct the desired layout without hard-coding
                 const prov = enrichment.provider || {};
-                const provYear = prov.year || extractYear(prov, from) || '';
+                const provYear = prov.year || '';
                 // If this item represents a series (season/episode present), strip any trailing year from the series folder name
                 const rawTitleForFolder = String(prov.title || prov.renderedName || path.basename(from, ext2)).trim() || '';
                 const isSeriesProv = (prov && (prov.season != null || prov.episode != null));
