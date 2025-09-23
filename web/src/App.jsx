@@ -1249,6 +1249,26 @@ export default function App() {
           }
         }
         if (!metaRes || !metaRes.data) return
+        // If there's potentially a newer scan for this library (created externally),
+        // prefer the latest scan artifact so the UI shows newly discovered items
+        // without requiring a hard refresh. This checks /scan/latest for the
+        // same library and swaps to it when generatedAt is newer.
+        try {
+          if (lastLibraryId) {
+            const latest = await axios.get(API('/scan/latest'), { params: { libraryId: lastLibraryId } }).catch(() => null)
+            if (latest && latest.data && latest.data.scanId) {
+              const latestGen = latest.data.generatedAt || 0
+              const curGen = (metaRes && metaRes.data && metaRes.data.generatedAt) ? metaRes.data.generatedAt : 0
+              if (latestGen && latestGen > curGen) {
+                // switch to latest scan artifact
+                effectiveScanId = latest.data.scanId
+                metaRes = await axios.get(API(`/scan/${effectiveScanId}`)).catch(() => null)
+              }
+            }
+          }
+        } catch (e) {
+          // best-effort: ignore failures here
+        }
         if (!mounted) return
         setScanId(effectiveScanId)
         setScanMeta(metaRes.data)
@@ -1297,6 +1317,47 @@ export default function App() {
     loadLastScan()
     return () => { mounted = false }
   }, [lastScanId])
+
+  // Background poll: periodically check for a newer scan artifact for the configured library
+  // and merge in its first page non-stompingly so the UI stays up-to-date when scans are
+  // created externally. This runs quietly and avoids disturbing the user's current search/view.
+  useEffect(() => {
+    if (!lastLibraryId) return
+    let mounted = true
+    const POLL_MS = 10000
+    let id = null
+
+    const pollLatest = async () => {
+      try {
+        // avoid polling while the client is actively creating a new scan in this session
+        if (newScanJustCreatedRef.current) return
+        // avoid stomping while user is actively searching
+        if (searchQuery && searchQuery.length) return
+        const r = await axios.get(API('/scan/latest'), { params: { libraryId: lastLibraryId } }).catch(() => null)
+        if (!mounted || !r || !r.data) return
+        const latest = r.data
+        const latestId = latest && latest.scanId
+        const latestGen = latest && latest.generatedAt ? latest.generatedAt : 0
+        const localGen = (scanMeta && scanMeta.generatedAt) ? scanMeta.generatedAt : 0
+        // If there's a newer artifact, fetch its first page and merge it non-stompingly
+        if (latestId && latestGen && latestGen > localGen) {
+          try {
+            const firstPageSize = Math.max(batchSize, 50)
+            const pg = await axios.get(API(`/scan/${latestId}/items`), { params: { offset: 0, limit: firstPageSize } }).catch(() => ({ data: { items: [] } }))
+            const page = (pg && pg.data && pg.data.items) ? pg.data.items : []
+            // Merge while preserving current view/search
+            try { updateScanDataAndPreserveView(latest, page) } catch (e) {}
+            try { setScanId(latestId); setScanMeta(latest); setLastScanId(latestId); setTotal(latest.totalCount || page.length) } catch (e) {}
+          } catch (e) { /* best-effort, do not disrupt UI */ }
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    // run immediately and then on interval
+    void pollLatest()
+    id = setInterval(() => { void pollLatest() }, POLL_MS)
+    return () => { mounted = false; try { clearInterval(id) } catch (e) {} }
+  }, [lastLibraryId, scanMeta, searchQuery])
 
   // When a scan is active, poll its metadata for a short window after creation
   // to detect server-side updates (new items discovered by background work).
