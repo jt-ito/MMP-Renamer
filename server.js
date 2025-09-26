@@ -854,7 +854,23 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
           if (res.episode) {
             const ep = res.episode
             const epTitle = ep.name || ep.title || (ep.attributes && ep.attributes.canonicalTitle)
-            if (epTitle) guess.episodeTitle = String(epTitle).trim()
+            // Treat generic placeholder titles like 'Episode 7' as missing so we don't
+            // display non-informative placeholders when provider data is present but
+            // lacks a proper localized episode name.
+            try {
+              if (epTitle) {
+                const epTrim = String(epTitle).trim();
+                if (/^episode\s*\d+/i.test(epTrim)) {
+                  try { appendLog(`PROVIDER_EP_PLACEHOLDER path=${String(canonicalPath).slice(0,200)} epRaw=${epTrim}`) } catch (e) {}
+                  // leave guess.episodeTitle undefined so callers treat it as missing
+                } else {
+                  guess.episodeTitle = epTrim
+                }
+              }
+            } catch (e) {
+              // on any unexpected error, fall back to assigning the raw title
+              try { guess.episodeTitle = String(epTitle).trim() } catch (ee) { /* ignore */ }
+            }
           }
 
           // Provider block - set provider name based on raw.source (tmdb or kitsu)
@@ -1419,7 +1435,23 @@ app.post('/api/scan/incremental', async (req, res) => {
       for (const it of (toProcess || [])) doProcessParsedItem(it, req.session || {});
       // persist new cache and build items array from currentCache
       if (currentCache) saveScanCache(currentCache);
-      items = Object.keys((currentCache && currentCache.files) || {}).map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }));
+      // Start with all files known in the current cache
+      const basePaths = Object.keys((currentCache && currentCache.files) || {});
+      const seen = new Set(basePaths);
+      items = basePaths.map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }));
+      // Ensure recently-processed new/changed items (toProcess) are included so clients
+      // see newly discovered files immediately after incremental scan.
+      if (Array.isArray(toProcess) && toProcess.length) {
+        for (const it of toProcess) {
+          try {
+            const pth = (it && it.canonicalPath) ? it.canonicalPath : String(it || '');
+            if (!seen.has(pth)) {
+              seen.add(pth);
+              items.push({ id: uuidv4(), canonicalPath: pth, scannedAt: Date.now() });
+            }
+          } catch (e) { /* best-effort */ }
+        }
+      }
     }
   } catch (e) {
     appendLog(`INCREMENTAL_SCAN_FAIL err=${e && e.message ? e.message : String(e)}`);
