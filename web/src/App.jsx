@@ -1262,7 +1262,14 @@ export default function App() {
               if (latestGen && latestGen > curGen) {
                 // switch to latest scan artifact
                 effectiveScanId = latest.data.scanId
+                // request first-page items together to avoid an extra fetch and to allow
+                // the UI to immediately merge items without requiring a hard refresh
                 metaRes = await axios.get(API(`/scan/${effectiveScanId}`)).catch(() => null)
+                const firstPageResp = await axios.get(API('/scan/latest'), { params: { libraryId: lastLibraryId, includeItems: true, limit: Math.max(batchSize, 50) } }).catch(() => null)
+                if (firstPageResp && firstPageResp.data && Array.isArray(firstPageResp.data.items)) {
+                  // merge page non-stompingly
+                  try { updateScanDataAndPreserveView({ scanId: effectiveScanId, libraryId: lastLibraryId, totalCount: firstPageResp.data.totalCount || 0, generatedAt: firstPageResp.data.generatedAt || Date.now() }, firstPageResp.data.items) } catch (e) {}
+                }
               }
             }
           }
@@ -1342,9 +1349,9 @@ export default function App() {
         // If there's a newer artifact, fetch its first page and merge it non-stompingly
         if (latestId && latestGen && latestGen > localGen) {
           try {
-            const firstPageSize = Math.max(batchSize, 50)
-            const pg = await axios.get(API(`/scan/${latestId}/items`), { params: { offset: 0, limit: firstPageSize } }).catch(() => ({ data: { items: [] } }))
-            const page = (pg && pg.data && pg.data.items) ? pg.data.items : []
+            // Request the first-page items via /scan/latest?includeItems so server can return the sample
+            const pg = await axios.get(API('/scan/latest'), { params: { libraryId: lastLibraryId, includeItems: true, limit: Math.max(batchSize, 50) } }).catch(() => null)
+            const page = (pg && pg.data && Array.isArray(pg.data.items)) ? pg.data.items : []
             // Merge while preserving current view/search
             try { updateScanDataAndPreserveView(latest, page) } catch (e) {}
             try { setScanId(latestId); setScanMeta(latest); setLastScanId(latestId); setTotal(latest.totalCount || page.length) } catch (e) {}

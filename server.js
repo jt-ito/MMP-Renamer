@@ -1432,7 +1432,12 @@ app.post('/api/scan/incremental', async (req, res) => {
   scans[scanId] = artifact;
   try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); } catch (e) {}
   appendLog(`INCREMENTAL_SCAN_COMPLETE id=${scanId} total=${items.length}`);
-  res.json({ scanId, totalCount: items.length });
+  // include a small sample of first-page items to help clients refresh UI without
+  // requiring an extra request. Clients may pass a 'limit' query param when
+  // invoking incremental scan; default to 100.
+  const sampleLimit = Number.isInteger(parseInt(req.query && req.query.limit)) ? parseInt(req.query.limit) : 100;
+  const sample = items.slice(0, sampleLimit);
+  res.json({ scanId, totalCount: items.length, items: sample });
   try { void backgroundEnrichFirstN(scanId, items, req.session, libPath, `scanPath:${libPath}`, 12); } catch (e) { appendLog(`INCREMENTAL_BACKGROUND_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
 });
 
@@ -1449,6 +1454,13 @@ app.get('/api/scan/latest', (req, res) => {
     if (!filtered.length) return res.status(404).json({ error: 'no scans' })
     filtered.sort((a,b) => (b.generatedAt || 0) - (a.generatedAt || 0))
     const pick = filtered[0]
+    // Optionally include the first page of items when requested (clients can set includeItems=true)
+    const include = (req.query && (req.query.includeItems === '1' || req.query.includeItems === 'true'))
+    if (include) {
+      const limit = Math.min(Math.max(parseInt(req.query.limit || '50', 10), 1), 500)
+      const items = Array.isArray(pick.items) ? pick.items.slice(0, limit) : []
+      return res.json({ scanId: pick.id, libraryId: pick.libraryId, totalCount: pick.totalCount, generatedAt: pick.generatedAt, items })
+    }
     return res.json({ scanId: pick.id, libraryId: pick.libraryId, totalCount: pick.totalCount, generatedAt: pick.generatedAt })
   } catch (e) { return res.status(500).json({ error: e.message }) }
 })
