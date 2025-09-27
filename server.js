@@ -52,6 +52,7 @@ const renderedIndexFile = path.join(DATA_DIR, 'rendered-index.json');
 const logsFile = path.join(DATA_DIR, 'logs.txt');
 // Wikipedia episode cache file (persistent)
 const wikiEpisodeCacheFile = path.join(DATA_DIR, 'wiki-episode-cache.json');
+const wikiSearchLogFile = path.join(DATA_DIR, 'wiki-search.log');
 
 // ensure we have a persistent session signing key
 const sessionKeyFile = path.join(DATA_DIR, 'session.key');
@@ -107,10 +108,23 @@ try { ensureFile(scanCacheFile, {}); } catch (e) {}
 try { ensureFile(renderedIndexFile, {}); } catch (e) {}
 try { ensureFile(logsFile, ''); } catch (e) {}
 try { ensureFile(wikiEpisodeCacheFile, {}); } catch (e) {}
+try { ensureFile(wikiSearchLogFile, ''); } catch (e) {}
 
 // Wikipedia episode cache (in-memory, persisted to wiki-episode-cache.json)
 let wikiEpisodeCache = {};
 try { wikiEpisodeCache = JSON.parse(fs.readFileSync(wikiEpisodeCacheFile, 'utf8') || '{}') } catch (e) { wikiEpisodeCache = {} }
+
+// lightweight per-purpose wiki search log
+function writeWikiLog(line) {
+  try {
+    const ts = (new Date()).toISOString();
+    if (wikiSearchLogFile && typeof wikiSearchLogFile === 'string') {
+      try { fs.appendFileSync(wikiSearchLogFile, ts + ' ' + String(line) + '\n', { encoding: 'utf8' }) } catch (e) { /* best-effort */ }
+    } else {
+      try { console.log(ts + ' ' + String(line)) } catch (e) {}
+    }
+  } catch (e) { /* ignore */ }
+}
 
 // Initialize caches and DB if available
 let db = null;
@@ -533,29 +547,52 @@ async function metaLookup(title, apiKey, opts = {}) {
   async function lookupWikipediaEpisode(seriesTitle, season, episode) {
     try {
       if (!seriesTitle || season == null || episode == null) return null
-      // check cache first
+      // Accept either a string title or an array/object of title variants
+      let titleVariants = []
+      if (Array.isArray(seriesTitle)) titleVariants = seriesTitle.map(x=>String(x||'').trim()).filter(Boolean)
+      else if (typeof seriesTitle === 'object' && seriesTitle !== null) {
+        // object could be an AniList media node: pick english/romaji/native
+        try { if (seriesTitle.english) titleVariants.push(seriesTitle.english) } catch (e) {}
+        try { if (seriesTitle.romaji) titleVariants.push(seriesTitle.romaji) } catch (e) {}
+        try { if (seriesTitle.native) titleVariants.push(seriesTitle.native) } catch (e) {}
+      } else {
+        titleVariants = [String(seriesTitle || '').trim()]
+      }
+      // unique normalized variants
+      titleVariants = [...new Set(titleVariants.map(s=>String(s||'').trim()).filter(Boolean))]
+
+      // check cache for any variant
       try {
-        const key = `${String(seriesTitle).toLowerCase().trim()}|s${Number(season)}|e${Number(episode)}`
-        const entr = wikiEpisodeCache && wikiEpisodeCache[key] ? wikiEpisodeCache[key] : null
-        if (entr && entr.name) {
-          // TTL: 30 days
-          const age = Date.now() - (entr.ts || 0)
-          if (age < 1000 * 60 * 60 * 24 * 30) {
-            try { appendLog(`META_WIKIPEDIA_CACHE_HIT key=${key} name=${String(entr.name).slice(0,120)}`) } catch (e) {}
-            return { name: entr.name, raw: entr.raw || { source: 'wikipedia', cached: true, page: (entr.raw && entr.raw.page) ? entr.raw.page : null } }
+        for (const tv of titleVariants) {
+          const key = `${String(tv).toLowerCase().trim()}|s${Number(season)}|e${Number(episode)}`
+          const entr = wikiEpisodeCache && wikiEpisodeCache[key] ? wikiEpisodeCache[key] : null
+          if (entr && entr.name) {
+            const age = Date.now() - (entr.ts || 0)
+            if (age < 1000 * 60 * 60 * 24 * 30) {
+              try { appendLog(`META_WIKIPEDIA_CACHE_HIT key=${key} name=${String(entr.name).slice(0,120)}`) } catch (e) {}
+              try { writeWikiLog(`CACHE_HIT key=${key} titleVariant=${tv} name=${entr.name}`) } catch (e) {}
+              return { name: entr.name, raw: entr.raw || { source: 'wikipedia', cached: true, page: (entr.raw && entr.raw.page) ? entr.raw.page : null } }
+            }
           }
         }
       } catch (e) { /* ignore cache read errors */ }
+
       await pace('en.wikipedia.org')
-      const candidates = [
-        `List of ${seriesTitle} episodes`,
-        `${seriesTitle} episodes`,
-        `${seriesTitle} (season ${season})`,
-        `${seriesTitle} season ${season} episodes`
-      ]
-      for (const q of candidates) {
+      // Build expanded candidate queries from each title variant
+      const candidates = []
+      for (const t of titleVariants) {
+        candidates.push(`List of ${t} episodes`)
+        candidates.push(`${t} episodes`)
+        candidates.push(`${t} (season ${season})`)
+        candidates.push(`${t} season ${season} episodes`)
+        // also try shorter forms without punctuation
+        candidates.push(`${t.replace(/[\._\-:]+/g,' ')} episodes`)
+      }
+      // de-duplicate and limit
+      const uniqCandidates = [...new Set(candidates)].slice(0,12)
+      for (const q of uniqCandidates) {
         try {
-          try { appendLog(`META_WIKIPEDIA_SEARCH q=${q}`) } catch (e) {}
+          try { appendLog(`META_WIKIPEDIA_SEARCH q=${q}`); writeWikiLog(`SEARCH q=${q} season=${season} episode=${episode}`) } catch (e) {}
           const path = `/w/api.php?action=query&format=json&list=search&srsearch=${encodeURIComponent(String(q).slice(0,250))}&srlimit=6`;
           const sres = await httpRequest({ hostname: 'en.wikipedia.org', path, method: 'GET', headers: { 'Accept': 'application/json', 'User-Agent': 'renamer/1.0' } }, null, 4000)
           if (!sres || !sres.body) continue
@@ -643,6 +680,7 @@ async function metaLookup(title, apiKey, opts = {}) {
                       rawTitle = rawTitle.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g,' ').trim()
                       if (!rawTitle) continue
                       try { appendLog(`META_WIKIPEDIA_OK series=${seriesTitle} season=${season} episode=${episode} title=${rawTitle.slice(0,200)}`) } catch (e) {}
+                      try { writeWikiLog(`HIT series=${seriesTitle} season=${season} episode=${episode} title=${rawTitle.slice(0,200)}`) } catch (e) {}
                       // persist to cache
                       try {
                         const key = `${String(seriesTitle).toLowerCase().trim()}|s${Number(season)}|e${Number(episode)}`
