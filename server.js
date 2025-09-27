@@ -672,11 +672,20 @@ async function metaLookup(title, apiKey, opts = {}) {
       const a = await searchAniList(v)
       try { appendLog(`META_ANILIST_SEARCH q=${v} found=${a ? 'yes' : 'no'}`) } catch (e) {}
       if (a) {
-        // Attempt TMDb episode lookup first when a TMDb key is available; otherwise try Kitsu.
-        // This prefers TMDb episode titles when present but falls back to Kitsu for compatibility.
+        // Attempt Wikipedia episode lookup first (best-effort). If Wikipedia finds a
+        // localized episode title, prefer it and skip TMDb/Kitsu episode lookups.
         let ep = null
         try {
-            if (apiKey) {
+          try {
+            const wikiEp = await lookupWikipediaEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+            if (wikiEp && wikiEp.name) {
+              ep = { name: wikiEp.name }
+              try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
+            }
+          } catch (e) {}
+
+          // If Wikipedia didn't provide an episode title, try TMDb (when key available)
+          if (!ep && apiKey) {
             const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
             try { appendLog(`META_TMDB_EP_AFTER_ANILIST tmLookup=${tmLookupName} anilist=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
             const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
@@ -687,10 +696,11 @@ async function metaLookup(title, apiKey, opts = {}) {
               try { appendLog(`META_TMDB_EP_AFTER_ANILIST_NONE q=${a.name || v}`) } catch (e) {}
             }
           }
-              if (!ep) {
-            // If no TMDb key is present, explicitly log that we will use Kitsu
+
+          // If still no episode title, try Kitsu as a fallback
+          if (!ep) {
             if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY q=${a.name || v}`) } catch (e) {} }
-              ep = await fetchKitsuEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v, opts && opts.episode != null ? opts.episode : null)
+            ep = await fetchKitsuEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v, opts && opts.episode != null ? opts.episode : null)
             try { appendLog(`META_KITSU_EP q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
           }
         } catch (e) { ep = null; try { appendLog(`META_EP_AFTER_ANILIST_ERROR q=${a.name || v} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
