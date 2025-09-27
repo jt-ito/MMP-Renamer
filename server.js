@@ -715,7 +715,25 @@ async function metaLookup(title, apiKey, opts = {}) {
         let ep = null
         try {
           try {
-            const wikiEp = await lookupWikipediaEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+            // build title variants from AniList media (english/romaji/native + related nodes)
+            let titleVariants = []
+            try {
+              if (a && a.title) {
+                try { if (a.title.english) titleVariants.push(a.title.english) } catch (e) {}
+                try { if (a.title.romaji) titleVariants.push(a.title.romaji) } catch (e) {}
+                try { if (a.title.native) titleVariants.push(a.title.native) } catch (e) {}
+              }
+              if (a && a.relations && Array.isArray(a.relations.nodes)) {
+                for (const rn of a.relations.nodes) {
+                  try { if (rn && rn.title && rn.title.english) titleVariants.push(rn.title.english) } catch (e) {}
+                  try { if (rn && rn.title && rn.title.romaji) titleVariants.push(rn.title.romaji) } catch (e) {}
+                  try { if (rn && rn.title && rn.title.native) titleVariants.push(rn.title.native) } catch (e) {}
+                }
+              }
+              // fallback to raw name
+              if (!titleVariants.length && a && a.name) titleVariants.push(a.name)
+            } catch (e) { titleVariants = [(a && a.name) ? a.name : v] }
+            const wikiEp = await lookupWikipediaEpisode(titleVariants, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
             if (wikiEp && wikiEp.name) {
               ep = { name: wikiEp.name }
               try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
@@ -779,7 +797,24 @@ async function metaLookup(title, apiKey, opts = {}) {
 
         // First: try Wikipedia for an episode title
         try {
-          const wikiEp = await lookupWikipediaEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+          // build title variants similar to above
+          let titleVariantsP = []
+          try {
+            if (a && a.title) {
+              try { if (a.title.english) titleVariantsP.push(a.title.english) } catch (e) {}
+              try { if (a.title.romaji) titleVariantsP.push(a.title.romaji) } catch (e) {}
+              try { if (a.title.native) titleVariantsP.push(a.title.native) } catch (e) {}
+            }
+            if (a && a.relations && Array.isArray(a.relations.nodes)) {
+              for (const rn of a.relations.nodes) {
+                try { if (rn && rn.title && rn.title.english) titleVariantsP.push(rn.title.english) } catch (e) {}
+                try { if (rn && rn.title && rn.title.romaji) titleVariantsP.push(rn.title.romaji) } catch (e) {}
+                try { if (rn && rn.title && rn.title.native) titleVariantsP.push(rn.title.native) } catch (e) {}
+              }
+            }
+            if (!titleVariantsP.length) titleVariantsP.push((a && a.name) ? a.name : parentCandidate)
+          } catch (e) { titleVariantsP = [(a && a.name) ? a.name : parentCandidate] }
+          const wikiEp = await lookupWikipediaEpisode(titleVariantsP, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
           if (wikiEp && wikiEp.name) {
             ep = { name: wikiEp.name }
             try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
