@@ -41,6 +41,18 @@ function requireAdmin(req, res, next) {
 const DATA_DIR = path.resolve(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
+// Persistent filenames used across the server. Define defaults relative to DATA_DIR.
+const settingsFile = path.join(DATA_DIR, 'settings.json');
+const usersFile = path.join(DATA_DIR, 'users.json');
+const enrichStoreFile = path.join(DATA_DIR, 'enrich-store.json');
+const parsedCacheFile = path.join(DATA_DIR, 'parsed-cache.json');
+const scanStoreFile = path.join(DATA_DIR, 'scans.json');
+const scanCacheFile = path.join(DATA_DIR, 'scan-cache.json');
+const renderedIndexFile = path.join(DATA_DIR, 'rendered-index.json');
+const logsFile = path.join(DATA_DIR, 'logs.txt');
+// Wikipedia episode cache file (persistent)
+const wikiEpisodeCacheFile = path.join(DATA_DIR, 'wiki-episode-cache.json');
+
 // ensure we have a persistent session signing key
 const sessionKeyFile = path.join(DATA_DIR, 'session.key');
 function ensureSessionKey() {
@@ -61,26 +73,9 @@ const SESSION_KEY = ensureSessionKey();
 if (SESSION_KEY) {
   app.use(cookieSession({ name: 'mmp_sess', keys: [SESSION_KEY], maxAge: 7 * 24 * 60 * 60 * 1000 }));
 } else {
-  // fallback to unsigned session (best-effort) but warn
-  console.warn('No SESSION_KEY available; sessions will not be signed');
-  app.use(cookieSession({ name: 'mmp_sess', keys: [] }));
+  // No session key available; run without cookie-session middleware (best-effort)
+  console.warn('SESSION_KEY missing; running without session middleware');
 }
-
-const scanStoreFile = path.join(DATA_DIR, 'scans.json');
-const enrichStoreFile = path.join(DATA_DIR, 'enrich.json');
-const logsFile = path.join(DATA_DIR, 'logs.txt');
-const settingsFile = path.join(DATA_DIR, 'settings.json');
-const usersFile = path.join(DATA_DIR, 'users.json');
-const renderedIndexFile = path.join(DATA_DIR, 'rendered-index.json');
-const parsedCacheFile = path.join(DATA_DIR, 'parsed-cache.json');
-const scanCacheFile = path.join(DATA_DIR, 'scan-cache.json');
-
-// Process-level handlers to capture and log uncaught errors which can otherwise manifest as 502s upstream
-process.on('uncaughtException', (err) => {
-  try { console.error('uncaughtException', err && err.stack ? err.stack : err) } catch (e) {}
-  try { appendLog(`UNCATCHED_EXCEPTION ${err && err.message ? err.message : String(err)}`) } catch (e) {}
-  // allow process to continue for now; container/host should restart if desired
-})
 process.on('unhandledRejection', (reason, p) => {
   try { console.error('unhandledRejection', reason) } catch (e) {}
   try { appendLog(`UNHANDLED_REJECTION ${reason && reason.message ? reason.message : String(reason)}`) } catch (e) {}
@@ -111,6 +106,11 @@ try { ensureFile(scanStoreFile, {}); } catch (e) {}
 try { ensureFile(scanCacheFile, {}); } catch (e) {}
 try { ensureFile(renderedIndexFile, {}); } catch (e) {}
 try { ensureFile(logsFile, ''); } catch (e) {}
+try { ensureFile(wikiEpisodeCacheFile, {}); } catch (e) {}
+
+// Wikipedia episode cache (in-memory, persisted to wiki-episode-cache.json)
+let wikiEpisodeCache = {};
+try { wikiEpisodeCache = JSON.parse(fs.readFileSync(wikiEpisodeCacheFile, 'utf8') || '{}') } catch (e) { wikiEpisodeCache = {} }
 
 // Initialize caches and DB if available
 let db = null;
@@ -133,17 +133,21 @@ try {
       // When server.js is required by tests, don't exit the process on DB init failure.
       if (require.main === module) process.exit(1);
   }
-  try {
-    enrichCache = db.getKV('enrichCache') || {};
-    parsedCache = db.getKV('parsedCache') || {};
-    renderedIndex = db.getKV('renderedIndex') || {};
-    hideEvents = db.getHideEvents() || [];
-    scans = db.loadScansObject() || {};
-  } catch (e) {
-    appendLog('DB_LOAD_FAIL ' + (e && e.message ? e.message : String(e)));
-    console.error('DB_LOAD_FAIL', e && e.message ? e.message : e);
+  if (db) {
+    try {
+      enrichCache = db.getKV('enrichCache') || {};
+      parsedCache = db.getKV('parsedCache') || {};
+      renderedIndex = db.getKV('renderedIndex') || {};
+      hideEvents = db.getHideEvents() || [];
+      scans = db.loadScansObject() || {};
+    } catch (e) {
+      appendLog('DB_LOAD_FAIL ' + (e && e.message ? e.message : String(e)));
+      console.error('DB_LOAD_FAIL', e && e.message ? e.message : e);
       // When required as a module (tests), avoid exiting; let tests proceed.
       if (require.main === module) process.exit(1);
+    }
+  } else {
+    try { appendLog('DB_SKIPPED_NO_DB'); } catch (e) {}
   }
 } catch (e) {
   console.error('DB_MODULE_LOAD_FAIL', e && e.message ? e.message : e);
@@ -163,7 +167,17 @@ const refreshProgress = {};
 function appendLog(line) {
   try {
     const ts = (new Date()).toISOString();
-    fs.appendFileSync(logsFile, ts + ' ' + String(line) + '\n', { encoding: 'utf8' });
+    // Avoid throwing when logsFile is undefined or DATA_DIR isn't writable (tests/environment)
+    if (logsFile && typeof logsFile === 'string') {
+      try {
+        fs.appendFileSync(logsFile, ts + ' ' + String(line) + '\n', { encoding: 'utf8' });
+      } catch (e) {
+        // fallback to console when file write fails
+        try { console.error('appendLog failed', e && e.message ? e.message : e); } catch (ee) {}
+      }
+    } else {
+      try { console.log(ts + ' ' + String(line)) } catch (ee) {}
+    }
   } catch (e) {
     try { console.error('appendLog failed', e && e.message ? e.message : e); } catch (ee) {}
   }
@@ -515,6 +529,140 @@ async function metaLookup(title, apiKey, opts = {}) {
     } catch (e) { return null }
   }
 
+  // Wikipedia episode title lookup using MediaWiki API (best-effort)
+  async function lookupWikipediaEpisode(seriesTitle, season, episode) {
+    try {
+      if (!seriesTitle || season == null || episode == null) return null
+      // check cache first
+      try {
+        const key = `${String(seriesTitle).toLowerCase().trim()}|s${Number(season)}|e${Number(episode)}`
+        const entr = wikiEpisodeCache && wikiEpisodeCache[key] ? wikiEpisodeCache[key] : null
+        if (entr && entr.name) {
+          // TTL: 30 days
+          const age = Date.now() - (entr.ts || 0)
+          if (age < 1000 * 60 * 60 * 24 * 30) {
+            try { appendLog(`META_WIKIPEDIA_CACHE_HIT key=${key} name=${String(entr.name).slice(0,120)}`) } catch (e) {}
+            return { name: entr.name, raw: entr.raw || { source: 'wikipedia', cached: true, page: (entr.raw && entr.raw.page) ? entr.raw.page : null } }
+          }
+        }
+      } catch (e) { /* ignore cache read errors */ }
+      await pace('en.wikipedia.org')
+      const candidates = [
+        `List of ${seriesTitle} episodes`,
+        `${seriesTitle} episodes`,
+        `${seriesTitle} (season ${season})`,
+        `${seriesTitle} season ${season} episodes`
+      ]
+      for (const q of candidates) {
+        try {
+          try { appendLog(`META_WIKIPEDIA_SEARCH q=${q}`) } catch (e) {}
+          const path = `/w/api.php?action=query&format=json&list=search&srsearch=${encodeURIComponent(String(q).slice(0,250))}&srlimit=6`;
+          const sres = await httpRequest({ hostname: 'en.wikipedia.org', path, method: 'GET', headers: { 'Accept': 'application/json', 'User-Agent': 'renamer/1.0' } }, null, 4000)
+          if (!sres || !sres.body) continue
+          let sj = null
+          try { sj = JSON.parse(sres.body) } catch (e) { sj = null }
+          const hits = sj && sj.query && Array.isArray(sj.query.search) ? sj.query.search : []
+          if (!hits.length) continue
+          // Try each hit: fetch parsed HTML and look for season section and episode row
+          for (const h of hits) {
+            try {
+              const pid = h.pageid || h.docid || h.pageId
+              if (!pid) continue
+              await pace('en.wikipedia.org')
+              const ppath = `/w/api.php?action=parse&pageid=${encodeURIComponent(pid)}&prop=text&format=json`;
+              const pres = await httpRequest({ hostname: 'en.wikipedia.org', path: ppath, method: 'GET', headers: { 'Accept': 'application/json', 'User-Agent': 'renamer/1.0' } }, null, 5000)
+              if (!pres || !pres.body) continue
+              let pj = null
+              try { pj = JSON.parse(pres.body) } catch (e) { pj = null }
+              const html = pj && pj.parse && pj.parse.text && pj.parse.text['*'] ? pj.parse.text['*'] : null
+              if (!html) continue
+              // Find section matching season number (or 'Specials' when season==0)
+              const seasonNum = Number(season)
+              let sectionHtml = null
+              // split by headlines
+              const headRe = /(<span[^>]+class="mw-headline"[^>]*>[^<]*<\/span>)/ig
+              const heads = []
+              let m
+              while ((m = headRe.exec(html)) !== null) heads.push({ idx: m.index, text: m[0] })
+              // fallback simple search: locate "Season X" text nearby
+              const seasonRegex = seasonNum === 0 ? /Specials|Special episodes/i : new RegExp(`Season[^\d]{0,6}${seasonNum}|Season\s*${seasonNum}|Series\s*${seasonNum}`, 'i')
+              let headMatchIdx = -1
+              for (const hitem of heads) {
+                try {
+                  if (seasonRegex.test(hitem.text)) { headMatchIdx = hitem.idx; break }
+                } catch (e) {}
+              }
+              if (headMatchIdx === -1) {
+                // last resort: search the whole document for a season header text
+                const h2 = html.match(seasonRegex)
+                if (h2 && h2.index) headMatchIdx = h2.index
+              }
+              if (headMatchIdx !== -1) {
+                // find next headline or end of document
+                let nextHeadIdx = html.length
+                for (const hh of heads) { if (hh.idx > headMatchIdx) { nextHeadIdx = Math.min(nextHeadIdx, hh.idx); } }
+                sectionHtml = html.slice(headMatchIdx, nextHeadIdx)
+              } else {
+                // as a fallback, try to search entire HTML for episode rows
+                sectionHtml = html
+              }
+              if (!sectionHtml) continue
+              // find tables in section
+              const tableRe = /<table[\s\S]*?<\/table>/ig
+              let tbl
+              while ((tbl = tableRe.exec(sectionHtml)) !== null) {
+                try {
+                  const tHtml = tbl[0]
+                  // find rows
+                  const rowRe = /<tr[\s\S]*?<\/tr>/ig
+                  let rowm
+                  while ((rowm = rowRe.exec(tHtml)) !== null) {
+                    try {
+                      const r = rowm[0]
+                      // look for a cell containing the episode number (as whole word)
+                      const numRe = new RegExp(`(>|\\b)${String(episode)}(\\b|<)`, 'i')
+                      if (!numRe.test(r)) continue
+                      // attempt to extract a summary/title cell: prefer class="summary"
+                      let titleMatch = r.match(/<td[^>]*class="summary"[^>]*>([\s\S]*?)<\/td>/i)
+                      if (!titleMatch) {
+                        // find all <td> and take the one that looks like a title (contains quotes or links)
+                        const tds = Array.from(r.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/ig)).map(x=>x[1])
+                        // heuristic: pick the td with an <i> or an <a> or the longest text
+                        let pick = null
+                        for (const td of tds) {
+                          if (/\btitle\b/i.test(td) || /<i>|<em>|<a /i.test(td)) { pick = td; break }
+                        }
+                        if (!pick && tds.length) pick = tds[Math.min(2, tds.length-1)]
+                        titleMatch = pick ? [null, pick] : null
+                      }
+                      if (!titleMatch || !titleMatch[1]) continue
+                      let rawTitle = titleMatch[1]
+                      // strip HTML tags
+                      rawTitle = rawTitle.replace(/<[^>]+>/g, '')
+                      // decode common HTML entities
+                      rawTitle = rawTitle.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g,' ').trim()
+                      if (!rawTitle) continue
+                      try { appendLog(`META_WIKIPEDIA_OK series=${seriesTitle} season=${season} episode=${episode} title=${rawTitle.slice(0,200)}`) } catch (e) {}
+                      // persist to cache
+                      try {
+                        const key = `${String(seriesTitle).toLowerCase().trim()}|s${Number(season)}|e${Number(episode)}`
+                        wikiEpisodeCache = wikiEpisodeCache || {}
+                        wikiEpisodeCache[key] = { name: rawTitle, raw: { source: 'wikipedia', page: h.title || h }, ts: Date.now() }
+                        try { writeJson(wikiEpisodeCacheFile, wikiEpisodeCache) } catch (e) { /* ignore write errors */ }
+                      } catch (e) {}
+                      return { name: rawTitle, raw: { source: 'wikipedia', page: h.title || h } }
+                    } catch (e) { continue }
+                  }
+                } catch (e) { continue }
+              }
+            } catch (e) { continue }
+          }
+        } catch (e) { continue }
+      }
+    } catch (e) { try { appendLog(`META_WIKIPEDIA_ERROR title=${seriesTitle} err=${e && e.message ? e.message : String(e)}`) } catch (e) {} }
+    return null
+  }
+
   // Try AniList variants, then parent, then TMDb fallback
   try {
     const variants = makeVariants(title)
@@ -567,16 +715,32 @@ async function metaLookup(title, apiKey, opts = {}) {
     // try parent-derived candidate if provided or derivable
     let parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
     if (!parentCandidate && opts && opts.parentPath) {
-      try { const pp = require('./lib/filename-parser')(path.basename(opts.parentPath)); if (pp && pp.title) parentCandidate = pp.title } catch (e) {}
+      try {
+        const pp = require('./lib/filename-parser')(path.basename(opts.parentPath))
+        if (pp && pp.title) parentCandidate = pp.title
+      } catch (e) {}
     }
     if (parentCandidate) {
       const pvars = makeVariants(parentCandidate)
-      for (let i=0;i<Math.min(pvars.length,3);i++) {
+      for (let i = 0; i < Math.min(pvars.length, 3); i++) {
         const a = await searchAniList(pvars[i])
         try { appendLog(`META_ANILIST_PARENT_SEARCH q=${pvars[i]} found=${a ? 'yes' : 'no'}`) } catch (e) {}
-        if (a) {
-          let ep = null
-          try {
+        if (!a) continue
+
+        let ep = null
+
+        // First: try Wikipedia for an episode title
+        try {
+          const wikiEp = await lookupWikipediaEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+          if (wikiEp && wikiEp.name) {
+            ep = { name: wikiEp.name }
+            try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
+          }
+        } catch (e) {}
+
+        // Second: try TMDb (if key) then Kitsu
+        try {
+          if (!ep) {
             if (apiKey) {
               const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
               try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT tmLookup=${tmLookupName} anilist=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
@@ -588,28 +752,34 @@ async function metaLookup(title, apiKey, opts = {}) {
                 try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_NONE q=${a.name || parentCandidate}`) } catch (e) {}
               }
             }
-              if (!ep) {
-              // If no TMDb key is present, explicitly log that we will use Kitsu
+
+            if (!ep) {
               if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY_PARENT q=${a.name || parentCandidate}`) } catch (e) {} }
               ep = await fetchKitsuEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate, opts && opts.episode != null ? opts.episode : null)
               try { appendLog(`META_KITSU_EP_PARENT q=${a.name || parentCandidate} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
             }
-          } catch (e) { ep = null; try { appendLog(`META_EP_AFTER_ANILIST_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
-          try {
-            if (!ep && apiKey) {
-              const tmLookupNameFb = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
-              try { appendLog(`META_TMDB_EP_FALLBACK_PARENT tmLookup=${tmLookupNameFb} anilist=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
-              const tmEp = await searchTmdbAndEpisode(tmLookupNameFb, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-              if (tmEp && tmEp.episode) {
-                ep = tmEp.episode
-                try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_OK q=${a.name || parentCandidate} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
-              } else {
-                try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_NONE q=${a.name || parentCandidate}`) } catch (e) {}
-              }
-            }
-          } catch (e) { try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
-          return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
+          }
+        } catch (e) {
+          ep = null
+          try { appendLog(`META_EP_AFTER_ANILIST_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
         }
+
+        // Third: TMDb fallback attempt
+        try {
+          if (!ep && apiKey) {
+            const tmLookupNameFb = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
+            try { appendLog(`META_TMDB_EP_FALLBACK_PARENT tmLookup=${tmLookupNameFb} anilist=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+            const tmEp = await searchTmdbAndEpisode(tmLookupNameFb, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+            if (tmEp && tmEp.episode) {
+              ep = tmEp.episode
+              try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_OK q=${a.name || parentCandidate} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
+            } else {
+              try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_NONE q=${a.name || parentCandidate}`) } catch (e) {}
+            }
+          }
+        } catch (e) { try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+
+        return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
       }
     }
 
