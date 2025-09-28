@@ -845,9 +845,9 @@ async function metaLookup(title, apiKey, opts = {}) {
                         if (epNumRegex.test(plain[i])) { numIdx = i; break }
                       }
                       if (numIdx === -1) {
-                        // fallback: previously we matched anywhere in row; keep legacy behavior but stricter: require word boundary not followed by comma (to avoid dates like 'May 11, 2024')
-                        const numRe = new RegExp(`\\b${String(episode)}\\b(?!,)`, 'i')
-                        if (!numRe.test(r)) continue
+                        // Require an explicit numeric episode cell to avoid false matches (dates, references).
+                        try { writeWikiLog(`ROW_SKIPPED_no_numeric_cell series=${seriesTitle} season=${season} episode=${episode}`) } catch (e) {}
+                        continue
                       }
                       // attempt to select title cell: prefer a cell with class="summary"
                       let titleHtml = null
@@ -961,20 +961,8 @@ async function metaLookup(title, apiKey, opts = {}) {
             try { appendLog(`META_KITSU_EP q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
           }
         } catch (e) { ep = null; try { appendLog(`META_EP_AFTER_ANILIST_ERROR q=${a.name || v} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
-        // If Kitsu didn't return an episode title and we have a TMDb key, try TMDb episode endpoint as a fallback
-        try {
-            if (!ep && apiKey) {
-              const tmLookupNameFb = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
-              try { appendLog(`META_TMDB_EP_FALLBACK tmLookup=${tmLookupNameFb} anilist=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
-            const tmEp = await searchTmdbAndEpisode(tmLookupNameFb, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-            if (tmEp && tmEp.episode) {
-              ep = tmEp.episode
-              try { appendLog(`META_TMDB_EP_FALLBACK_OK q=${a.name || v} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
-            } else {
-              try { appendLog(`META_TMDB_EP_FALLBACK_NONE q=${a.name || v}`) } catch (e) {}
-            }
-          }
-        } catch (e) { try { appendLog(`META_TMDB_EP_FALLBACK_ERROR q=${a.name || v} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+          // TMDb is attempted before Kitsu above when an API key is present. No additional
+          // TMDb fallback attempt here — prefer the single TMDb attempt followed by Kitsu.
         return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
       }
     }
@@ -1048,20 +1036,8 @@ async function metaLookup(title, apiKey, opts = {}) {
           try { appendLog(`META_EP_AFTER_ANILIST_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
         }
 
-        // Third: TMDb fallback attempt
-        try {
-          if (!ep && apiKey) {
-            const tmLookupNameFb = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
-            try { appendLog(`META_TMDB_EP_FALLBACK_PARENT tmLookup=${tmLookupNameFb} anilist=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
-            const tmEp = await searchTmdbAndEpisode(tmLookupNameFb, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-            if (tmEp && tmEp.episode) {
-              ep = tmEp.episode
-              try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_OK q=${a.name || parentCandidate} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
-            } else {
-              try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_NONE q=${a.name || parentCandidate}`) } catch (e) {}
-            }
-          }
-        } catch (e) { try { appendLog(`META_TMDB_EP_FALLBACK_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+        // TMDb is only attempted once above when an API key is present; Kitsu remains the
+        // fallback provider for anime when TMDb did not provide episode information.
 
         return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
       }
