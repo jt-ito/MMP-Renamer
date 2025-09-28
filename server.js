@@ -740,9 +740,19 @@ async function metaLookup(title, apiKey, opts = {}) {
                 try { writeWikiLog(`CACHE_SKIPPED key=${key} titleVariant=${tv} name=${entr.name}`) } catch (e) {}
                 continue
               }
-              try { appendLog(`META_WIKIPEDIA_CACHE_HIT key=${key} name=${String(entr.name).slice(0,120)}`) } catch (e) {}
-              try { writeWikiLog(`CACHE_HIT key=${key} titleVariant=${tv} name=${entr.name}`) } catch (e) {}
-              return { name: entr.name, raw: entr.raw || { source: 'wikipedia', cached: true, page: (entr.raw && entr.raw.page) ? entr.raw.page : null } }
+                try { appendLog(`META_WIKIPEDIA_CACHE_HIT key=${key} name=${String(entr.name).slice(0,120)}`) } catch (e) {}
+                try { writeWikiLog(`CACHE_HIT key=${key} titleVariant=${tv} name=${entr.name}`) } catch (e) {}
+                // If caller provided a TMDb key, attempt to verify and prefer TMDb episode title when present
+                try {
+                  if (options && options.tmdbKey) {
+                    const tmCheck = await searchTmdbAndEpisode(tv, options.tmdbKey, season, episode)
+                    if (tmCheck && tmCheck.episode && (tmCheck.episode.name || tmCheck.episode.title)) {
+                      try { appendLog(`META_TMDB_VERIFIED_CACHE key=${key} tm=${(tmCheck.episode.name||tmCheck.episode.title)}`) } catch (e) {}
+                      return { name: tmCheck.episode.name || tmCheck.episode.title, raw: tmCheck.episode }
+                    }
+                  }
+                } catch (e) {}
+                return { name: entr.name, raw: entr.raw || { source: 'wikipedia', cached: true, page: (entr.raw && entr.raw.page) ? entr.raw.page : null } }
             }
           }
         }
@@ -828,6 +838,21 @@ async function metaLookup(title, apiKey, opts = {}) {
                   const tHtml = tbl[0]
                   // find rows
                   const rowRe = /<tr[\s\S]*?<\/tr>/ig
+                  // detect header row to find episode-number column index (if present)
+                  let headerIndex = -1
+                  try {
+                    const headerRowMatch = tHtml.match(/<tr[\s\S]*?<th[\s\S]*?<\/tr>/i)
+                    if (headerRowMatch && headerRowMatch[0]) {
+                      const hdr = headerRowMatch[0]
+                      const thRe = /<th\b[^>]*>([\s\S]*?)<\/th>/ig
+                      const ths = Array.from(hdr.matchAll(thRe)).map(x => String(x[1] || '').replace(/<[^>]+>/g,'').replace(/&nbsp;|\u00A0/g,' ').replace(/\s+/g,' ').trim())
+                      for (let hi = 0; hi < ths.length; hi++) {
+                        try {
+                          if (/^\s*(?:no\.?|#|episode|ep\.?|number|titre|title)\b/i.test(ths[hi]) || /episode\b/i.test(ths[hi])) { headerIndex = hi; break }
+                        } catch (e) {}
+                      }
+                    }
+                  } catch (e) { headerIndex = -1 }
                   let rowm
                   while ((rowm = rowRe.exec(tHtml)) !== null) {
                     try {
@@ -838,11 +863,24 @@ async function metaLookup(title, apiKey, opts = {}) {
                       if (!cells.length) continue
                       function stripText(s) { try { return String(s || '').replace(/<[^>]+>/g, '').replace(/&nbsp;|\u00A0/g, ' ').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g, "'").replace(/\s+/g,' ').trim() } catch (e) { return String(s || '').replace(/<[^>]+>/g,'').trim() } }
                       const plain = cells.map(c => stripText(c.html))
-                      // look for a cell whose text is exactly the episode number (or like '11' or '11.5')
+                      // canonical episode number regex
                       const epNumRegex = new RegExp(`^${Number(episode)}(?:\\.\\d+)?\\s*(?:\\(|$)`, '')
                       let numIdx = -1
-                      for (let i = 0; i < plain.length; i++) {
-                        if (epNumRegex.test(plain[i])) { numIdx = i; break }
+                      if (headerIndex !== -1 && headerIndex < plain.length) {
+                        // prefer numeric match in header-detected column, but if it doesn't match
+                        // scan the rest of the cells so we don't miss episodes where numbering
+                        // appears in a different column despite header labeling.
+                        if (epNumRegex.test(plain[headerIndex])) numIdx = headerIndex
+                        else {
+                          for (let i = 0; i < plain.length; i++) {
+                            if (epNumRegex.test(plain[i])) { numIdx = i; break }
+                          }
+                        }
+                      } else {
+                        // fall back: scan for numeric cell
+                        for (let i = 0; i < plain.length; i++) {
+                          if (epNumRegex.test(plain[i])) { numIdx = i; break }
+                        }
                       }
                       if (numIdx === -1) {
                         // Require an explicit numeric episode cell to avoid false matches (dates, references).
@@ -934,10 +972,28 @@ async function metaLookup(title, apiKey, opts = {}) {
               // fallback to raw name
               if (!titleVariants.length && a && a.name) titleVariants.push(a.name)
             } catch (e) { titleVariants = [(a && a.name) ? a.name : v] }
-            const wikiEp = await lookupWikipediaEpisode(titleVariants, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force) })
+            const wikiEp = await lookupWikipediaEpisode(titleVariants, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey })
             if (wikiEp && wikiEp.name) {
-              ep = { name: wikiEp.name }
-              try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
+              // If TMDb key present, verify with TMDb and prefer its episode title when available
+              if (apiKey) {
+                try {
+                  const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
+                  const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+                  if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
+                    ep = tmEpCheck.episode
+                    try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI q=${a.name || v} tm=${(tmEpCheck.episode.name||tmEpCheck.episode.title)}`) } catch (e) {}
+                  } else {
+                    ep = { name: wikiEp.name }
+                    try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
+                  }
+                } catch (e) {
+                  ep = { name: wikiEp.name }
+                  try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
+                }
+              } else {
+                ep = { name: wikiEp.name }
+                try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
+              }
             }
           } catch (e) {}
 
@@ -1003,10 +1059,27 @@ async function metaLookup(title, apiKey, opts = {}) {
             }
             if (!titleVariantsP.length) titleVariantsP.push((a && a.name) ? a.name : parentCandidate)
           } catch (e) { titleVariantsP = [(a && a.name) ? a.name : parentCandidate] }
-          const wikiEp = await lookupWikipediaEpisode(titleVariantsP, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force) })
+          const wikiEp = await lookupWikipediaEpisode(titleVariantsP, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey })
           if (wikiEp && wikiEp.name) {
-            ep = { name: wikiEp.name }
-            try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
+            if (apiKey) {
+              try {
+                const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
+                const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+                if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
+                  ep = tmEpCheck.episode
+                  try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_PARENT q=${a.name || parentCandidate} tm=${(tmEpCheck.episode.name||tmEpCheck.episode.title)}`) } catch (e) {}
+                } else {
+                  ep = { name: wikiEp.name }
+                  try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
+                }
+              } catch (e) {
+                ep = { name: wikiEp.name }
+                try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
+              }
+            } else {
+              ep = { name: wikiEp.name }
+              try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
+            }
           }
         } catch (e) {}
 
