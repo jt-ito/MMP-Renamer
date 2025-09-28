@@ -647,11 +647,41 @@ async function metaLookup(title, apiKey, opts = {}) {
         } catch (e) { return raw }
       }
 
+      // helper: determine whether a cleaned title seems like a real episode title (not a date or numeric-only)
+      function isMeaningfulTitle(s) {
+        try {
+          if (!s) return false
+          const t = String(s).trim()
+          // must contain at least one letter (latin or CJK) and not be just a year/date
+          if (!/[A-Za-z - - - - - - - - - - - - - - -\p{L}]/u.test(t)) return false
+          // reject common date patterns like 'June 30, 2020', '2025-09-28', '30 June 2020[12]', etc.
+          const dateLike = /(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,\s*\d{4})?/i
+          if (dateLike.test(t)) return false
+          if (/\b\d{4}\b/.test(t) && /^[\d\s\-:,\/]+$/.test(t.replace(/\(.*?\)/g,''))) return false
+          if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return false
+          // reject if it's mostly numbers / punctuation (e.g., '2020[12]' or 'S01E01' alone)
+          const alphaCount = (t.match(/[A-Za-z\p{L}]/gu) || []).length
+          const totalCount = t.length
+          if (totalCount > 0 && alphaCount / totalCount < 0.2) return false
+          // otherwise assume it's meaningful
+          return true
+        } catch (e) { return true }
+      }
+
       try {
         for (const tv of titleVariants) {
           const key = `${normalizeForCache(String(tv))}|s${Number(season)}|e${Number(episode)}`
           const entr = wikiEpisodeCache && wikiEpisodeCache[key] ? wikiEpisodeCache[key] : null
           if (entr && entr.name) {
+            // if cached value doesn't look like a real title, evict and continue
+            try {
+              if (!isMeaningfulTitle(entr.name)) {
+                try { writeWikiLog(`NON_TITLE_CACHE_REMOVED key=${key} name=${String(entr.name).slice(0,120)}`) } catch (e) {}
+                delete wikiEpisodeCache[key]
+                try { writeJson(wikiEpisodeCacheFile, wikiEpisodeCache) } catch (e) {}
+                continue
+              }
+            } catch (e) {}
             const age = Date.now() - (entr.ts || 0)
             if (age < CACHE_TTL_MS) {
               // if entry older than validation window, attempt lightweight validation
@@ -845,6 +875,11 @@ async function metaLookup(title, apiKey, opts = {}) {
                       let rawTitle = stripText(titleHtml)
                       if (!rawTitle) continue
                       const cleaned = cleanEpisodeTitle(rawTitle)
+                      // if cleaned title looks like a date or otherwise non-title, skip and continue to other hits
+                      if (!isMeaningfulTitle(cleaned)) {
+                        try { writeWikiLog(`SKIP_NON_TITLE series=${seriesTitle} season=${season} episode=${episode} raw=${rawTitle.slice(0,140)}`) } catch (e) {}
+                        continue
+                      }
                       try { appendLog(`META_WIKIPEDIA_OK series=${seriesTitle} season=${season} episode=${episode} title=${cleaned.slice(0,200)}`) } catch (e) {}
                       try { writeWikiLog(`HIT series=${seriesTitle} season=${season} episode=${episode} title=${cleaned.slice(0,200)}`) } catch (e) {}
                       // persist to cache (keep original raw for diagnostics)
