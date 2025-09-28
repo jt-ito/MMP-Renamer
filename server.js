@@ -114,6 +114,29 @@ try { ensureFile(wikiSearchLogFile, ''); } catch (e) {}
 let wikiEpisodeCache = {};
 try { wikiEpisodeCache = JSON.parse(fs.readFileSync(wikiEpisodeCacheFile, 'utf8') || '{}') } catch (e) { wikiEpisodeCache = {} }
 
+// Normalize a title for use as a cache key: lowercase, remove punctuation, collapse spaces
+function normalizeForCache(s) {
+  try {
+    if (!s) return ''
+    return String(s).toLowerCase().replace(/[\._\-:]+/g,' ').replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim()
+  } catch (e) { return String(s || '').toLowerCase().trim() }
+}
+
+// Lightweight migration: ensure existing keys are available under normalized forms as well
+try {
+  const migrated = {}
+  for (const k of Object.keys(wikiEpisodeCache || {})) {
+    try {
+      const parts = String(k).split('|')
+      const titlePart = parts && parts.length ? parts[0] : k
+      const rest = parts && parts.length > 1 ? parts.slice(1).join('|') : ''
+      const nk = (normalizeForCache(titlePart) || titlePart) + (rest ? '|' + rest : '')
+      migrated[nk] = wikiEpisodeCache[k]
+    } catch (e) { migrated[k] = wikiEpisodeCache[k] }
+  }
+  wikiEpisodeCache = migrated
+} catch (e) {}
+
 // lightweight per-purpose wiki search log
 function writeWikiLog(line) {
   try {
@@ -544,11 +567,12 @@ async function metaLookup(title, apiKey, opts = {}) {
   }
 
   // Wikipedia episode title lookup using MediaWiki API (best-effort)
-  async function lookupWikipediaEpisode(seriesTitle, season, episode) {
+  async function lookupWikipediaEpisode(seriesTitle, season, episode, options) {
     try {
       // reload persistent cache from disk to respect external test clears
       try { wikiEpisodeCache = JSON.parse(fs.readFileSync(wikiEpisodeCacheFile, 'utf8') || '{}') } catch (e) { wikiEpisodeCache = wikiEpisodeCache || {} }
       if (!seriesTitle || season == null || episode == null) return null
+      const force = options && options.force ? true : false
       // Accept either a string title or an array/object of title variants
       let titleVariants = []
       if (Array.isArray(seriesTitle)) titleVariants = seriesTitle.map(x=>String(x||'').trim()).filter(Boolean)
@@ -563,14 +587,129 @@ async function metaLookup(title, apiKey, opts = {}) {
       // unique normalized variants
       titleVariants = [...new Set(titleVariants.map(s=>String(s||'').trim()).filter(Boolean))]
 
-      // check cache for any variant
+      // cache TTL and validation windows
+      const CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30 // 30 days
+      const CACHE_VALIDATE_MS = 1000 * 60 * 60 * 24 * 7 // 7 days: validate older entries
+
+      // helper: count episode numbers present in a parsed HTML section (best-effort)
+      function countEpisodesInHtml(htmlSection) {
+        try {
+          if (!htmlSection) return 0
+          const tableRe = /<table[\s\S]*?<\/table>/ig
+          let maxEp = 0
+          let tbl
+          while ((tbl = tableRe.exec(htmlSection)) !== null) {
+            const tHtml = tbl[0]
+            const rowRe = /<tr[\s\S]*?<\/tr>/ig
+            let rowm
+            while ((rowm = rowRe.exec(tHtml)) !== null) {
+              const r = rowm[0]
+              const cellRe = /<(t[dh])\b[^>]*>([\s\S]*?)<\/\1>/ig
+              const cells = Array.from(r.matchAll(cellRe)).map(x => x[2])
+              for (const c of cells) {
+                const txt = String(c).replace(/<[^>]+>/g, '').replace(/&nbsp;|\u00A0/g, ' ').replace(/\s+/g,' ').trim()
+                const m = txt.match(/\b(\d{1,3})(?:\.\d+)?\b/)
+                if (m && m[1]) {
+                  const n = Number(m[1])
+                  if (!isNaN(n) && n > maxEp) maxEp = n
+                }
+              }
+            }
+          }
+          return maxEp
+        } catch (e) { return 0 }
+      }
+
+      // helper: clean up raw episode title text, prefer quoted English title and strip transliteration/language suffixes
+      function cleanEpisodeTitle(raw) {
+        try {
+          if (!raw) return raw
+          let s = String(raw).trim()
+          // prefer text inside double quotes (straight or curly)
+          const quoteMatch = s.match(/["“”«»\u201C\u201D]([^"“”«»\u201C\u201D]+)["“”«»\u201C\u201D]/)
+          if (quoteMatch && quoteMatch[1]) return quoteMatch[1].trim()
+          // prefer single-quoted if double not found
+          const singleMatch = s.match(/[\'‘’]([^\'‘’]+)[\'‘’]/)
+          if (singleMatch && singleMatch[1]) return singleMatch[1].trim()
+          // remove parenthetical Japanese/Language annotations
+          s = s.replace(/\(\s*Japanese:[^\)]*\)/i, '').replace(/\(\s*Japanese language[^\)]*\)/i, '')
+          // drop common transliteration markers and everything after them
+          const splitRe = /\bTransliteration\b|\bRomanization\b|\bTranslit\b|\bTrans\.\b|\bTranscription\b|\bTranslation\b|\bOriginal\b/i
+          const sp = s.split(splitRe)
+          if (sp && sp.length) s = sp[0].trim()
+          // also remove trailing language colon sections like 'Japanese: ...'
+          s = s.replace(/\s*Japanese:\s*.*$/i, '').trim()
+          // strip wrapping quotes if any remain
+          s = s.replace(/^['"\u201C\u201D\u2018\u2019]+/, '').replace(/['"\u201C\u201D\u2018\u2019]+$/, '')
+          // collapse spaces
+          s = s.replace(/\s{2,}/g,' ').trim()
+          return s
+        } catch (e) { return raw }
+      }
+
       try {
         for (const tv of titleVariants) {
-          const key = `${String(tv).toLowerCase().trim()}|s${Number(season)}|e${Number(episode)}`
+          const key = `${normalizeForCache(String(tv))}|s${Number(season)}|e${Number(episode)}`
           const entr = wikiEpisodeCache && wikiEpisodeCache[key] ? wikiEpisodeCache[key] : null
           if (entr && entr.name) {
             const age = Date.now() - (entr.ts || 0)
-            if (age < 1000 * 60 * 60 * 24 * 30) {
+            if (age < CACHE_TTL_MS) {
+              // if entry older than validation window, attempt lightweight validation
+              if (!force && age >= CACHE_VALIDATE_MS) {
+                try {
+                  const pageIdent = entr.raw && (entr.raw.page || entr.raw.pageid || entr.raw.pageId)
+                  if (pageIdent) {
+                    await pace('en.wikipedia.org')
+                    const pidPath = `/w/api.php?action=parse&page=${encodeURIComponent(String(pageIdent))}&prop=text&format=json`;
+                    try {
+                      const pres = await httpRequest({ hostname: 'en.wikipedia.org', path: pidPath, method: 'GET', headers: { 'Accept': 'application/json', 'User-Agent': 'renamer/1.0' } }, null, 5000)
+                      if (pres && pres.body) {
+                        let pj = null
+                        try { pj = JSON.parse(pres.body) } catch (e) { pj = null }
+                        const html = pj && pj.parse && pj.parse.text && pj.parse.text['*'] ? pj.parse.text['*'] : null
+                        if (html) {
+                          const seasonRegex = Number(season) === 0 ? /Specials|Special episodes/i : new RegExp(`Season\\s*${Number(season)}|Series\\s*${Number(season)}|Season[^\\d]{0,6}${Number(season)}`, 'i')
+                          let sectionHtml = null
+                          const headingRe = /<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/ig
+                          const heads = []
+                          let m2
+                          while ((m2 = headingRe.exec(html)) !== null) {
+                            const inner = String(m2[1] || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|\s+/g, ' ').trim()
+                            heads.push({ idx: m2.index, text: inner })
+                          }
+                          let headMatchIdx = -1
+                          for (const hitem of heads) { try { if (seasonRegex.test(hitem.text)) { headMatchIdx = hitem.idx; break } } catch (e) {} }
+                          if (headMatchIdx === -1) {
+                            const h2 = html.match(seasonRegex)
+                            if (h2 && typeof h2.index === 'number') headMatchIdx = h2.index
+                          }
+                          if (headMatchIdx !== -1) {
+                            let nextHeadIdx = html.length
+                            for (const hh of heads) { if (hh.idx > headMatchIdx) { nextHeadIdx = Math.min(nextHeadIdx, hh.idx); } }
+                            sectionHtml = html.slice(headMatchIdx, nextHeadIdx)
+                          } else {
+                            sectionHtml = html
+                          }
+                          const maxEp = countEpisodesInHtml(sectionHtml)
+                          try { writeWikiLog(`VALIDATE key=${key} currentMaxEp=${maxEp} requestedEp=${Number(episode)}`) } catch (e) {}
+                          if (maxEp && maxEp < Number(episode)) {
+                            try { appendLog(`META_WIKIPEDIA_CACHE_INVALID key=${key} maxEp=${maxEp} req=${episode}`) } catch (e) {}
+                            try { writeWikiLog(`INVALIDATED key=${key} maxEp=${maxEp} req=${episode}`) } catch (e) {}
+                            delete wikiEpisodeCache[key]
+                            try { writeJson(wikiEpisodeCacheFile, wikiEpisodeCache) } catch (e) {}
+                            continue
+                          }
+                        }
+                      }
+                    } catch (e) { /* ignore validation fetch errors and treat cache as valid */ }
+                  }
+                } catch (e) { /* ignore validation errors */ }
+              }
+              if (force) {
+                try { appendLog(`META_WIKIPEDIA_CACHE_SKIPPED key=${key} forced=true`) } catch (e) {}
+                try { writeWikiLog(`CACHE_SKIPPED key=${key} titleVariant=${tv} name=${entr.name}`) } catch (e) {}
+                continue
+              }
               try { appendLog(`META_WIKIPEDIA_CACHE_HIT key=${key} name=${String(entr.name).slice(0,120)}`) } catch (e) {}
               try { writeWikiLog(`CACHE_HIT key=${key} titleVariant=${tv} name=${entr.name}`) } catch (e) {}
               return { name: entr.name, raw: entr.raw || { source: 'wikipedia', cached: true, page: (entr.raw && entr.raw.page) ? entr.raw.page : null } }
@@ -705,16 +844,17 @@ async function metaLookup(title, apiKey, opts = {}) {
                       if (!titleHtml) continue
                       let rawTitle = stripText(titleHtml)
                       if (!rawTitle) continue
-                      try { appendLog(`META_WIKIPEDIA_OK series=${seriesTitle} season=${season} episode=${episode} title=${rawTitle.slice(0,200)}`) } catch (e) {}
-                      try { writeWikiLog(`HIT series=${seriesTitle} season=${season} episode=${episode} title=${rawTitle.slice(0,200)}`) } catch (e) {}
-                      // persist to cache
+                      const cleaned = cleanEpisodeTitle(rawTitle)
+                      try { appendLog(`META_WIKIPEDIA_OK series=${seriesTitle} season=${season} episode=${episode} title=${cleaned.slice(0,200)}`) } catch (e) {}
+                      try { writeWikiLog(`HIT series=${seriesTitle} season=${season} episode=${episode} title=${cleaned.slice(0,200)}`) } catch (e) {}
+                      // persist to cache (keep original raw for diagnostics)
                       try {
-                        const key = `${String(seriesTitle).toLowerCase().trim()}|s${Number(season)}|e${Number(episode)}`
+                        const key = `${normalizeForCache(String(seriesTitle))}|s${Number(season)}|e${Number(episode)}`
                         wikiEpisodeCache = wikiEpisodeCache || {}
-                        wikiEpisodeCache[key] = { name: rawTitle, raw: { source: 'wikipedia', page: h.title || h }, ts: Date.now() }
+                        wikiEpisodeCache[key] = { name: cleaned, raw: { source: 'wikipedia', page: h.title || h, original: rawTitle }, ts: Date.now() }
                         try { writeJson(wikiEpisodeCacheFile, wikiEpisodeCache) } catch (e) { /* ignore write errors */ }
                       } catch (e) {}
-                      return { name: rawTitle, raw: { source: 'wikipedia', page: h.title || h } }
+                      return { name: cleaned, raw: { source: 'wikipedia', page: h.title || h, original: rawTitle } }
                     } catch (e) { continue }
                   }
                 } catch (e) { continue }
@@ -759,7 +899,7 @@ async function metaLookup(title, apiKey, opts = {}) {
               // fallback to raw name
               if (!titleVariants.length && a && a.name) titleVariants.push(a.name)
             } catch (e) { titleVariants = [(a && a.name) ? a.name : v] }
-            const wikiEp = await lookupWikipediaEpisode(titleVariants, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+            const wikiEp = await lookupWikipediaEpisode(titleVariants, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force) })
             if (wikiEp && wikiEp.name) {
               ep = { name: wikiEp.name }
               try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
@@ -840,7 +980,7 @@ async function metaLookup(title, apiKey, opts = {}) {
             }
             if (!titleVariantsP.length) titleVariantsP.push((a && a.name) ? a.name : parentCandidate)
           } catch (e) { titleVariantsP = [(a && a.name) ? a.name : parentCandidate] }
-          const wikiEp = await lookupWikipediaEpisode(titleVariantsP, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+          const wikiEp = await lookupWikipediaEpisode(titleVariantsP, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force) })
           if (wikiEp && wikiEp.name) {
             ep = { name: wikiEp.name }
             try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
