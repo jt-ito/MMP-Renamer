@@ -546,6 +546,8 @@ async function metaLookup(title, apiKey, opts = {}) {
   // Wikipedia episode title lookup using MediaWiki API (best-effort)
   async function lookupWikipediaEpisode(seriesTitle, season, episode) {
     try {
+      // reload persistent cache from disk to respect external test clears
+      try { wikiEpisodeCache = JSON.parse(fs.readFileSync(wikiEpisodeCacheFile, 'utf8') || '{}') } catch (e) { wikiEpisodeCache = wikiEpisodeCache || {} }
       if (!seriesTitle || season == null || episode == null) return null
       // Accept either a string title or an array/object of title variants
       let titleVariants = []
@@ -616,13 +618,18 @@ async function metaLookup(title, apiKey, opts = {}) {
               // Find section matching season number (or 'Specials' when season==0)
               const seasonNum = Number(season)
               let sectionHtml = null
-              // split by headlines
-              const headRe = /(<span[^>]+class="mw-headline"[^>]*>[^<]*<\/span>)/ig
+              // find heading tags (<h1>-<h6>) and test their inner text for a season match
+              const headingRe = /<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/ig
               const heads = []
               let m
-              while ((m = headRe.exec(html)) !== null) heads.push({ idx: m.index, text: m[0] })
+              while ((m = headingRe.exec(html)) !== null) {
+                // m[1] contains inner HTML of heading; strip tags to get text
+                const inner = String(m[1] || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|\s+/g, ' ').trim()
+                heads.push({ idx: m.index, text: inner })
+              }
+              try { writeWikiLog(`DEBUG_HEADS count=${heads.length} previews=${heads.slice(0,6).map(h=>h.text.replace(/\s+/g,' ').slice(0,80)).join('||')}`) } catch (e) {}
               // fallback simple search: locate "Season X" text nearby
-              const seasonRegex = seasonNum === 0 ? /Specials|Special episodes/i : new RegExp(`Season[^\d]{0,6}${seasonNum}|Season\s*${seasonNum}|Series\s*${seasonNum}`, 'i')
+              const seasonRegex = seasonNum === 0 ? /Specials|Special episodes/i : new RegExp(`Season\\s*${seasonNum}|Series\\s*${seasonNum}|Season[^\\d]{0,6}${seasonNum}`, 'i')
               let headMatchIdx = -1
               for (const hitem of heads) {
                 try {
@@ -632,7 +639,7 @@ async function metaLookup(title, apiKey, opts = {}) {
               if (headMatchIdx === -1) {
                 // last resort: search the whole document for a season header text
                 const h2 = html.match(seasonRegex)
-                if (h2 && h2.index) headMatchIdx = h2.index
+                if (h2 && typeof h2.index === 'number') headMatchIdx = h2.index
               }
               if (headMatchIdx !== -1) {
                 // find next headline or end of document
@@ -656,28 +663,47 @@ async function metaLookup(title, apiKey, opts = {}) {
                   while ((rowm = rowRe.exec(tHtml)) !== null) {
                     try {
                       const r = rowm[0]
-                      // look for a cell containing the episode number (as whole word)
-                      const numRe = new RegExp(`(>|\\b)${String(episode)}(\\b|<)`, 'i')
-                      if (!numRe.test(r)) continue
-                      // attempt to extract a summary/title cell: prefer class="summary"
-                      let titleMatch = r.match(/<td[^>]*class="summary"[^>]*>([\s\S]*?)<\/td>/i)
-                      if (!titleMatch) {
-                        // find all <td> and take the one that looks like a title (contains quotes or links)
+                      // parse cells (<th> and <td>) to avoid accidental matches in dates
+                      const cellRe = /<(t[dh])\b[^>]*>([\s\S]*?)<\/\1>/ig
+                      const cells = Array.from(r.matchAll(cellRe)).map(x => ({ tag: x[1], html: x[2] }))
+                      if (!cells.length) continue
+                      function stripText(s) { try { return String(s || '').replace(/<[^>]+>/g, '').replace(/&nbsp;|\u00A0/g, ' ').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g, "'").replace(/\s+/g,' ').trim() } catch (e) { return String(s || '').replace(/<[^>]+>/g,'').trim() } }
+                      const plain = cells.map(c => stripText(c.html))
+                      // look for a cell whose text is exactly the episode number (or like '11' or '11.5')
+                      const epNumRegex = new RegExp(`^${Number(episode)}(?:\\.\\d+)?\\s*(?:\\(|$)`, '')
+                      let numIdx = -1
+                      for (let i = 0; i < plain.length; i++) {
+                        if (epNumRegex.test(plain[i])) { numIdx = i; break }
+                      }
+                      if (numIdx === -1) {
+                        // fallback: previously we matched anywhere in row; keep legacy behavior but stricter: require word boundary not followed by comma (to avoid dates like 'May 11, 2024')
+                        const numRe = new RegExp(`\\b${String(episode)}\\b(?!,)`, 'i')
+                        if (!numRe.test(r)) continue
+                      }
+                      // attempt to select title cell: prefer a cell with class="summary"
+                      let titleHtml = null
+                      const summaryMatch = r.match(/<td[^>]*class="summary"[^>]*>([\s\S]*?)<\/td>/i)
+                      if (summaryMatch && summaryMatch[1]) titleHtml = summaryMatch[1]
+                      if (!titleHtml && numIdx !== -1) {
+                        // prefer the cell immediately to the right of the episode-number cell
+                        for (let k = numIdx + 1; k < Math.min(plain.length, numIdx + 4); k++) {
+                          if (plain[k] && /[A-Za-z\u00C0-\u024F\u3040-\u30FF\u4E00-\u9FFF\"'\u201C\u201D]/.test(plain[k])) {
+                            titleHtml = cells[k].html; break
+                          }
+                        }
+                      }
+                      if (!titleHtml) {
+                        // fallback: pick the first <td> that looks like a title
                         const tds = Array.from(r.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/ig)).map(x=>x[1])
-                        // heuristic: pick the td with an <i> or an <a> or the longest text
                         let pick = null
                         for (const td of tds) {
-                          if (/\btitle\b/i.test(td) || /<i>|<em>|<a /i.test(td)) { pick = td; break }
+                          if (/\btitle\b/i.test(td) || /<i>|<em>|<a /i.test(td) || /"/.test(td)) { pick = td; break }
                         }
                         if (!pick && tds.length) pick = tds[Math.min(2, tds.length-1)]
-                        titleMatch = pick ? [null, pick] : null
+                        titleHtml = pick
                       }
-                      if (!titleMatch || !titleMatch[1]) continue
-                      let rawTitle = titleMatch[1]
-                      // strip HTML tags
-                      rawTitle = rawTitle.replace(/<[^>]+>/g, '')
-                      // decode common HTML entities
-                      rawTitle = rawTitle.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g,' ').trim()
+                      if (!titleHtml) continue
+                      let rawTitle = stripText(titleHtml)
                       if (!rawTitle) continue
                       try { appendLog(`META_WIKIPEDIA_OK series=${seriesTitle} season=${season} episode=${episode} title=${rawTitle.slice(0,200)}`) } catch (e) {}
                       try { writeWikiLog(`HIT series=${seriesTitle} season=${season} episode=${episode} title=${rawTitle.slice(0,200)}`) } catch (e) {}
@@ -3221,6 +3247,9 @@ module.exports._test.saveScanCache = typeof saveScanCache !== 'undefined' ? save
 module.exports._test.processParsedItem = typeof processParsedItem !== 'undefined' ? processParsedItem : null;
 // expose internal helpers for unit tests
 module.exports._test.stripAniListSeasonSuffix = typeof stripAniListSeasonSuffix !== 'undefined' ? stripAniListSeasonSuffix : null;
+module.exports._test.lookupWikipediaEpisode = typeof lookupWikipediaEpisode !== 'undefined' ? lookupWikipediaEpisode : null;
+// expose wikiEpisodeCache for tests so unit tests can clear it
+module.exports.wikiEpisodeCache = wikiEpisodeCache;
 
 // Only start the HTTP server when this file is run directly, not when required as a module
 if (require.main === module) {
