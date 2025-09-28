@@ -558,7 +558,46 @@ async function metaLookup(title, apiKey, opts = {}) {
           if (eres && eres.body) {
             let ej = null
             try { ej = JSON.parse(eres.body) } catch (e) { ej = null }
-            if (ej && (ej.name || ej.title)) return { provider: 'tmdb', id: top.id, name, raw, episode: ej }
+            if (ej && (ej.name || ej.title)) {
+              const epNameRaw = String(ej.name || ej.title || '').trim()
+              // basic placeholder detection
+              const isPlaceholder = /^episode\s*\d+/i.test(epNameRaw) || /^ep\b\s*\d+/i.test(epNameRaw) || /^e\d+$/i.test(epNameRaw) || (!/[A-Za-z]/.test(epNameRaw) && /\d/.test(epNameRaw))
+              if (!isPlaceholder) return { provider: 'tmdb', id: top.id, name, raw, episode: ej }
+
+              // Try translations endpoint to find a localized title (English preferred)
+              try {
+                await pace('api.themoviedb.org')
+                const tpath = `/3/tv/${encodeURIComponent(top.id)}/season/${encodeURIComponent(season)}/episode/${encodeURIComponent(episode)}/translations?api_key=${encodeURIComponent(tmdbKey)}`
+                const tres = await httpRequest({ hostname: 'api.themoviedb.org', path: tpath, method: 'GET', headers: { 'Accept': 'application/json' } }, null, 3000)
+                if (tres && tres.body) {
+                  let tj = null
+                  try { tj = JSON.parse(tres.body) } catch (e) { tj = null }
+                  const translations = tj && (tj.translations || tj.translations && tj.translations.translations) ? (tj.translations || tj.translations.translations) : (tj && tj.translations ? tj.translations : [])
+                  if (Array.isArray(translations) && translations.length) {
+                    // prefer English translations, then any non-placeholder translation
+                    let picked = null
+                    for (const tr of translations) {
+                      try {
+                        const lang = String(tr.iso_639_1 || '').toLowerCase()
+                        const data = tr.data || tr
+                        const cand = data && (data.name || data.title) ? String(data.name || data.title).trim() : ''
+                        if (!cand) continue
+                        const candPlaceholder = /^episode\s*\d+/i.test(cand) || /^ep\b\s*\d+/i.test(cand) || /^e\d+$/i.test(cand) || (!/[A-Za-z]/.test(cand) && /\d/.test(cand))
+                        if (lang === 'en' && !candPlaceholder) { picked = cand; break }
+                        if (!picked && !candPlaceholder) picked = cand
+                      } catch (e) { continue }
+                    }
+                    if (picked) {
+                      // attach the localized name into episode data for caller
+                      try { ej.localized_name = picked } catch (e) {}
+                      return { provider: 'tmdb', id: top.id, name, raw, episode: ej }
+                    }
+                  }
+                }
+              } catch (e) { /* ignore translation fetch errors */ }
+              // fallback: return the raw episode object (placeholder) so caller can decide
+              return { provider: 'tmdb', id: top.id, name, raw, episode: ej }
+            }
           }
         } catch (e) {}
       }
@@ -1040,8 +1079,19 @@ async function metaLookup(title, apiKey, opts = {}) {
             try { appendLog(`META_TMDB_EP_AFTER_ANILIST tmLookup=${tmLookupName} anilist=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
             const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
             if (tmEp && tmEp.episode) {
-              ep = tmEp.episode
-              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
+              const tmEpTitle = String(tmEp.episode.name || tmEp.episode.title || '').trim()
+              try {
+                if (isMeaningfulTitle(tmEpTitle) && !isPlaceholderTitle(tmEpTitle)) {
+                  ep = tmEp.episode
+                  try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEpTitle}`) } catch (e) {}
+                } else {
+                  try { appendLog(`META_TMDB_EP_AFTER_ANILIST_IGNORED_PLACEHOLDER q=${a.name || v} tm=${tmEpTitle}`) } catch (e) {}
+                  // leave ep null so Kitsu fallback runs
+                }
+              } catch (e) {
+                ep = tmEp.episode
+                try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEpTitle}`) } catch (e) {}
+              }
             } else {
               try { appendLog(`META_TMDB_EP_AFTER_ANILIST_NONE q=${a.name || v}`) } catch (e) {}
             }
@@ -1399,7 +1449,8 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
           // Episode-level data (when available)
           if (res.episode) {
             const ep = res.episode
-            const epTitle = ep.name || ep.title || (ep.attributes && ep.attributes.canonicalTitle)
+            // prefer any localized_name produced by TMDb translations fetch, then the usual fields
+            const epTitle = (ep && ep.localized_name) ? ep.localized_name : (ep.name || ep.title || (ep.attributes && ep.attributes.canonicalTitle))
             // Treat generic placeholder titles like 'Episode 7' as missing so we don't
             // display non-informative placeholders when provider data is present but
             // lacks a proper localized episode name.
