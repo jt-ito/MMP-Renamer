@@ -3559,6 +3559,8 @@ module.exports.enrichCache = enrichCache;
 // Export internal helpers for test harnesses (non-production)
 module.exports._test = module.exports._test || {};
 module.exports._test.fullScanLibrary = typeof fullScanLibrary !== 'undefined' ? fullScanLibrary : null;
+// expose TMDb helper for debugging/tests
+module.exports._test.searchTmdbAndEpisode = typeof searchTmdbAndEpisode !== 'undefined' ? searchTmdbAndEpisode : null;
 module.exports._test.incrementalScanLibrary = typeof incrementalScanLibrary !== 'undefined' ? incrementalScanLibrary : null;
 module.exports._test.loadScanCache = typeof loadScanCache !== 'undefined' ? loadScanCache : null;
 module.exports._test.saveScanCache = typeof saveScanCache !== 'undefined' ? saveScanCache : null;
