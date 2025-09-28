@@ -529,7 +529,8 @@ async function metaLookup(title, apiKey, opts = {}) {
       try { ej = JSON.parse(eres.body) } catch (e) { ej = null }
       const ep = ej && ej.data && Array.isArray(ej.data) && ej.data.length ? ej.data[0] : null
       if (!ep) return null
-      const epTitle = ep && ep.attributes && (ep.attributes.canonicalTitle || ep.attributes.titles && (ep.attributes.titles.en || ep.attributes.titles.en_jp)) ? (ep.attributes.canonicalTitle || ep.attributes.titles.en || ep.attributes.titles.en_jp) : null
+  // prefer explicit English title if available, then canonicalTitle, then Japanese variant
+  const epTitle = ep && ep.attributes ? (ep.attributes.titles && (ep.attributes.titles.en || ep.attributes.titles.en_jp) ? (ep.attributes.titles.en || ep.attributes.titles.en_jp) : (ep.attributes.canonicalTitle || (ep.attributes.titles && (ep.attributes.titles.en_jp || ep.attributes.titles.ja_jp)))) : null
       return { name: epTitle, raw: ep }
     } catch (e) { return null }
   }
@@ -562,9 +563,14 @@ async function metaLookup(title, apiKey, opts = {}) {
               const epNameRaw = String(ej.name || ej.title || '').trim()
               // basic placeholder detection
               const isPlaceholder = /^episode\s*\d+/i.test(epNameRaw) || /^ep\b\s*\d+/i.test(epNameRaw) || /^e\d+$/i.test(epNameRaw) || (!/[A-Za-z]/.test(epNameRaw) && /\d/.test(epNameRaw))
-              if (!isPlaceholder) return { provider: 'tmdb', id: top.id, name, raw, episode: ej }
+              // detect non-Latin/CJK-only titles (likely native-language titles)
+              const hasLatin = /[A-Za-z]/.test(epNameRaw)
+              const hasCJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(epNameRaw)
 
-              // Try translations endpoint to find a localized title (English preferred)
+              // If title is meaningful and Latin (English-like), return it immediately
+              if (!isPlaceholder && hasLatin) return { provider: 'tmdb', id: top.id, name, raw, episode: ej }
+
+              // Otherwise attempt translations endpoint to find an English/localized title
               try {
                 await pace('api.themoviedb.org')
                 const tpath = `/3/tv/${encodeURIComponent(top.id)}/season/${encodeURIComponent(season)}/episode/${encodeURIComponent(episode)}/translations?api_key=${encodeURIComponent(tmdbKey)}`
@@ -595,7 +601,9 @@ async function metaLookup(title, apiKey, opts = {}) {
                   }
                 }
               } catch (e) { /* ignore translation fetch errors */ }
-              // fallback: return the raw episode object (placeholder) so caller can decide
+
+              // If original was non-Latin but we couldn't find a translation, still return the raw
+              // episode object (caller will decide whether to accept non-English titles).
               return { provider: 'tmdb', id: top.id, name, raw, episode: ej }
             }
           }
@@ -1214,7 +1222,20 @@ async function metaLookup(title, apiKey, opts = {}) {
       for (let i=0;i<Math.min(variants.length,3);i++) {
         const t = await searchTmdbAndEpisode(variants[i], apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
         try { appendLog(`META_TMDB_SEARCH q=${variants[i]} found=${t ? 'yes' : 'no'}`) } catch (e) {}
-        if (t) return { name: t.name, raw: Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' }), episode: t.episode || null }
+        if (t) {
+          // Attempt a Wikipedia lookup for the episode title and prefer it when meaningful.
+          try {
+            const wikiTryTitles = []
+            try { if (t.name) wikiTryTitles.push(t.name) } catch (e) {}
+            try { if (variants[i]) wikiTryTitles.push(variants[i]) } catch (e) {}
+            const wikiEp = await lookupWikipediaEpisode(wikiTryTitles.length ? wikiTryTitles : t.name, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { tmdbKey: apiKey, force: false })
+            if (wikiEp && wikiEp.name) {
+              try { appendLog(`META_WIKIPEDIA_PREFERRED_AFTER_TMDB q=${t.name || variants[i]} wiki=${wikiEp.name}`) } catch (e) {}
+              return { name: t.name, raw: Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' }), episode: { name: wikiEp.name } }
+            }
+          } catch (e) { /* ignore wiki lookup errors and fall back to TMDb episode */ }
+          return { name: t.name, raw: Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' }), episode: t.episode || null }
+        }
       }
       if (parentCandidate) {
         for (let i=0;i<Math.min(makeVariants(parentCandidate).length,3);i++) {
@@ -1449,15 +1470,23 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
           // Episode-level data (when available)
           if (res.episode) {
             const ep = res.episode
-            // prefer any localized_name produced by TMDb translations fetch, then the usual fields
-            const epTitle = (ep && ep.localized_name) ? ep.localized_name : (ep.name || ep.title || (ep.attributes && ep.attributes.canonicalTitle))
-            // Treat generic placeholder titles like 'Episode 7' as missing so we don't
-            // display non-informative placeholders when provider data is present but
-            // lacks a proper localized episode name.
+            // prefer a TMDb-provided localized_name (from translations), then a Latin/English-looking name,
+            // then fall back to raw provider fields (including native/Japanese). Wikipedia results are
+            // already preferred earlier when available, so here we try to pick the best TMDb name.
             try {
-              if (epTitle) {
-                const epTrim = String(epTitle).trim();
-                if (/^episode\s*\d+/i.test(epTrim)) {
+              let chosen = null
+              if (ep && ep.localized_name) chosen = String(ep.localized_name).trim()
+              // if no localized_name, prefer ep.name/title that contains Latin letters
+              if (!chosen) {
+                const cand = String(ep.name || ep.title || (ep.attributes && ep.attributes.canonicalTitle) || '').trim()
+                if (cand && /[A-Za-z]/.test(cand)) chosen = cand
+              }
+              // if still not chosen but ep.name exists (likely native script), keep it as fallback
+              if (!chosen && ep && (ep.name || ep.title)) chosen = String(ep.name || ep.title).trim()
+
+              if (chosen) {
+                const epTrim = chosen.trim()
+                if (/^episode\s*\d+/i.test(epTrim) || /^(?:e(?:p(?:isode)?)?|ep)\b[\s\.\:\/\-]*\d+/i.test(epTrim)) {
                   try { appendLog(`PROVIDER_EP_PLACEHOLDER path=${String(canonicalPath).slice(0,200)} epRaw=${epTrim}`) } catch (e) {}
                   // leave guess.episodeTitle undefined so callers treat it as missing
                 } else {
@@ -1465,8 +1494,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
                 }
               }
             } catch (e) {
-              // on any unexpected error, fall back to assigning the raw title
-              try { guess.episodeTitle = String(epTitle).trim() } catch (ee) { /* ignore */ }
+              try { guess.episodeTitle = String(ep && (ep.localized_name || ep.name || ep.title) || '').trim() } catch (ee) { /* ignore */ }
             }
           }
 
