@@ -668,6 +668,20 @@ async function metaLookup(title, apiKey, opts = {}) {
         } catch (e) { return true }
       }
 
+      // helper: detect placeholder-style titles like "Episode 13", "Ep. 13", numeric-only labels
+      function isPlaceholderTitle(s) {
+        try {
+          if (!s) return false
+          const t = String(s).trim()
+          // pure forms: "Episode 13", "Ep 13", "Ep.13", "E13"
+          if (/^(?:e(?:p(?:isode)?)?|episode|ep)\b[\s\.\:\/\-]*\d+$/i.test(t)) return true
+          // also detect strings that are essentially just a number or labelled number
+          const stripped = t.replace(/\b(?:episode|ep|ep\.|no|number)\b/ig, '').replace(/[^0-9]/g, '').trim()
+          if (stripped && /^[0-9]+$/.test(stripped) && stripped.length <= 4 && t.length < 30) return true
+          return false
+        } catch (e) { return false }
+      }
+
       try {
         for (const tv of titleVariants) {
           const key = `${normalizeForCache(String(tv))}|s${Number(season)}|e${Number(episode)}`
@@ -747,8 +761,16 @@ async function metaLookup(title, apiKey, opts = {}) {
                   if (options && options.tmdbKey) {
                     const tmCheck = await searchTmdbAndEpisode(tv, options.tmdbKey, season, episode)
                     if (tmCheck && tmCheck.episode && (tmCheck.episode.name || tmCheck.episode.title)) {
-                      try { appendLog(`META_TMDB_VERIFIED_CACHE key=${key} tm=${(tmCheck.episode.name||tmCheck.episode.title)}`) } catch (e) {}
-                      return { name: tmCheck.episode.name || tmCheck.episode.title, raw: tmCheck.episode }
+                      // ensure the TMDb-provided episode title is meaningful (not a placeholder like 'Episode 13')
+                      const tmName = (tmCheck.episode.name || tmCheck.episode.title) ? String(tmCheck.episode.name || tmCheck.episode.title).trim() : ''
+                      try {
+                        if (isMeaningfulTitle(tmName) && !isPlaceholderTitle(tmName)) {
+                          try { appendLog(`META_TMDB_VERIFIED_CACHE key=${key} tm=${tmName}`) } catch (e) {}
+                          return { name: tmName, raw: tmCheck.episode }
+                        } else {
+                          try { appendLog(`META_TMDB_VERIFIED_CACHE_IGNORED_PLACEHOLDER key=${key} tm=${tmName}`) } catch (e) {}
+                        }
+                      } catch (e) { /* fall through to wiki cached value */ }
                     }
                   }
                 } catch (e) {}
@@ -980,8 +1002,23 @@ async function metaLookup(title, apiKey, opts = {}) {
                   const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
                   const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
                   if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
-                    ep = tmEpCheck.episode
-                    try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI q=${a.name || v} tm=${(tmEpCheck.episode.name||tmEpCheck.episode.title)}`) } catch (e) {}
+                    const tmNameCheck = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim()
+                    const wikiGood = isMeaningfulTitle(wikiEp.name)
+                      try {
+                      if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck)) {
+                        ep = tmEpCheck.episode
+                        try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI q=${a.name || v} tm=${tmNameCheck}`) } catch (e) {}
+                      } else if (wikiGood) {
+                        // TMDb provided only a placeholder (e.g. 'Episode 13'); prefer the meaningful Wikipedia title
+                        ep = { name: wikiEp.name }
+                        try { appendLog(`META_WIKIPEDIA_PREFERRED_OVER_TM_PLACEHOLDER q=${a.name || v} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
+                      } else {
+                        // both not meaningful: leave ep null so fallbacks run
+                      }
+                    } catch (e) {
+                      ep = { name: wikiEp.name }
+                      try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
+                    }
                   } else {
                     ep = { name: wikiEp.name }
                     try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
@@ -1066,8 +1103,14 @@ async function metaLookup(title, apiKey, opts = {}) {
                 const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
                 const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
                 if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
-                  ep = tmEpCheck.episode
-                  try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_PARENT q=${a.name || parentCandidate} tm=${(tmEpCheck.episode.name||tmEpCheck.episode.title)}`) } catch (e) {}
+                  const tmParentName = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim()
+                  if (isMeaningfulTitle(tmParentName) && !isPlaceholderTitle(tmParentName)) {
+                    ep = tmEpCheck.episode
+                    try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_PARENT q=${a.name || parentCandidate} tm=${tmParentName}`) } catch (e) {}
+                  } else {
+                    ep = { name: wikiEp.name }
+                    try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
+                  }
                 } else {
                   ep = { name: wikiEp.name }
                   try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
