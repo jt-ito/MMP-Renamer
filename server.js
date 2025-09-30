@@ -862,6 +862,28 @@ async function metaLookup(title, apiKey, opts = {}) {
               let pj = null
               try { pj = JSON.parse(pres.body) } catch (e) { pj = null }
               const html = pj && pj.parse && pj.parse.text && pj.parse.text['*'] ? pj.parse.text['*'] : null
+              // Verify the page is for the intended series: check page title and lead paragraph
+              try {
+                const pageTitle = (pj && pj.parse && pj.parse.title) ? String(pj.parse.title).trim() : null
+                const leadMatch = (html && html.slice(0, 2000)) ? String(html).slice(0, 2000).replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim() : ''
+                // normalize helper reused for cache; fallback to basic lower/strip
+                const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim()
+                let matchedPage = false
+                try {
+                  for (const tv of titleVariants) {
+                    try {
+                      const n = norm(tv)
+                      if (!n) continue
+                      if (pageTitle && norm(pageTitle).indexOf(n) !== -1) { matchedPage = true; break }
+                      if (leadMatch && leadMatch.toLowerCase().indexOf(tv.toLowerCase()) !== -1) { matchedPage = true; break }
+                    } catch (e) { continue }
+                  }
+                } catch (e) { matchedPage = false }
+                if (!matchedPage) {
+                  try { writeWikiLog(`SKIP_PAGE_MISMATCH page=${pageTitle || pid} candidates=${titleVariants.join('|')}`) } catch (e) {}
+                  continue
+                }
+              } catch (e) { /* best-effort page verification - ignore failures */ }
               if (!html) continue
               // Find section matching season number (or 'Specials' when season==0)
               const seasonNum = Number(season)
