@@ -720,11 +720,15 @@ async function metaLookup(title, apiKey, opts = {}) {
         try {
           if (!s) return false
           const t = String(s).trim()
-          // pure forms: "Episode 13", "Ep 13", "Ep.13", "E13"
+          // pure forms: "Episode 13", "Ep 13", "Ep.13", "E13" (short/placeholders)
           if (/^(?:e(?:p(?:isode)?)?|episode|ep)\b[\s\.\:\/\-]*\d+$/i.test(t)) return true
           // also detect strings that are essentially just a number or labelled number
+          // but be conservative: if the string contains alphabetic words longer than 2 chars,
+          // treat it as meaningful (e.g., 'Dying Service 1' should NOT be considered a placeholder).
+          const alphaPart = t.replace(/[^A-Za-z\p{L}]+/gu, ' ').trim()
+          const hasLongWord = alphaPart.split(/\s+/).some(w => w && w.length > 2)
           const stripped = t.replace(/\b(?:episode|ep|ep\.|no|number)\b/ig, '').replace(/[^0-9]/g, '').trim()
-          if (stripped && /^[0-9]+$/.test(stripped) && stripped.length <= 4 && t.length < 30) return true
+          if (!hasLongWord && stripped && /^[0-9]+$/.test(stripped) && stripped.length <= 4 && t.length < 30) return true
           return false
         } catch (e) { return false }
       }
