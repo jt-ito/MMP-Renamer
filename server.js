@@ -1757,6 +1757,16 @@ async function backgroundEnrichFirstN(scanId, enrichCandidates, session, libPath
         } catch (e) {}
       }
   if (modified.length) { try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); appendLog(`POST_BACKGROUND_ENRICH_SCANS_UPDATED ids=${modified.join(',')}`) } catch (e) {} }
+    // Notify clients that scans were updated so UI can reconcile without manual refresh
+    try {
+      if (modified && modified.length && Array.isArray(hideEvents)) {
+        const evt = { ts: Date.now(), path: libPath || null, originalPath: libPath || null, modifiedScanIds: modified.map(String) };
+        hideEvents.push(evt);
+        try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
+        if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
+        appendLog(`HIDE_EVENTS_PUSH_BY_BACKGROUND_ENRICH ids=${modified.join(',')}`);
+      }
+    } catch (e) {}
     } catch (e) {}
   } catch (e) { appendLog(`BACKGROUND_FIRSTN_ENRICH_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
 }
@@ -2608,6 +2618,16 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
         if (modified.length) {
           try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); appendLog(`POST_REFRESH_SCANS_UPDATED ids=${modified.join(',')}`) } catch (e) {}
         }
+        // Notify clients that scans were updated by refresh so UI can reconcile
+        try {
+          if (modified && modified.length && Array.isArray(hideEvents)) {
+            const evt2 = { ts: Date.now(), path: req.params && req.params.scanId ? `scan:${req.params.scanId}` : null, originalPath: null, modifiedScanIds: modified.map(String) };
+            hideEvents.push(evt2);
+            try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
+            if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
+            appendLog(`HIDE_EVENTS_PUSH_BY_REFRESH ids=${modified.join(',')}`);
+          }
+        } catch (e) {}
       } catch (e) {}
       // mark progress as complete
       try { if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].status = 'complete'; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch(e){}

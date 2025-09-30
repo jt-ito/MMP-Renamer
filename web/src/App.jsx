@@ -1266,9 +1266,27 @@ export default function App() {
                 // the UI to immediately merge items without requiring a hard refresh
                 metaRes = await axios.get(API(`/scan/${effectiveScanId}`)).catch(() => null)
                 const firstPageResp = await axios.get(API('/scan/latest'), { params: { libraryId: lastLibraryId, includeItems: true, limit: Math.max(batchSize, 50) } }).catch(() => null)
-                if (firstPageResp && firstPageResp.data && Array.isArray(firstPageResp.data.items)) {
-                  // merge page non-stompingly
-                  try { updateScanDataAndPreserveView({ scanId: effectiveScanId, libraryId: lastLibraryId, totalCount: firstPageResp.data.totalCount || 0, generatedAt: firstPageResp.data.generatedAt || Date.now() }, firstPageResp.data.items) } catch (e) {}
+                if (firstPageResp && firstPageResp.data) {
+                  try {
+                    const reportedTotal = Number(firstPageResp.data.totalCount || 0)
+                    // If the server-reported total is small enough to keep in-memory,
+                    // eagerly fetch all pages so the UI reflects newly discovered items
+                    // without requiring a hard refresh. Otherwise merge only the
+                    // provided first-page sample to avoid heavy network usage.
+                    if (reportedTotal > 0 && reportedTotal <= MAX_IN_MEMORY_SEARCH) {
+                      const pageSize = 500
+                      const all = []
+                      for (let off = 0; off < reportedTotal; off += pageSize) {
+                        const r = await axios.get(API(`/scan/${effectiveScanId}/items`), { params: { offset: off, limit: pageSize } }).catch(() => ({ data: { items: [] } }))
+                        const chunk = (r && r.data && Array.isArray(r.data.items)) ? r.data.items : []
+                        for (const it of chunk) all.push(it)
+                      }
+                      try { updateScanDataAndPreserveView({ scanId: effectiveScanId, libraryId: lastLibraryId, totalCount: reportedTotal, generatedAt: firstPageResp.data.generatedAt || Date.now() }, all) } catch (e) {}
+                    } else {
+                      const itemsSample = Array.isArray(firstPageResp.data.items) ? firstPageResp.data.items : []
+                      try { updateScanDataAndPreserveView({ scanId: effectiveScanId, libraryId: lastLibraryId, totalCount: firstPageResp.data.totalCount || 0, generatedAt: firstPageResp.data.generatedAt || Date.now() }, itemsSample) } catch (e) {}
+                    }
+                  } catch (e) {}
                 }
               }
             }
@@ -1351,10 +1369,24 @@ export default function App() {
           try {
             // Request the first-page items via /scan/latest?includeItems so server can return the sample
             const pg = await axios.get(API('/scan/latest'), { params: { libraryId: lastLibraryId, includeItems: true, limit: Math.max(batchSize, 50) } }).catch(() => null)
-            const page = (pg && pg.data && Array.isArray(pg.data.items)) ? pg.data.items : []
-            // Merge while preserving current view/search
-            try { updateScanDataAndPreserveView(latest, page) } catch (e) {}
-            try { setScanId(latestId); setScanMeta(latest); setLastScanId(latestId); setTotal(latest.totalCount || page.length) } catch (e) {}
+            try {
+              const reportedTotal = pg && pg.data ? Number(pg.data.totalCount || 0) : 0
+              if (reportedTotal > 0 && reportedTotal <= MAX_IN_MEMORY_SEARCH) {
+                // fetch all pages from the scan items endpoint (pageSize capped at 500 on server)
+                const pageSize = 500
+                const all = []
+                for (let off = 0; off < reportedTotal; off += pageSize) {
+                  const r = await axios.get(API(`/scan/${latest.scanId || latest.scanId}/items`), { params: { offset: off, limit: pageSize } }).catch(() => ({ data: { items: [] } }))
+                  const chunk = (r && r.data && Array.isArray(r.data.items)) ? r.data.items : []
+                  for (const it of chunk) all.push(it)
+                }
+                try { updateScanDataAndPreserveView(latest, all) } catch (e) {}
+              } else {
+                const page = (pg && pg.data && Array.isArray(pg.data.items)) ? pg.data.items : []
+                try { updateScanDataAndPreserveView(latest, page) } catch (e) {}
+              }
+              try { setScanId(latestId); setScanMeta(latest); setLastScanId(latestId); setTotal(latest.totalCount || (pg && pg.data && Array.isArray(pg.data.items) ? pg.data.items.length : 0)) } catch (e) {}
+            } catch (e) {}
           } catch (e) { /* best-effort, do not disrupt UI */ }
         }
       } catch (e) { /* ignore */ }
@@ -1386,11 +1418,24 @@ export default function App() {
         const localTotal = (scanMeta && scanMeta.totalCount) || 0
         if ((serverMeta.generatedAt && serverMeta.generatedAt !== localGenerated) || (serverMeta.totalCount && serverMeta.totalCount > localTotal)) {
           try {
-            const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: 0, limit: Math.max(batchSize, 50) } }).catch(() => ({ data: { items: [] } }))
-            const page = (r && r.data && r.data.items) ? r.data.items : []
-            // Merge while preserving current view/search
-            try { updateScanDataAndPreserveView(serverMeta, page) } catch (e) {}
-            try { setScanMeta(serverMeta); setTotal(serverMeta.totalCount || page.length || 0) } catch (e) {}
+            const reportedTotal = Number(serverMeta.totalCount || 0)
+            if (reportedTotal > 0 && reportedTotal <= MAX_IN_MEMORY_SEARCH) {
+              const pageSize = 500
+              const all = []
+              for (let off = 0; off < reportedTotal; off += pageSize) {
+                const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: off, limit: pageSize } }).catch(() => ({ data: { items: [] } }))
+                const chunk = (r && r.data && r.data.items) ? r.data.items : []
+                for (const it of chunk) all.push(it)
+              }
+              // Merge while preserving current view/search
+              try { updateScanDataAndPreserveView(serverMeta, all) } catch (e) {}
+              try { setScanMeta(serverMeta); setTotal(serverMeta.totalCount || all.length || 0) } catch (e) {}
+            } else {
+              const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: 0, limit: Math.max(batchSize, 50) } }).catch(() => ({ data: { items: [] } }))
+              const page = (r && r.data && r.data.items) ? r.data.items : []
+              try { updateScanDataAndPreserveView(serverMeta, page) } catch (e) {}
+              try { setScanMeta(serverMeta); setTotal(serverMeta.totalCount || page.length || 0) } catch (e) {}
+            }
           } catch (e) {}
         }
       } catch (e) {}
