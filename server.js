@@ -700,7 +700,7 @@ async function metaLookup(title, apiKey, opts = {}) {
           if (!s) return false
           const t = String(s).trim()
           // must contain at least one letter (latin or CJK) and not be just a year/date
-          if (!/[A-Za-z - - - - - - - - - - - - - - -\p{L}]/u.test(t)) return false
+          if (!/[A-Za-z - - - - - - - - - - - - - -\p{L}]/u.test(t)) return false
           // reject common date patterns like 'June 30, 2020', '2025-09-28', '30 June 2020[12]', etc.
           const dateLike = /(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,\s*\d{4})?/i
           if (dateLike.test(t)) return false
@@ -807,6 +807,8 @@ async function metaLookup(title, apiKey, opts = {}) {
               }
                 try { appendLog(`META_WIKIPEDIA_CACHE_HIT key=${key} name=${String(entr.name).slice(0,120)}`) } catch (e) {}
                 try { writeWikiLog(`CACHE_HIT key=${key} titleVariant=${tv} name=${entr.name}`) } catch (e) {}
+                // Diagnostic: log cached page identifier and original raw title when available
+                try { appendLog(`META_WIKIPEDIA_CACHE_PAGE key=${key} page=${(entr.raw && (entr.raw.page || entr.raw.pageid)) ? String(entr.raw.page || entr.raw.pageid).slice(0,120) : '<unknown>'} original=${String((entr.raw && entr.raw.original) || '').slice(0,140)}`) } catch (e) {}
                 // If caller provided a TMDb key, attempt to verify and prefer TMDb episode title when present
                 try {
                   if (options && options.tmdbKey) {
@@ -817,7 +819,7 @@ async function metaLookup(title, apiKey, opts = {}) {
                       try {
                         if (isMeaningfulTitle(tmName) && !isPlaceholderTitle(tmName)) {
                           try { appendLog(`META_TMDB_VERIFIED_CACHE key=${key} tm=${tmName}`) } catch (e) {}
-                          return { name: tmName, raw: tmCheck.episode }
+                          return { provider: 'tmdb', id: top.id, name, raw, episode: ej }
                         } else {
                           try { appendLog(`META_TMDB_VERIFIED_CACHE_IGNORED_PLACEHOLDER key=${key} tm=${tmName}`) } catch (e) {}
                         }
@@ -859,6 +861,8 @@ async function metaLookup(title, apiKey, opts = {}) {
             try {
               const pid = h.pageid || h.docid || h.pageId
               if (!pid) continue
+              // Diagnostic: log which Wikipedia page we're about to fetch for this search hit
+              try { appendLog(`META_WIKIPEDIA_PAGE_FETCH q=${q} page=${pid} title=${String(h.title || h).slice(0,120)}`) } catch (e) {}
               await pace('en.wikipedia.org')
               const ppath = `/w/api.php?action=parse&pageid=${encodeURIComponent(pid)}&prop=text&format=json`;
               const pres = await httpRequest({ hostname: 'en.wikipedia.org', path: ppath, method: 'GET', headers: { 'Accept': 'application/json', 'User-Agent': 'renamer/1.0' } }, null, 5000)
@@ -1015,12 +1019,13 @@ async function metaLookup(title, apiKey, opts = {}) {
                       }
                       try { appendLog(`META_WIKIPEDIA_OK series=${seriesTitle} season=${season} episode=${episode} title=${cleaned.slice(0,200)}`) } catch (e) {}
                       try { writeWikiLog(`HIT series=${seriesTitle} season=${season} episode=${episode} title=${cleaned.slice(0,200)}`) } catch (e) {}
+                      // Diagnostic: record which page produced the hit and the raw extracted title
+                      try { appendLog(`META_WIKIPEDIA_HIT_PAGE series=${seriesTitle} season=${season} episode=${episode} page=${String(h.title || pid).slice(0,120)} pageid=${pid} raw=${String(rawTitle || '').slice(0,140)}`) } catch (e) {}
                       // persist to cache (keep original raw for diagnostics)
                       try {
-                        const key = `${normalizeForCache(String(seriesTitle))}|s${Number(season)}|e${Number(episode)}`
-                        wikiEpisodeCache = wikiEpisodeCache || {}
+                        const key = `${normalizeForCache(String(seriesTitle))}|s${Number(season)}|e${Number(episode)}`.trim()
                         wikiEpisodeCache[key] = { name: cleaned, raw: { source: 'wikipedia', page: h.title || h, original: rawTitle }, ts: Date.now() }
-                        try { writeJson(wikiEpisodeCacheFile, wikiEpisodeCache) } catch (e) { /* ignore write errors */ }
+                        try { writeJson(wikiEpisodeCacheFile, wikiEpisodeCache) } catch (e) {}
                       } catch (e) {}
                       return { name: cleaned, raw: { source: 'wikipedia', page: h.title || h, original: rawTitle } }
                     } catch (e) { continue }
@@ -1789,6 +1794,7 @@ async function backgroundEnrichFirstN(scanId, enrichCandidates, session, libPath
         const evt = { ts: Date.now(), path: libPath || null, originalPath: libPath || null, modifiedScanIds: modified.map(String) };
         hideEvents.push(evt);
         try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
+        // keep recent events bounded
         if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
         appendLog(`HIDE_EVENTS_PUSH_BY_BACKGROUND_ENRICH ids=${modified.join(',')}`);
       }
@@ -2008,7 +2014,7 @@ app.post('/api/scan', async (req, res) => {
         for (const rid of toRemove) {
           try { delete scans[rid]; } catch (e) {}
         }
-  try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); appendLog(`SCAN_PRUNED removed=${toRemove.join(',')}`); } catch (e) { appendLog(`SCAN_PRUNE_WRITE_FAIL err=${e && e.message ? e.message : String(e)}`); }
+  try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); appendLog(`POST_REFRESH_SCANS_UPDATED ids=${modified.join(',')}`) } catch (e) {}
       }
     }
   } catch (e) {
@@ -2234,6 +2240,12 @@ app.get('/api/enrich', (req, res) => {
     if (normalized) {
       const prov = normalized.provider || null;
       const providerComplete = prov && prov.matched && prov.renderedName && (prov.episode == null || (prov.episodeTitle && String(prov.episodeTitle).trim()));
+      const enabled = Boolean(process.env.LOG_MISSING_EPISODE_TITLE) || (serverSettings && serverSettings.log_missing_episode_title);
+      if (enabled && normalized.episode && !normalized.episodeTitle) {
+        try {
+          appendLog(`MISSING_EP_TITLE path=${key} providerTitle=${normalized.title || ''} season=${normalized.season || ''} episode=${normalized.episode || ''}`)
+        } catch (e) {}
+      }
       if (prov && !providerComplete) {
         return res.json({ cached: false, enrichment: normalized });
       }
@@ -2364,11 +2376,6 @@ app.post('/api/enrich', async (req, res) => {
   const key = canonicalize(p || '');
   appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'}`);
   try {
-    // prefer existing enrichment when present and not forcing
-    // Only short-circuit to cached provider if it appears to be a complete provider hit
-    // (i.e. provider.matched and provider.renderedName present). If cached provider
-    // data exists but lacks a renderedName (or is otherwise incomplete), allow an
-    // external lookup so rescans/background refreshes can populate missing fields.
     // prefer existing enrichment when present and not forcing
     // Only short-circuit to cached provider if it appears to be a complete provider hit
     // (i.e. provider.matched and provider.renderedName present). Additionally, when the
@@ -2516,7 +2523,7 @@ app.post('/api/enrich/sweep', requireAuth, requireAdmin, (req, res) => {
           removed.push(k);
           delete enrichCache[k];
         }
-      } catch (e) { /* ignore per-key errors */ }
+      } catch (e) { /* ignore per-key */ }
     }
     // Clean up renderedIndex entries that reference removed sources
     try {
@@ -2530,8 +2537,7 @@ app.post('/api/enrich/sweep', requireAuth, requireAdmin, (req, res) => {
         } catch (e) {}
       }
     } catch (e) {}
-
-    // persist changes
+    // persist
   try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
   try { if (db) db.setKV('renderedIndex', renderedIndex); else writeJson(renderedIndexFile, renderedIndex); } catch (e) {}
     appendLog(`ENRICH_SWEEP removed=${removed.length}`);
@@ -2647,9 +2653,10 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
         // Notify clients that scans were updated by refresh so UI can reconcile
         try {
           if (modified && modified.length && Array.isArray(hideEvents)) {
-            const evt2 = { ts: Date.now(), path: req.params && req.params.scanId ? `scan:${req.params.scanId}` : null, originalPath: null, modifiedScanIds: modified.map(String) };
-            hideEvents.push(evt2);
+            const evt = { ts: Date.now(), path: req.params && req.params.scanId ? `scan:${req.params.scanId}` : null, originalPath: null, modifiedScanIds: modified.map(String) };
+            hideEvents.push(evt);
             try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
+            // keep recent events bounded
             if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
             appendLog(`HIDE_EVENTS_PUSH_BY_REFRESH ids=${modified.join(',')}`);
           }
@@ -2928,7 +2935,7 @@ app.post('/api/rename/preview', (req, res) => {
   } else {
     nameWithoutExtRaw = baseNameTemplate
       .replace('{title}', sanitize(title))
-      .replace('{basename}', sanitize(path.basename(fromPath, ext)))
+      .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
       .replace('{year}', year || '')
       .replace('{epLabel}', sanitize(epLabel))
       .replace('{episodeTitle}', sanitize(episodeTitleToken))
@@ -2939,10 +2946,10 @@ app.post('/api/rename/preview', (req, res) => {
   }
     // Clean up common artifact patterns from empty tokens: stray parentheses, repeated separators
     const nameWithoutExt = String(nameWithoutExtRaw)
-      .replace(/\s*\(\s*\)\s*/g, '') // remove empty ()
-      .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ') // collapse repeated dashes
-      .replace(/(^\s*-\s*)|(\s*-\s*$)/g, '') // trim leading/trailing dashes
-      .replace(/\s{2,}/g, ' ') // collapse multiple spaces
+      .replace(/\s*\(\s*\)\s*/g, '')
+      .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
+      .replace(/(^\s*-\s*)|(\s*-\s*$)/g, '')
+      .replace(/\s{2,}/g, ' ')
       .trim();
     const fileName = (nameWithoutExt + ext).trim();
     // If an output path is configured, plan a hardlink under that path preserving a Jellyfin-friendly layout
@@ -3045,7 +3052,7 @@ function cleanTitleForRender(t, epLabel, epTitle) {
       const lbl = String(epLabel).trim();
       if (lbl) s = s.replace(new RegExp('\\b' + escapeRegExp(lbl) + '\\b', 'i'), '').trim();
     }
-    s = s.replace(/^\s*S\d{1,2}[\s_\-:\.]*[EPp]?\d{1,3}(?:\.\d+)?[\s_\-:\.]*/i, '').trim();
+    s = s.replace(/^\s*S\d{1,2}[\s_\-:\.]*[EPp]?(\d{1,3})?(?:\.\d+)?[\s_\-:\.]*/i, '').trim();
     if (epTitle) {
       const et = String(epTitle).trim();
       if (et) s = s.replace(new RegExp('[\-–—:\\s]*' + escapeRegExp(et) + '$', 'i'), '').trim();
@@ -3104,8 +3111,6 @@ function sweepEnrichCache() {
   } catch (e) { appendLog('ENRICH_SWEEP_ERR ' + (e && e.message ? e.message : String(e))) }
   return removed;
 }
-
-// ...existing code...
 
 function extractYear(meta, fromPath) {
   if (!meta) meta = {};
@@ -3229,74 +3234,14 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const titleToken2 = cleanTitleForRender(rawTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
               const yearToken2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : ''
               const nameWithoutExtRaw2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
-                .replace('{basename}', sanitize(path.basename(from, ext2)))
+                .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
                 .replace('{year}', yearToken2)
                 .replace('{epLabel}', sanitize(epLabel2))
                 .replace('{episodeTitle}', sanitize(episodeTitleToken2))
                 .replace('{season}', sanitize(seasonToken2))
                 .replace('{episode}', sanitize(episodeToken2))
                 .replace('{episodeRange}', sanitize(episodeRangeToken2))
-                .replace('{tmdbId}', sanitize(tmdbIdToken2))
-              const nameWithoutExt2 = String(nameWithoutExtRaw2)
-                .replace(/\s*\(\s*\)\s*/g, '')
-                .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
-                .replace(/(^\s*-\s*)|(\s*-\s*$)/g, '')
-                .replace(/\s{2,}/g, ' ')
-                .trim();
-              let finalFileName2 = (nameWithoutExt2 + ext2).trim();
-              // If provider rendered name exists, prefer it exactly for both folder and filename
-              let newToResolved;
-              if (enrichment && enrichment.provider && enrichment.provider.renderedName) {
-                // use provider tokens to construct the desired layout without hard-coding
-                const prov = enrichment.provider || {};
-                const provYear = prov.year || '';
-                // If this item represents a series (season/episode present), strip any trailing year from the series folder name
-                const rawTitleForFolder = String(prov.title || prov.renderedName || path.basename(from, ext2)).trim() || '';
-                const isSeriesProv = (prov && (prov.season != null || prov.episode != null));
-                const titleFolder = isSeriesProv ? sanitize(stripTrailingYear(rawTitleForFolder)) : sanitize(rawTitleForFolder + (provYear ? ` (${provYear})` : ''));
-                if (!configuredOut) {
-                  appendLog(`HARDLINK_WARN no configured output path for from=${from} provider=${prov.renderedName}`);
-                }
-                // resolve final base output in order: explicit per-plan outputPath -> per-user configured -> server setting
-                const planOut = (p && p.outputPath) ? p.outputPath : null;
-                const resolvedConfigured = planOut || configuredOut || serverSettings && serverSettings.scan_output_path ? (planOut || configuredOut || serverSettings.scan_output_path) : null;
-                const baseOut = resolvedConfigured ? path.resolve(resolvedConfigured) : null;
-                // Diagnostic: log resolved output path and targets to aid debugging when links end up under input
-                try { appendLog(`HARDLINK_CONFIG from=${from} configuredOut=${configuredOut || ''} planOut=${planOut || ''} baseOut=${baseOut || ''} toResolved=${toResolved || ''}`); } catch (e) {}
-                if (!baseOut) {
-                  appendLog(`HARDLINK_FAIL_NO_OUTPUT from=${from} provider=${prov.renderedName || prov.title || ''}`);
-                  throw new Error('No configured output path (user, plan, or server) — cannot hardlink without an output path. Set scan_output_path in settings.');
-                }
-                // Movie vs Series detection: presence of season/episode indicates series
-                const isSeries = (prov.season != null) || (prov.episode != null);
-                if (isSeries) {
-                  const seasonNum = prov.season != null ? String(prov.season) : '1';
-                  const seasonFolder = `Season ${String(seasonNum).padStart(2,'0')}`;
-                  const seriesRenderedRaw = String(prov.renderedName || prov.title || prov.name || '').trim();
-                  let seriesFolderBase = seriesRenderedRaw.replace(/\.[^/.]+$/, '');
-                  const sMatch = seriesFolderBase.search(/\s-\sS\d{1,2}E\d{1,3}/);
-                  if (sMatch !== -1) seriesFolderBase = seriesFolderBase.slice(0, sMatch).trim();
-                  if (!seriesFolderBase) seriesFolderBase = String(prov.title || '').trim() + (prov.year ? ` (${prov.year})` : '');
-                  // For series, prefer a folder named by the series without the year suffix.
-                  // Strip any trailing year like " (2022)" to avoid per-year top-level folders for same series.
-                  try { seriesFolderBase = stripTrailingYear(seriesFolderBase); } catch (e) { appendLog('META_STRIP_YEAR_FAIL', `${seriesFolderBase} -> ${String(e)}`); }
-                  const dir = path.join(baseOut, sanitize(seriesFolderBase), seasonFolder);
-                  const filenameBase = sanitize(seriesRenderedRaw);
-                  finalFileName2 = (filenameBase + ext2).trim();
-                  newToResolved = path.join(dir, finalFileName2);
-                } else {
-                  const movieBase = sanitize(String(prov.title || prov.renderedName || path.basename(from, ext2)).trim() + (provYear ? ` (${provYear})` : ''));
-                  finalFileName2 = (movieBase + ext2).trim();
-                  const dir = path.join(baseOut, movieBase);
-                  newToResolved = path.join(dir, finalFileName2);
-                }
-              }
-              // ensure directory exists
-              const ensureDir = path.dirname(newToResolved);
-              if (!fs.existsSync(ensureDir)) fs.mkdirSync(ensureDir, { recursive: true });
-              // assign for subsequent operations
-              // prefer the rendered name if target path differs
-              var effectiveToResolved = newToResolved;
+  .replace('{tmdbId}', sanitize(tmdbIdToken2));
             } catch (renderErr) {
               // fallback to original toResolved
               var effectiveToResolved = toResolved;
@@ -3428,6 +3373,7 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               } catch (e) {
                 // if we couldn't stat, proceed and let linkSync surface the error
               }
+
               // Defensive: refuse hardlink into configured input root
               try {
                 if (configuredInput) {
