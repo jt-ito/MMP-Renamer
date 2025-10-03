@@ -3271,9 +3271,12 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
     appendLog(`HARDLINK_FAIL_NO_OUTPUT from=${from} requestedHardlink=true`);
     throw new Error('Hardlink requested but no configured output path found. Set scan_output_path in settings.');
   }
-  if (requestedHardlink || targetUnderConfiguredOut) {
+          if (requestedHardlink || targetUnderConfiguredOut) {
           // create directories and attempt to create a hard link; do NOT move the original file
           try {
+            // Prepare effective target path (default to provided toResolved). If rendering succeeds we'll replace it.
+            let effectiveToResolved = toResolved;
+
             // Re-render filename from enrichment and template if available to ensure TMDb-based names are used
             try {
               const enrichment = enrichCache[from] || {};
@@ -3305,9 +3308,14 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 .replace('{episode}', sanitize(episodeToken2))
                 .replace('{episodeRange}', sanitize(episodeRangeToken2))
   .replace('{tmdbId}', sanitize(tmdbIdToken2));
+              // build final basename with extension and set effective target
+              try {
+                const finalBasename2 = `${nameWithoutExtRaw2}${ext2}`;
+                effectiveToResolved = path.resolve(path.dirname(toResolved), finalBasename2);
+              } catch (e) { /* ignore and leave effectiveToResolved as toResolved */ }
             } catch (renderErr) {
-              // fallback to original toResolved
-              var effectiveToResolved = toResolved;
+              // fallback: keep effectiveToResolved as toResolved
+              effectiveToResolved = toResolved;
             }
             // helper: ensure source and destination live on the same filesystem/device
             function nearestExistingParent(dir) {
