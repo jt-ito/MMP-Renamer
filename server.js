@@ -305,6 +305,31 @@ async function metaLookup(title, apiKey, opts = {}) {
   function normalize(s) { try { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim() } catch (e) { return String(s || '') } }
   function wordOverlap(a,b){ try { const wa = normalize(a).split(' ').filter(Boolean); const wb = normalize(b).split(' ').filter(Boolean); if (!wa.length || !wb.length) return 0; const common = wa.filter(x=>wb.indexOf(x)!==-1); return common.length/Math.max(wa.length, wb.length); } catch (e){ return 0 } }
 
+  // Strip common episode tokens and trailing episode titles from candidate search strings
+  function normalizeSearchQuery(s) {
+    try {
+      if (!s) return ''
+      let out = String(s || '')
+      // remove common episode markers: S01E02, S1E2, S01, E02, 1x02, Ep02, Episode 2
+      out = out.replace(/\bS\d{1,2}E\d{1,3}\b/ig, ' ')
+      out = out.replace(/\bS\d{1,2}\b/ig, ' ')
+      out = out.replace(/\bE\d{1,3}\b/ig, ' ')
+      out = out.replace(/\b\d{1,2}x\d{1,3}\b/ig, ' ')
+      out = out.replace(/\bEp(?:isode)?\.?\s*\d{1,3}\b/ig, ' ')
+      // remove bracketed version tokens and release tags
+      out = out.replace(/\[[^\]]+\]/g, ' ')
+    out = out.replace(/\([^\)]*\b(?:1080p|720p|2160p|x264|x265|webrip|web-dl|bluray|hdtv|aac|dual audio)\b[^\)]*\)/ig, ' ')
+      // If there's a dash, assume left side may be series and right side episode title; prefer left side
+      const dashSplit = out.split(/\s[-–—]\s/)
+      if (dashSplit && dashSplit.length > 1) out = dashSplit[0]
+      // remove trailing episode title heuristics: if string begins with season/episode marker, drop following words up to a capitalized stop? conservatively, remove leading ep tokens
+      out = out.replace(/^\s*[:\-\_\s]+/, '')
+      out = out.replace(/[^a-z0-9\s]/ig, ' ')
+      out = out.replace(/\s+/g,' ').trim()
+      return out
+    } catch (e) { return String(s || '') }
+  }
+
   // Build simple variants to try (original, cleaned, stripped parentheses, lowercase)
   function makeVariants(t){ const s = String(t || '').trim(); const variants = []; if (!s) return variants; variants.push(s); const cleaned = s.replace(/[._\-:]+/g,' ').replace(/\s+/g,' ').trim(); variants.push(cleaned); const stripped = cleaned.replace(/\s*[\[(].*?[\])]/g, '').replace(/\s+/g,' ').trim(); if (stripped && stripped !== cleaned) variants.push(stripped); variants.push(stripped.toLowerCase()); return [...new Set(variants)].slice(0,5) }
 
@@ -1042,112 +1067,138 @@ async function metaLookup(title, apiKey, opts = {}) {
 
   // Try AniList variants, then parent, then TMDb fallback
   try {
-    const variants = makeVariants(title)
+    // normalize search title to avoid SxxEyy noise
+    const variants = makeVariants(normalizeSearchQuery(title || ''))
     // try filename-derived variants first
+    let aniListResult = null
     for (let i=0;i<Math.min(variants.length,3);i++) {
       const v = variants[i]
       const a = await searchAniList(v)
       try { appendLog(`META_ANILIST_SEARCH q=${v} found=${a ? 'yes' : 'no'}`) } catch (e) {}
-      if (a) {
-        // Attempt Wikipedia episode lookup first (best-effort). If Wikipedia finds a
-        // localized episode title, prefer it and skip TMDb/Kitsu episode lookups.
-        let ep = null
+      if (!a) continue
+      // Attempt Wikipedia episode lookup first (best-effort). If Wikipedia finds a
+      // localized episode title, prefer it and skip TMDb/Kitsu episode lookups.
+      let ep = null
+      try {
+        // build title variants from AniList media (english/romaji/native + related nodes)
+        let titleVariants = []
         try {
-          try {
-            // build title variants from AniList media (english/romaji/native + related nodes)
-            let titleVariants = []
+          if (a && a.title) {
+            if (a.title.english) titleVariants.push(a.title.english)
+            if (a.title.romaji) titleVariants.push(a.title.romaji)
+            if (a.title.native) titleVariants.push(a.title.native)
+          }
+          if (a && a.relations && Array.isArray(a.relations.nodes)) {
+            for (const rn of a.relations.nodes) {
+              if (rn && rn.title && rn.title.english) titleVariants.push(rn.title.english)
+              if (rn && rn.title && rn.title.romaji) titleVariants.push(rn.title.romaji)
+              if (rn && rn.title && rn.title.native) titleVariants.push(rn.title.native)
+            }
+          }
+          // fallback to raw name
+          if (!titleVariants.length && a && a.name) titleVariants.push(a.name)
+        } catch (e) { titleVariants = [(a && a.name) ? a.name : v] }
+  // normalize title variants passed to Wikipedia lookup as well
+  const wikiEp = await lookupWikipediaEpisode(titleVariants.map(normalizeSearchQuery), opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey })
+        // Only accept Wikipedia result if parent series matches intended show
+        let intendedSeries = (a && a.name) ? a.name : v
+        let wikiParentMatch = false
+          if (wikiEp && (wikiEp.raw && (wikiEp.raw.page || wikiEp.raw.original) || wikiEp.name)) {
+            // stronger matching: use word overlap between page title / lead text and the candidate titles
             try {
-              if (a && a.title) {
-                try { if (a.title.english) titleVariants.push(a.title.english) } catch (e) {}
-                try { if (a.title.romaji) titleVariants.push(a.title.romaji) } catch (e) {}
-                try { if (a.title.native) titleVariants.push(a.title.native) } catch (e) {}
+              const pageTitle = (wikiEp.raw && wikiEp.raw.page) ? String(wikiEp.raw.page) : null
+              const leadText = (wikiEp.raw && wikiEp.raw.original) ? String(wikiEp.raw.original) : ''
+              for (const tv of titleVariants) {
+                try {
+                  const ovTitle = pageTitle ? wordOverlap(pageTitle, tv) : 0
+                  const ovLead = leadText ? wordOverlap(leadText, tv) : 0
+                  // accept if reasonable overlap
+                  if (ovTitle >= 0.45 || ovLead >= 0.45) { wikiParentMatch = true; break }
+                } catch (e) { continue }
               }
-              if (a && a.relations && Array.isArray(a.relations.nodes)) {
-                for (const rn of a.relations.nodes) {
-                  try { if (rn && rn.title && rn.title.english) titleVariants.push(rn.title.english) } catch (e) {}
-                  try { if (rn && rn.title && rn.title.romaji) titleVariants.push(rn.title.romaji) } catch (e) {}
-                  try { if (rn && rn.title && rn.title.native) titleVariants.push(rn.title.native) } catch (e) {}
+              // fallback to simple substring tests as before
+              if (!wikiParentMatch && pageTitle) {
+                const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim()
+                const intendedNorm = norm(intendedSeries)
+                const pageNorm = norm(pageTitle)
+                if (pageNorm && intendedNorm && (pageNorm.indexOf(intendedNorm) !== -1 || intendedNorm.indexOf(pageNorm) !== -1)) wikiParentMatch = true
+              }
+              if (!wikiParentMatch && leadText) {
+                for (const tv of titleVariants) {
+                  try { if (String(leadText || '').toLowerCase().indexOf(String(tv||'').toLowerCase()) !== -1) { wikiParentMatch = true; break } } catch (e) {}
                 }
               }
-              // fallback to raw name
-              if (!titleVariants.length && a && a.name) titleVariants.push(a.name)
-            } catch (e) { titleVariants = [(a && a.name) ? a.name : v] }
-            const wikiEp = await lookupWikipediaEpisode(titleVariants, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey })
-            if (wikiEp && wikiEp.name) {
-              // If TMDb key present, verify with TMDb and prefer its episode title when available
-              if (apiKey) {
-                try {
-                  const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
-                  const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-                  if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
-                    const tmNameCheck = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim()
-                    const wikiGood = isMeaningfulTitle(wikiEp.name)
-                      try {
-                      if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck)) {
-                        ep = tmEpCheck.episode
-                        try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI q=${a.name || v} tm=${tmNameCheck}`) } catch (e) {}
-                      } else if (wikiGood) {
-                        // TMDb provided only a placeholder (e.g. 'Episode 13'); prefer the meaningful Wikipedia title
-                        ep = { name: wikiEp.name }
-                        try { appendLog(`META_WIKIPEDIA_PREFERRED_OVER_TM_PLACEHOLDER q=${a.name || v} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
-                      } else {
-                        // both not meaningful: leave ep null so fallbacks run
-                      }
-                    } catch (e) {
-                      ep = { name: wikiEp.name }
-                      try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
-                    }
-                  } else {
-                    ep = { name: wikiEp.name }
-                    try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
-                  }
-                } catch (e) {
+            } catch (e) { /* best-effort */ }
+          }
+          if (wikiEp && wikiEp.name && wikiParentMatch) {
+          // If TMDb key present, verify with TMDb and prefer its episode title when available
+          if (apiKey) {
+            try {
+              const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
+              const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+              if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
+                const tmNameCheck = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim()
+                const wikiGood = isMeaningfulTitle(wikiEp.name)
+                if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck)) {
+                  ep = tmEpCheck.episode
+                  try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI q=${a.name || v} tm=${tmNameCheck}`) } catch (e) {}
+                } else if (wikiGood) {
                   ep = { name: wikiEp.name }
-                  try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
+                  try { appendLog(`META_WIKIPEDIA_PREFERRED_OVER_TM_PLACEHOLDER q=${a.name || v} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
                 }
               } else {
                 ep = { name: wikiEp.name }
                 try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
               }
+            } catch (e) {
+              ep = { name: wikiEp.name }
+              try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
             }
-          } catch (e) {}
+          } else {
+            ep = { name: wikiEp.name }
+            try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
+          }
+        } else if (wikiEp && wikiEp.name && !wikiParentMatch) {
+          try { appendLog(`META_WIKIPEDIA_PARENT_MISMATCH intended=${intendedSeries} gotPage=${wikiEp.raw && wikiEp.raw.page ? wikiEp.raw.page : '<none>'}`) } catch (e) {}
+        }
+      } catch (e) {}
 
-          // If Wikipedia didn't provide an episode title, try TMDb (when key available)
-          if (!ep && apiKey) {
-            const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
-            try { appendLog(`META_TMDB_EP_AFTER_ANILIST tmLookup=${tmLookupName} anilist=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
-            const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-            if (tmEp && tmEp.episode) {
-              const tmEpTitle = String(tmEp.episode.name || tmEp.episode.title || '').trim()
-              try {
-                if (isMeaningfulTitle(tmEpTitle) && !isPlaceholderTitle(tmEpTitle)) {
-                  ep = tmEp.episode
-                  try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEpTitle}`) } catch (e) {}
-                } else {
-                  try { appendLog(`META_TMDB_EP_AFTER_ANILIST_IGNORED_PLACEHOLDER q=${a.name || v} tm=${tmEpTitle}`) } catch (e) {}
-                  // leave ep null so Kitsu fallback runs
-                }
-              } catch (e) {
-                ep = tmEp.episode
-                try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEpTitle}`) } catch (e) {}
-              }
+      // If Wikipedia didn't provide an episode title, try TMDb (when key available)
+      if (!ep && apiKey) {
+        const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
+        try { appendLog(`META_TMDB_EP_AFTER_ANILIST tmLookup=${tmLookupName} anilist=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+        const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+        if (tmEp && tmEp.episode) {
+          const tmEpTitle = String(tmEp.episode.name || tmEp.episode.title || '').trim()
+          try {
+            if (isMeaningfulTitle(tmEpTitle) && !isPlaceholderTitle(tmEpTitle)) {
+              ep = tmEp.episode
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEpTitle}`) } catch (e) {}
             } else {
-              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_NONE q=${a.name || v}`) } catch (e) {}
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_IGNORED_PLACEHOLDER q=${a.name || v} tm=${tmEpTitle}`) } catch (e) {}
+              // leave ep null so Kitsu fallback runs
             }
+          } catch (e) {
+            ep = tmEp.episode
+            try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEpTitle}`) } catch (e) {}
           }
-
-          // If still no episode title, try Kitsu as a fallback
-          if (!ep) {
-            if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY q=${a.name || v}`) } catch (e) {} }
-            ep = await fetchKitsuEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v, opts && opts.episode != null ? opts.episode : null)
-            try { appendLog(`META_KITSU_EP q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
-          }
-        } catch (e) { ep = null; try { appendLog(`META_EP_AFTER_ANILIST_ERROR q=${a.name || v} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
-          // TMDb is attempted before Kitsu above when an API key is present. No additional
-          // TMDb fallback attempt here — prefer the single TMDb attempt followed by Kitsu.
-        return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
+        } else {
+          try { appendLog(`META_TMDB_EP_AFTER_ANILIST_NONE q=${a.name || v}`) } catch (e) {}
+        }
       }
+
+      // If still no episode title, try Kitsu as a fallback
+      if (!ep) {
+        if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY q=${a.name || v}`) } catch (e) {} }
+        ep = await fetchKitsuEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v, opts && opts.episode != null ? opts.episode : null)
+        try { appendLog(`META_KITSU_EP q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
+      }
+
+      // capture result and break out of the loop
+      aniListResult = { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
+      break
     }
+    if (aniListResult) return aniListResult
 
     // try parent-derived candidate if provided or derivable
     let parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
@@ -1172,21 +1223,30 @@ async function metaLookup(title, apiKey, opts = {}) {
           let titleVariantsP = []
           try {
             if (a && a.title) {
-              try { if (a.title.english) titleVariantsP.push(a.title.english) } catch (e) {}
-              try { if (a.title.romaji) titleVariantsP.push(a.title.romaji) } catch (e) {}
-              try { if (a.title.native) titleVariantsP.push(a.title.native) } catch (e) {}
+              if (a.title.english) titleVariantsP.push(a.title.english)
+              if (a.title.romaji) titleVariantsP.push(a.title.romaji)
+              if (a.title.native) titleVariantsP.push(a.title.native)
             }
             if (a && a.relations && Array.isArray(a.relations.nodes)) {
               for (const rn of a.relations.nodes) {
-                try { if (rn && rn.title && rn.title.english) titleVariantsP.push(rn.title.english) } catch (e) {}
-                try { if (rn && rn.title && rn.title.romaji) titleVariantsP.push(rn.title.romaji) } catch (e) {}
-                try { if (rn && rn.title && rn.title.native) titleVariantsP.push(rn.title.native) } catch (e) {}
+                if (rn && rn.title && rn.title.english) titleVariantsP.push(rn.title.english)
+                if (rn && rn.title && rn.title.romaji) titleVariantsP.push(rn.title.romaji)
+                if (rn && rn.title && rn.title.native) titleVariantsP.push(rn.title.native)
               }
             }
             if (!titleVariantsP.length) titleVariantsP.push((a && a.name) ? a.name : parentCandidate)
           } catch (e) { titleVariantsP = [(a && a.name) ? a.name : parentCandidate] }
           const wikiEp = await lookupWikipediaEpisode(titleVariantsP, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey })
-          if (wikiEp && wikiEp.name) {
+          // Only accept Wikipedia result if parent series matches intended show
+          let intendedSeries = (a && a.name) ? a.name : parentCandidate
+          let wikiParentMatch = false
+          if (wikiEp && wikiEp.raw && wikiEp.raw.page) {
+            const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g,'').trim()
+            const intendedNorm = norm(intendedSeries)
+            const pageNorm = norm(wikiEp.raw.page)
+            if (pageNorm.includes(intendedNorm) || intendedNorm.includes(pageNorm)) wikiParentMatch = true
+          }
+          if (wikiEp && wikiEp.name && wikiParentMatch) {
             if (apiKey) {
               try {
                 const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
@@ -1212,6 +1272,8 @@ async function metaLookup(title, apiKey, opts = {}) {
               ep = { name: wikiEp.name }
               try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
             }
+          } else if (wikiEp && wikiEp.name && !wikiParentMatch) {
+            try { appendLog(`META_WIKIPEDIA_PARENT_MISMATCH intended=${intendedSeries} gotPage=${wikiEp.raw && wikiEp.raw.page ? wikiEp.raw.page : '<none>'}`) } catch (e) {}
           }
         } catch (e) {}
 
@@ -1257,8 +1319,8 @@ async function metaLookup(title, apiKey, opts = {}) {
           // Attempt a Wikipedia lookup for the episode title and prefer it when meaningful.
           try {
             const wikiTryTitles = []
-            try { if (t.name) wikiTryTitles.push(t.name) } catch (e) {}
-            try { if (variants[i]) wikiTryTitles.push(variants[i]) } catch (e) {}
+            if (t.name) wikiTryTitles.push(t.name)
+            if (variants[i]) wikiTryTitles.push(variants[i])
             const wikiEp = await lookupWikipediaEpisode(wikiTryTitles.length ? wikiTryTitles : t.name, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { tmdbKey: apiKey, force: false })
             if (wikiEp && wikiEp.name) {
               try { appendLog(`META_WIKIPEDIA_PREFERRED_AFTER_TMDB q=${t.name || variants[i]} wiki=${wikiEp.name}`) } catch (e) {}
@@ -1280,9 +1342,10 @@ async function metaLookup(title, apiKey, opts = {}) {
   } catch (e) {
     try { appendLog(`META_LOOKUP_ERROR title=${String(title).slice(0,100)} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
   }
-
   return null
 }
+
+// ...existing code...
 
 async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   try { console.log('DEBUG: externalEnrich START path=', canonicalPath, 'providedKeyPresent=', !!providedKey); } catch (e) {}
@@ -3297,6 +3360,34 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               } catch (linkErr) {
                 // Do NOT fallback to copy. Hardlink must succeed or the operation fails.
                 appendLog(`HARDLINK_FAIL from=${from} to=${effectiveToResolved} linkErr=${linkErr && linkErr.message ? linkErr.message : String(linkErr)}`);
+                // Additional diagnostics to help identify ENOENT / mount issues
+                try {
+                  const exists = fs.existsSync(from);
+                  appendLog(`HARDLINK_DIAG_EXISTS from=${from} exists=${exists}`);
+                  const resolvedFrom = path.resolve(from);
+                  const canonicalFrom = canonicalize(from);
+                  appendLog(`HARDLINK_DIAG_PATHS resolved=${resolvedFrom} canonical=${canonicalFrom}`);
+                  const parentDir = path.dirname(from);
+                  function findNearestExisting(dir) {
+                    let cur = dir;
+                    try {
+                      while (cur && !fs.existsSync(cur)) {
+                        const p = path.dirname(cur);
+                        if (!p || p === cur) break;
+                        cur = p;
+                      }
+                    } catch (e) { cur = null }
+                    return cur && fs.existsSync(cur) ? cur : null;
+                  }
+                  const nearest = findNearestExisting(parentDir);
+                  appendLog(`HARDLINK_DIAG_PARENT parentExists=${fs.existsSync(parentDir)} nearestExisting=${nearest}`);
+                  if (nearest) {
+                    try {
+                      const list = fs.readdirSync(nearest).slice(0,40).join(', ');
+                      appendLog(`HARDLINK_DIAG_NEAREST_LIST nearest=${nearest} sample=${list}`);
+                    } catch (e) {}
+                  }
+                } catch (ee) {}
                 throw linkErr;
               }
             } else {
@@ -3393,6 +3484,31 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               } catch (linkErr2) {
                 // Do NOT fallback to copy. Hardlink must succeed or the operation fails.
                 appendLog(`HARDLINK_FAIL from=${from} to=${to} linkErr=${linkErr2 && linkErr2.message ? linkErr2.message : String(linkErr2)}`);
+                // Diagnostics for ENOENT / mount problems
+                try {
+                  const exists = fs.existsSync(from);
+                  appendLog(`HARDLINK_DIAG_EXISTS from=${from} exists=${exists}`);
+                  const resolvedFrom = path.resolve(from);
+                  const canonicalFrom = canonicalize(from);
+                  appendLog(`HARDLINK_DIAG_PATHS resolved=${resolvedFrom} canonical=${canonicalFrom}`);
+                  const parentDir = path.dirname(from);
+                  function findNearestExisting2(dir) {
+                    let cur = dir;
+                    try {
+                      while (cur && !fs.existsSync(cur)) {
+                        const p = path.dirname(cur);
+                        if (!p || p === cur) break;
+                        cur = p;
+                      }
+                    } catch (e) { cur = null }
+                    return cur && fs.existsSync(cur) ? cur : null;
+                  }
+                  const nearest = findNearestExisting2(parentDir);
+                  appendLog(`HARDLINK_DIAG_PARENT parentExists=${fs.existsSync(parentDir)} nearestExisting=${nearest}`);
+                  if (nearest) {
+                    try { const list = fs.readdirSync(nearest).slice(0,40).join(', '); appendLog(`HARDLINK_DIAG_NEAREST_LIST nearest=${nearest} sample=${list}`); } catch (e) {}
+                  }
+                } catch (ee) {}
                 throw linkErr2;
               }
             } else {
