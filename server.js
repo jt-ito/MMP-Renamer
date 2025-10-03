@@ -1139,12 +1139,23 @@ async function metaLookup(title, apiKey, opts = {}) {
               if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
                 const tmNameCheck = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim()
                 const wikiGood = isMeaningfulTitle(wikiEp.name)
-                if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck)) {
+                // Prefer titles that contain Latin characters (English-like) when available
+                const tmHasLatin = /[A-Za-z]/.test(tmNameCheck)
+                const wikiHasLatin = /[A-Za-z]/.test(String(wikiEp.name || ''))
+                if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck) && tmHasLatin) {
                   ep = tmEpCheck.episode
                   try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI q=${a.name || v} tm=${tmNameCheck}`) } catch (e) {}
-                } else if (wikiGood) {
+                } else if (wikiGood && wikiHasLatin) {
                   ep = { name: wikiEp.name }
                   try { appendLog(`META_WIKIPEDIA_PREFERRED_OVER_TM_PLACEHOLDER q=${a.name || v} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
+                } else if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck)) {
+                  // accept TMDb even if non-Latin when no English-like wiki title present
+                  ep = tmEpCheck.episode
+                  try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_NONLATIN q=${a.name || v} tm=${tmNameCheck}`) } catch (e) {}
+                } else if (wikiGood) {
+                  // fallback to wiki result (may be non-Latin)
+                  ep = { name: wikiEp.name }
+                  try { appendLog(`META_WIKIPEDIA_FALLBACK_NONLATIN q=${a.name || v} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
                 }
               } else {
                 ep = { name: wikiEp.name }
@@ -1171,13 +1182,19 @@ async function metaLookup(title, apiKey, opts = {}) {
         if (tmEp && tmEp.episode) {
           const tmEpTitle = String(tmEp.episode.name || tmEp.episode.title || '').trim()
           try {
-            if (isMeaningfulTitle(tmEpTitle) && !isPlaceholderTitle(tmEpTitle)) {
-              ep = tmEp.episode
-              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEpTitle}`) } catch (e) {}
-            } else {
-              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_IGNORED_PLACEHOLDER q=${a.name || v} tm=${tmEpTitle}`) } catch (e) {}
-              // leave ep null so Kitsu fallback runs
-            }
+                    // Prefer Latin-looking TMDb titles
+                    const tmHasLatin = /[A-Za-z]/.test(tmEpTitle)
+                    if (isMeaningfulTitle(tmEpTitle) && !isPlaceholderTitle(tmEpTitle) && tmHasLatin) {
+                      ep = tmEp.episode
+                      try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEpTitle}`) } catch (e) {}
+                    } else if (isMeaningfulTitle(tmEpTitle) && !isPlaceholderTitle(tmEpTitle)) {
+                      // accept non-Latin TMDb title if no better option
+                      ep = tmEp.episode
+                      try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK_NONLATIN q=${a.name || v} epName=${tmEpTitle}`) } catch (e) {}
+                    } else {
+                      try { appendLog(`META_TMDB_EP_AFTER_ANILIST_IGNORED_PLACEHOLDER q=${a.name || v} tm=${tmEpTitle}`) } catch (e) {}
+                      // leave ep null so Kitsu fallback runs
+                    }
           } catch (e) {
             ep = tmEp.episode
             try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEpTitle}`) } catch (e) {}
@@ -1253,13 +1270,21 @@ async function metaLookup(title, apiKey, opts = {}) {
                 const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
                 if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
                   const tmParentName = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim()
-                  if (isMeaningfulTitle(tmParentName) && !isPlaceholderTitle(tmParentName)) {
-                    ep = tmEpCheck.episode
-                    try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_PARENT q=${a.name || parentCandidate} tm=${tmParentName}`) } catch (e) {}
-                  } else {
-                    ep = { name: wikiEp.name }
-                    try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
-                  }
+                    const tmHasLatin = /[A-Za-z]/.test(tmParentName)
+                    const wikiHasLatin = /[A-Za-z]/.test(String(wikiEp.name || ''))
+                    if (isMeaningfulTitle(tmParentName) && !isPlaceholderTitle(tmParentName) && tmHasLatin) {
+                      ep = tmEpCheck.episode
+                      try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_PARENT q=${a.name || parentCandidate} tm=${tmParentName}`) } catch (e) {}
+                    } else if (wikiHasLatin && isMeaningfulTitle(wikiEp.name)) {
+                      ep = { name: wikiEp.name }
+                      try { appendLog(`META_WIKIPEDIA_PREFERRED_PARENT_LATIN q=${a.name || parentCandidate} wiki=${wikiEp.name} tm=${tmParentName}`) } catch (e) {}
+                    } else if (isMeaningfulTitle(tmParentName) && !isPlaceholderTitle(tmParentName)) {
+                      ep = tmEpCheck.episode
+                      try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_PARENT_NONLATIN q=${a.name || parentCandidate} tm=${tmParentName}`) } catch (e) {}
+                    } else {
+                      ep = { name: wikiEp.name }
+                      try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
+                    }
                 } else {
                   ep = { name: wikiEp.name }
                   try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
