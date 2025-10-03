@@ -3345,7 +3345,15 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               }
             } catch (e) { throw e }
 
-            if (!fs.existsSync(effectiveToResolved)) {
+              // Ensure destination parent exists
+              try {
+                const parentDir = path.dirname(effectiveToResolved);
+                if (parentDir && !fs.existsSync(parentDir)) {
+                  try { fs.mkdirSync(parentDir, { recursive: true }); appendLog(`HARDLINK_MKDIR created parent=${parentDir}`); } catch (e) { appendLog(`HARDLINK_MKDIR_FAIL parent=${parentDir} err=${e && e.message ? e.message : String(e)}`); }
+                }
+              } catch (e) { appendLog(`HARDLINK_MKDIR_EXCEPTION effective=${effectiveToResolved} err=${e && e.message ? e.message : String(e)}`); }
+
+              if (!fs.existsSync(effectiveToResolved)) {
               // fail early if cross-device (hardlinks won't work across mounts)
               if (!assertSameDevice(from, effectiveToResolved)) {
                 appendLog(`HARDLINK_CROSS_DEVICE from=${from} to=${effectiveToResolved}`);
