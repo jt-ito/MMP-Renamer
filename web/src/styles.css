@@ -28,6 +28,10 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .app header button { background: transparent; color: var(--accent); border: 1px solid var(--bg-600); padding:6px 10px; border-radius:8px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; height:36px; box-sizing:border-box }
 .app header button:hover { background: rgba(255,255,255,0.02) }
 .app header button:active { transform: translateY(1px) }
+.btn-label { display:inline-flex; align-items:center; gap:8px; font-weight:500 }
+.btn-label span { font-weight:500 }
+.btn-incremental { padding:10px 14px; border-radius:12px }
+.btn-incremental:disabled { opacity:0.6 }
 
 /* Header search box styling: match theme and shrink responsively */
 .header-search { display:flex; align-items:center; gap: var(--header-button-gap); /* allow search to flex but cap width so it doesn't push header actions */ flex: 1 1 480px; min-width:140px; max-width:calc(100% - 360px) }
@@ -186,6 +190,14 @@ select.form-input:focus {
 /* Buttons - general focus and active states */
 button:focus { outline:2px solid rgba(96,165,250,0.16); outline-offset:2px }
 button:active { transform: translateY(1px) }
+
+/* Modal overlay for full scan confirmation */
+.modal-overlay { position:fixed; inset:0; background:rgba(8,10,14,0.72); backdrop-filter: blur(8px); display:flex; align-items:center; justify-content:center; padding:24px; z-index:1100 }
+.modal-card { background: var(--bg-800); border-radius:18px; padding:28px; max-width:420px; width: min(420px, 90vw); box-shadow: 0 28px 60px rgba(2,6,23,0.7); display:flex; flex-direction:column; gap:18px; border:1px solid var(--bg-600) }
+.modal-card h2 { margin:0; font-size:1.3rem; color: var(--accent) }
+.modal-card p { margin:0; color: var(--muted); line-height:1.6; font-size:0.95rem }
+.modal-actions { display:flex; justify-content:flex-end; gap: var(--header-button-gap) }
+.modal-actions .btn-ghost, .modal-actions .btn-save { min-width:120px; justify-content:center }
 
 /* Toasts */
 .toast { background: var(--bg-700); padding:12px; border-radius:10px; color:var(--accent); min-width:220px; box-shadow:0 10px 30px rgba(2,6,23,0.6); border:1px solid var(--bg-600); animation: toast-in 300ms cubic-bezier(.2,.8,.2,1) }

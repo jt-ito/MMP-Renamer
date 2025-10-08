@@ -73,6 +73,8 @@ export default function App() {
   // that aren't present in the current scan results
   const [currentScanPaths, setCurrentScanPaths] = useState(new Set())
   const [scanning, setScanning] = useState(false)
+  const [activeScanKind, setActiveScanKind] = useState(null)
+  const [confirmFullScanOpen, setConfirmFullScanOpen] = useState(false)
   const [scanLoaded, setScanLoaded] = useState(0)
   const [scanProgress, setScanProgress] = useState(0)
   const [metaPhase, setMetaPhase] = useState(false)
@@ -628,6 +630,7 @@ export default function App() {
   }, [])
 
   async function triggerScan(lib, options = {}) {
+    const mode = options && options.mode === 'full' ? 'full' : 'incremental'
     // prefer user-configured input path (localStorage fallback), otherwise ask server
     let configuredPath = ''
     try { configuredPath = localStorage.getItem('scan_input_path') || '' } catch {}
@@ -639,89 +642,101 @@ export default function App() {
     }
     if (!configuredPath) {
       pushToast && pushToast('Scan', 'No input path configured — set one in Settings before scanning')
-      return
+      return null
     }
 
-  // Always prefer the incremental scan endpoint to avoid full filesystem walks.
-  const r = await axios.post(API('/scan/incremental'), { libraryId: lib?.id, path: configuredPath })
-    // set the current scan id and persist last library id so rescan works across reloads
-  setScanId(r.data.scanId)
-  // mark that we've just created a scan in this session so mount effects avoid
-  // eagerly loading many pages for the persisted lastScanId
-  try { newScanJustCreatedRef.current = true } catch (e) {}
-  try { setLastScanId(r.data.scanId) } catch (e) {}
-    const libId = lib?.id || (r.data && r.data.libraryId) || (scanMeta && scanMeta.libraryId) || ''
-    try { setLastLibraryId(libId) } catch (e) {}
+  const endpoint = mode === 'full' ? '/scan' : '/scan/incremental'
 
-    // fetch scan metadata
-    const meta = await axios.get(API(`/scan/${r.data.scanId}`))
-    setScanMeta(meta.data)
-    setTotal(meta.data.totalCount)
-
-  // Fetch only the first page to populate the initial view. The server-side
-  // incremental scan will process new items in the background; we avoid
-  // collecting all pages up front to prevent the client from fetching huge
-  // numbers of rows and stomping the visible UI.
-  try {
+    setActiveScanKind(mode)
     setScanning(true)
     setScanLoaded(0)
     setScanProgress(0)
     setMetaPhase(false)
     setMetaProgress(0)
 
-    const firstPageSize = Math.min(meta.data.totalCount || 0, Math.max(batchSize, 50))
-    const firstPage = await axios.get(API(`/scan/${r.data.scanId}/items`), { params: { offset: 0, limit: firstPageSize } }).catch(() => ({ data: { items: [] } }))
-    const first = firstPage.data.items || []
-    setAllItems(first)
-    setItems(first)
-    setCurrentScanPaths(new Set((first || []).map(i => i.canonicalPath)))
-    setScanLoaded(first.length)
-    setScanProgress(first.length && meta.data.totalCount ? Math.round((first.length / Math.max(1, meta.data.totalCount)) * 100) : 0)
-
-    // Start background server-side refresh but don't await it here — let the
-    // server process new items incrementally. Also bulk-enrich the visible
-    // first page so metadata appears quickly in the UI.
-  void (async () => { try { await refreshScan(r.data.scanId, true) } catch (e) {} })()
     try {
-      const paths = first.map(it => it.canonicalPath).filter(Boolean)
-      if (paths.length) {
-        const resp = await axios.post(API('/enrich/bulk'), { paths })
-        const itemsOut = resp && resp.data && Array.isArray(resp.data.items) ? resp.data.items : []
-        for (const entry of itemsOut) {
-          try {
-            const p = entry.path
-            if (entry.error) continue
-            if (entry.enrichment && (entry.cached || entry.enrichment)) {
-              if (entry.enrichment.missing) {
-                setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
-                setItems(prev => prev.filter(it => it.canonicalPath !== p))
-                setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
-              } else {
-                const enriched = normalizeEnrichResponse(entry.enrichment || null)
-                if (enriched) {
-                  setEnrichCache(prev => ({ ...prev, [p]: enriched }))
-                  if (enriched.hidden || enriched.applied) {
-                    setItems(prev => prev.filter(it => it.canonicalPath !== p))
-                    setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
-                  } else {
-                    setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
-                    setAllItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+      const response = await axios.post(API(endpoint), { libraryId: lib?.id, path: configuredPath })
+      const result = response && response.data ? response.data : {}
+      if (!result.scanId) throw new Error('Scan did not return an id')
+
+      setScanId(result.scanId)
+      try { newScanJustCreatedRef.current = true } catch (e) {}
+      try { setLastScanId(result.scanId) } catch (e) {}
+      const libId = lib?.id || result.libraryId || (scanMeta && scanMeta.libraryId) || ''
+      try { setLastLibraryId(libId) } catch (e) {}
+
+      // fetch scan metadata
+      const meta = await axios.get(API(`/scan/${result.scanId}`))
+      setScanMeta(meta.data)
+      setTotal(meta.data.totalCount)
+
+      // hydrate first page of items either from incremental response sample or via fetch
+      const firstPageSize = Math.min(meta.data.totalCount || 0, Math.max(batchSize, 50))
+      let first = []
+      if (mode === 'incremental' && Array.isArray(result.items) && result.items.length) {
+        first = result.items.slice(0, firstPageSize > 0 ? firstPageSize : result.items.length)
+      }
+      if ((!first || !first.length) && firstPageSize > 0) {
+        const firstPage = await axios.get(API(`/scan/${result.scanId}/items`), { params: { offset: 0, limit: firstPageSize } }).catch(() => ({ data: { items: [] } }))
+        first = (firstPage && firstPage.data && Array.isArray(firstPage.data.items)) ? firstPage.data.items : []
+      }
+
+  const hydratedFirst = Array.isArray(first) ? first : []
+  setAllItems(hydratedFirst)
+  setItems(hydratedFirst)
+  setCurrentScanPaths(new Set(hydratedFirst.map(i => i.canonicalPath)))
+  setScanLoaded(hydratedFirst.length)
+  setScanProgress(hydratedFirst.length && meta.data.totalCount ? Math.round((hydratedFirst.length / Math.max(1, meta.data.totalCount)) * 100) : 0)
+
+  pushToast && pushToast('Scan', mode === 'full' ? 'Full scan is running — we’ll stream results as it completes.' : 'Incremental scan is running — we’ll surface new or changed files shortly.')
+
+      // Start background server-side refresh but don't await it here — let the
+      // server process new items incrementally. Also bulk-enrich the visible
+      // first page so metadata appears quickly in the UI.
+      void (async () => { try { await refreshScan(result.scanId, true) } catch (e) {} })()
+      try {
+  const paths = hydratedFirst.map(it => it.canonicalPath).filter(Boolean)
+        if (paths.length) {
+          const resp = await axios.post(API('/enrich/bulk'), { paths })
+          const itemsOut = resp && resp.data && Array.isArray(resp.data.items) ? resp.data.items : []
+          for (const entry of itemsOut) {
+            try {
+              const p = entry.path
+              if (entry.error) continue
+              if (entry.enrichment && (entry.cached || entry.enrichment)) {
+                if (entry.enrichment.missing) {
+                  setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
+                  setItems(prev => prev.filter(it => it.canonicalPath !== p))
+                  setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
+                } else {
+                  const enriched = normalizeEnrichResponse(entry.enrichment || null)
+                  if (enriched) {
+                    setEnrichCache(prev => ({ ...prev, [p]: enriched }))
+                    if (enriched.hidden || enriched.applied) {
+                      setItems(prev => prev.filter(it => it.canonicalPath !== p))
+                      setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
+                    } else {
+                      setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+                      setAllItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+                    }
                   }
                 }
               }
-            }
-          } catch (e) {}
+            } catch (e) {}
+          }
         }
-      }
-    } catch (e) { /* best-effort */ }
-  } finally {
-    setMetaPhase(false)
-    setScanning(false)
-    setScanProgress(100)
-  }
+      } catch (e) { /* best-effort */ }
 
-  // return created scan id for callers that want to act on it
-  return r.data.scanId
+      return result.scanId
+    } catch (err) {
+      pushToast && pushToast('Scan', mode === 'full' ? 'Full scan failed to start' : 'Incremental scan failed to start')
+      throw err
+    } finally {
+      setMetaPhase(false)
+      setScanning(false)
+      setActiveScanKind(null)
+      setScanProgress(100)
+    }
   }
 
   // server-side search — do not load all items into memory on client
@@ -1220,6 +1235,18 @@ export default function App() {
 
   useEffect(() => { try { document.documentElement.classList.toggle('light', theme === 'light') } catch(e){} }, [theme])
 
+  useEffect(() => {
+    if (!confirmFullScanOpen) return
+    const handleKey = (ev) => {
+      if (ev.key === 'Escape') {
+        ev.preventDefault()
+        setConfirmFullScanOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [confirmFullScanOpen])
+
   // listen for cross-component notifications (Settings dispatches when items are unapproved)
   useEffect(() => {
     const handler = (ev) => {
@@ -1453,6 +1480,40 @@ export default function App() {
   const selectedCount = Object.keys(selected || {}).length
   return (
   <div className={"app" + (selectMode && selectedCount ? ' select-mode-shrink' : '')}>
+      {confirmFullScanOpen ? (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="full-scan-title"
+          onClick={() => { if (!scanning) setConfirmFullScanOpen(false) }}
+        >
+          <div className="modal-card" onClick={ev => ev.stopPropagation()}>
+            <h2 id="full-scan-title">Run a full scan?</h2>
+            <p>This walk re-indexes every file and can take a while. You can keep working while it runs.</p>
+            <div className="modal-actions">
+              <button
+                className="btn-ghost"
+                onClick={() => setConfirmFullScanOpen(false)}
+                disabled={scanning && activeScanKind === 'full'}
+              >Cancel</button>
+              <button
+                className="btn-save"
+                onClick={() => {
+                  if (scanning) return
+                  setConfirmFullScanOpen(false)
+                  void triggerScan(libraries[0], { mode: 'full' }).catch(() => {})
+                }}
+                disabled={scanning}
+              >
+                <span className="btn-label">
+                  {activeScanKind === 'full' ? (<><Spinner /><span>Scanning…</span></>) : 'Start full scan'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <header>
         <h1 style={{cursor:'pointer'}} onClick={() => (window.location.hash = '#/')} title="Go to dashboard">MMP Renamer</h1>
   {/* Header search: only show when authenticated */}
@@ -1478,18 +1539,32 @@ export default function App() {
 
         {auth ? (
             <div className="header-actions">
-            <button className={"btn-save" + (selectMode && selectedCount ? ' shifted' : '')} onClick={() => {
-                try {
-                  if (scanning) { pushToast && pushToast('Scan','Scan already in progress'); return }
-                  // Provide immediate feedback and prevent duplicate clicks by setting scanning now
-                  setScanning(true)
-                  // Start the scan asynchronously; triggerScan manages its own scanning state during metadata phases
-                  void triggerScan(libraries[0]).catch(e => { pushToast && pushToast('Scan','Scan failed to start') })
-                } catch (e) {
-                  pushToast && pushToast('Scan','Scan failed to start')
-                  setScanning(false)
-                }
-              }} disabled={scanning}><span>{scanning ? <Spinner/> : 'Scan'}</span></button>
+            <button
+              className={"btn-save" + (selectMode && selectedCount ? ' shifted' : '')}
+              onClick={() => {
+                if (scanning) { pushToast && pushToast('Scan','Scan already in progress'); return }
+                setConfirmFullScanOpen(true)
+              }}
+              disabled={scanning}
+              title="Run a full library scan"
+            >
+              <span className="btn-label">
+                {activeScanKind === 'full' ? (<><Spinner /><span>Scanning…</span></>) : 'Scan'}
+              </span>
+            </button>
+            <button
+              className="btn-ghost btn-incremental"
+              onClick={() => {
+                if (scanning) { pushToast && pushToast('Scan','Scan already in progress'); return }
+                void triggerScan(libraries[0], { mode: 'incremental' }).catch(() => {})
+              }}
+              disabled={scanning}
+              title="Incremental scan"
+            >
+              <span className="btn-label">
+                {activeScanKind === 'incremental' ? (<><Spinner /><span>Updating…</span></>) : 'Incremental scan'}
+              </span>
+            </button>
             {/* Select + Approve wrapper: Approve is absolutely positioned so it doesn't reserve space when hidden */}
             <div className="select-approve-wrap">
                 {selectMode && Object.keys(selected).length ? (
@@ -1520,24 +1595,33 @@ export default function App() {
                           const selectedPaths = Object.keys(selected).filter(Boolean)
                           if (!selectedPaths.length) return
                           pushToast && pushToast('Rescan', `Rescanning ${selectedPaths.length} items...`)
-                          // set per-item loading while refresh happens
+                          // Mark selected items as loading so their buttons show spinners while processing
                           const loadingMap = {}
                           for (const p of selectedPaths) loadingMap[p] = true
                           safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
-                          // Perform the same operation as the per-item Rescan button: call enrichOne(item, true)
-                          // Limit concurrency by batching into small groups to avoid overwhelming providers.
-                          const BATCH_SIZE = 6
-                          try {
-                            for (let i = 0; i < selectedPaths.length; i += BATCH_SIZE) {
-                              const batch = selectedPaths.slice(i, i + BATCH_SIZE)
-                              await Promise.all(batch.map(async (p) => {
-                                try { await enrichOne({ canonicalPath: p }, true) } catch (e) { /* per-item best-effort */ }
-                              }))
+
+                          const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+                          const RATE_DELAY_MS = 350
+                          let successCount = 0
+                          const failed = []
+
+                          for (let i = 0; i < selectedPaths.length; i++) {
+                            const path = selectedPaths[i]
+                            try {
+                              const result = await enrichOne({ canonicalPath: path }, true)
+                              if (result) successCount += 1
+                              else failed.push(path)
+                            } catch (err) {
+                              failed.push(path)
                             }
-                          } catch (e) { /* overall best-effort */ }
-                          // clear loading flags
+                            // add a brief delay between provider refreshes to avoid rate limiting
+                            if (i < selectedPaths.length - 1) await sleep(RATE_DELAY_MS)
+                          }
+
+                          // clear loading flags (guard in case enrichOne did not remove them)
                           safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
-                          // If any of the rescanned paths belong to the active scan, trigger a single background server-side refresh
+
+                          // Trigger background server-side refresh when relevant
                           try {
                             const sid = scanId || (scanMeta && scanMeta.id) || lastScanId
                             if (sid && currentScanPaths && selectedPaths.some(p => currentScanPaths.has(p))) {
@@ -1546,9 +1630,18 @@ export default function App() {
                               try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
                             }
                           } catch (e) {}
+
                           setSelected({})
-                          pushToast && pushToast('Rescan', 'Rescan complete')
-                        } catch (e) { pushToast && pushToast('Rescan', 'Rescan failed') }
+                          const failureCount = failed.length
+                          if (failureCount) {
+                            pushToast && pushToast('Rescan', `Rescanned ${successCount}/${selectedPaths.length} items (${failureCount} failed).`)
+                            try { dlog('[client] RESCAN_SELECTED_FAILED', { failed }) } catch (e) {}
+                          } else {
+                            pushToast && pushToast('Rescan', `Rescanned ${selectedPaths.length} items.`)
+                          }
+                        } catch (e) {
+                          pushToast && pushToast('Rescan', 'Rescan failed')
+                        }
                       }}
                       title="Rescan selected"
                     >Rescan selected</button>
