@@ -424,6 +424,97 @@ export default function App() {
     } catch (e) {}
   }
 
+  // Maximum number of items to perform in-memory search on; if exceeded, fall back to server search
+  const MAX_IN_MEMORY_SEARCH = 20000
+
+  // normalize text for search: lowercase, remove diacritics, collapse whitespace
+  function normalizeForSearch(s) {
+    if (!s && s !== 0) return ''
+    try {
+      const str = String(s)
+      // NFKD then strip combining marks
+      const n = str.normalize ? str.normalize('NFKD') : str
+      // remove diacritics (Unicode marks) and non-word punctuation
+      return n.replace(/\p{M}/gu, '').replace(/[\s\-_.()\[\],;:!"'\/\\]+/g, ' ').toLowerCase().trim()
+    } catch (e) { return String(s).toLowerCase() }
+  }
+
+  // Build a searchable text blob for an item from canonical path and any enrichment
+  function buildSearchText(it) {
+    const parts = []
+    try {
+      parts.push(it.canonicalPath || '')
+      const b = (it.canonicalPath || '').split('/').pop()
+      if (b) parts.push(b)
+      const e = enrichCache && enrichCache[it.canonicalPath]
+      const norm = normalizeEnrichResponse(e)
+      if (norm) {
+        if (norm.parsed) {
+          parts.push(norm.parsed.parsedName || '')
+          parts.push(norm.parsed.title || '')
+          if (norm.parsed.season != null) parts.push(`s${String(norm.parsed.season)}`)
+          if (norm.parsed.episode != null) parts.push(`e${String(norm.parsed.episode)}`)
+        }
+        if (norm.provider) {
+          parts.push(norm.provider.renderedName || '')
+          parts.push(norm.provider.title || '')
+          parts.push(norm.provider.episodeTitle || '')
+          if (norm.provider.season != null) parts.push(`s${String(norm.provider.season)}`)
+          if (norm.provider.episode != null) parts.push(`e${String(norm.provider.episode)}`)
+          if (norm.provider.year) parts.push(String(norm.provider.year))
+        }
+      }
+    } catch (e) {}
+    return normalizeForSearch(parts.join(' '))
+  }
+
+  // cache for computed searchText per canonicalPath to avoid recomputing repeatedly
+  const searchTextCacheRef = useRef({})
+  function getSearchText(it) {
+    try {
+      const key = it && it.canonicalPath
+      if (!key) return ''
+      const cache = searchTextCacheRef.current || {}
+      if (cache[key]) return cache[key]
+      const txt = buildSearchText(it)
+      cache[key] = txt
+      searchTextCacheRef.current = cache
+      return txt
+    } catch (e) { return buildSearchText(it) }
+  }
+
+  // invalidate cache whenever enrichCache changes (simple strategy)
+  useEffect(() => { searchTextCacheRef.current = {} }, [enrichCache])
+
+  // Helper: check whether an item matches the query using enriched metadata when available
+  function matchesQuery(it, q) {
+    if (!it || !q) return false
+    // If the baseline is too large, signal to caller that server-side search should be used instead
+    if (allItems && allItems.length > MAX_IN_MEMORY_SEARCH) return null
+    const qnorm = normalizeForSearch(q)
+    if (!qnorm) return true
+    const tokens = qnorm.split(/\s+/).filter(Boolean)
+    if (!tokens.length) return true
+    const searchText = getSearchText(it)
+    // all tokens must be present somewhere in the searchText (AND semantics)
+    return tokens.every(t => searchText.indexOf(t) !== -1)
+  }
+
+  function pushToast(title, message) {
+    const id = Math.random().toString(36).slice(2,9)
+    const ts = new Date().toISOString()
+    const entry = { id, title, message, ts }
+    setToasts(t => [...t, entry])
+    // persist into localStorage for notifications history
+    try {
+      const existing = JSON.parse(localStorage.getItem('notifications') || '[]')
+      existing.unshift(entry)
+      // keep recent 200 notifications to avoid unbounded growth
+      localStorage.setItem('notifications', JSON.stringify(existing.slice(0, 200)))
+    } catch (e) {}
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 6000)
+  }
+
   // On mount, verify cached paths to remove any stale entries from previous runs
   useEffect(() => { verifyCachePaths().catch(()=>{}) }, [])
   // Poll for hide events so client can force-refresh affected scans/items even if hide was initiated elsewhere
