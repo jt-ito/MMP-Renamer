@@ -394,20 +394,20 @@ export default function App() {
       // If user is actively searching, prefer client-side filtering when safe so
       // we don't cause a full server-side update that could reset the view.
       if (searchQuery && searchQuery.length) {
-          try {
-            if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
-              const q = searchQuery
-              const lowered = q.toLowerCase()
-              // choose sourceForSearch carefully: prefer baseline only if present
-              const sourceForSearch = (allItems && allItems.length) ? (baseline || clean) : (baseline || clean)
-              const results = clean.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
-              setItems(results)
-              setTotal(results.length)
-            } else {
-              // baseline too large for in-memory search: delegate to doSearch
-              try { doSearch(searchQuery) } catch (e) { /* best-effort */ }
-            }
-          } catch (e) { /* best-effort */ }
+        try {
+          if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
+            const q = searchQuery
+            const lowered = q.toLowerCase()
+            // choose sourceForSearch carefully: prefer baseline only if present
+            const sourceForSearch = (allItems && allItems.length) ? (baseline || clean) : (baseline || clean)
+            const results = clean.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+            setItems(results)
+            setTotal(results.length)
+          } else {
+            // baseline too large for in-memory search: delegate to doSearch
+            try { doSearch(searchQuery) } catch (e) { /* best-effort */ }
+          }
+        } catch (e) { /* best-effort */ }
       } else {
         // No active search: if dataset small enough, show all; otherwise show provided first page
         if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
@@ -423,101 +423,6 @@ export default function App() {
       try { setCurrentScanPaths(new Set((clean||[]).map(x => x.canonicalPath))) } catch (e) {}
     } catch (e) {}
   }
-
-      // Maximum number of items to perform in-memory search on; if exceeded, fall back to server search
-      const MAX_IN_MEMORY_SEARCH = 20000
-
-      // normalize text for search: lowercase, remove diacritics, collapse whitespace
-      function normalizeForSearch(s) {
-        if (!s && s !== 0) return ''
-        try {
-          const str = String(s)
-          // NFKD then strip combining marks
-          const n = str.normalize ? str.normalize('NFKD') : str
-          // remove diacritics (Unicode marks) and non-word punctuation
-          return n.replace(/\p{M}/gu, '').replace(/[\s\-_.()\[\],;:!"'\/\\]+/g, ' ').toLowerCase().trim()
-        } catch (e) { return String(s).toLowerCase() }
-      }
-
-      // Build a searchable text blob for an item from canonical path and any enrichment
-      function buildSearchText(it) {
-        const parts = []
-        try {
-          parts.push(it.canonicalPath || '')
-          const b = (it.canonicalPath || '').split('/').pop()
-          if (b) parts.push(b)
-          const e = enrichCache && enrichCache[it.canonicalPath]
-          const norm = normalizeEnrichResponse(e)
-          if (norm) {
-            if (norm.parsed) {
-              parts.push(norm.parsed.parsedName || '')
-              parts.push(norm.parsed.title || '')
-              if (norm.parsed.season != null) parts.push(`s${String(norm.parsed.season)}`)
-              if (norm.parsed.episode != null) parts.push(`e${String(norm.parsed.episode)}`)
-            }
-            if (norm.provider) {
-              parts.push(norm.provider.renderedName || '')
-              parts.push(norm.provider.title || '')
-              parts.push(norm.provider.episodeTitle || '')
-              if (norm.provider.season != null) parts.push(`s${String(norm.provider.season)}`)
-              if (norm.provider.episode != null) parts.push(`e${String(norm.provider.episode)}`)
-              if (norm.provider.year) parts.push(String(norm.provider.year))
-            }
-          }
-        } catch (e) {}
-        return normalizeForSearch(parts.join(' '))
-      }
-
-      // cache for computed searchText per canonicalPath to avoid recomputing repeatedly
-      const searchTextCacheRef = useRef({})
-      function getSearchText(it) {
-        try {
-          const key = it && it.canonicalPath
-          if (!key) return ''
-          const cache = searchTextCacheRef.current || {}
-          if (cache[key]) return cache[key]
-          const txt = buildSearchText(it)
-          cache[key] = txt
-          searchTextCacheRef.current = cache
-          return txt
-        } catch (e) { return buildSearchText(it) }
-      }
-
-      // invalidate cache whenever enrichCache changes (simple strategy)
-      useEffect(() => { searchTextCacheRef.current = {} }, [enrichCache])
-
-      // Helper: check whether an item matches the query using enriched metadata when available
-      function matchesQuery(it, q) {
-        if (!it || !q) return false
-        // If the baseline is too large, signal to caller that server-side search should be used instead
-        if (allItems && allItems.length > MAX_IN_MEMORY_SEARCH) return null
-        const qnorm = normalizeForSearch(q)
-        if (!qnorm) return true
-        const tokens = qnorm.split(/\s+/).filter(Boolean)
-        if (!tokens.length) return true
-        const searchText = getSearchText(it)
-        // all tokens must be present somewhere in the searchText (AND semantics)
-        return tokens.every(t => searchText.indexOf(t) !== -1)
-      }
-
-  
-
-  function pushToast(title, message){
-    const id = Math.random().toString(36).slice(2,9)
-    const ts = new Date().toISOString()
-    const entry = { id, title, message, ts }
-    setToasts(t => [...t, entry])
-    // persist into localStorage for notifications history
-    try {
-      const existing = JSON.parse(localStorage.getItem('notifications') || '[]')
-      existing.unshift(entry)
-      // keep recent 200 notifications to avoid unbounded growth
-      localStorage.setItem('notifications', JSON.stringify(existing.slice(0, 200)))
-    } catch (e) {}
-    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 6000)
-  }
-
-  useEffect(() => { axios.get(API('/libraries')).then(r => setLibraries(r.data)).catch(()=>{}) }, [])
 
   // On mount, verify cached paths to remove any stale entries from previous runs
   useEffect(() => { verifyCachePaths().catch(()=>{}) }, [])
@@ -1109,27 +1014,180 @@ export default function App() {
 
   // Refresh enrichment for a list of canonical paths and update visible items
   async function refreshEnrichForPaths(paths = []) {
-    if (!paths || !Array.isArray(paths) || paths.length === 0) return
-    for (const p of paths) {
+    if (!Array.isArray(paths) || !paths.length) return
+    const uniquePaths = Array.from(new Set(paths.filter(Boolean)))
+    for (const p of uniquePaths) {
       try {
         const er = await axios.get(API('/enrich'), { params: { path: p } })
-        if (er.data) {
-          if (er.data.missing) {
-            setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
+        if (!er.data) continue
+        if (er.data.missing) {
+          setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
+          setItems(prev => prev.filter(it => it.canonicalPath !== p))
+          setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
+        } else if ( er.data.cached || er.data.enrichment ) {
+          const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
+          setEnrichCache(prev => ({ ...prev, [p]: enriched }))
+          if (enriched && (enriched.hidden || enriched.applied)) {
             setItems(prev => prev.filter(it => it.canonicalPath !== p))
-          } else if (er.data.cached || er.data.enrichment) {
-            const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
-            setEnrichCache(prev => ({ ...prev, [p]: enriched }))
-            // if the item is now hidden/applied remove it from visible items
-            if (enriched && (enriched.hidden || enriched.applied)) {
-              setItems(prev => prev.filter(it => it.canonicalPath !== p))
-            } else {
-              // item is unhidden (unapproved) -> ensure it's visible in the list (deduped)
-              setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
-            }
+            setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
+          } else {
+            setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
+            setAllItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
           }
         }
       } catch (e) {}
+    }
+  }
+
+  async function hideOnePath(originalPath, { silent = false } = {}) {
+    if (!originalPath) return { success: false }
+    try { dlog('[client] HIDE_REQUEST', { path: originalPath, itemsLen: (items||[]).length, allItemsLen: (allItems||[]).length, searchQuery }) } catch (e) {}
+    if (loadingEnrich && loadingEnrich[originalPath]) return { success: false, skipped: true }
+    safeSetLoadingEnrich(prev => ({ ...prev, [originalPath]: true }))
+    const touchedLoading = new Set([originalPath])
+    try {
+      pendingHiddenRef.current.add(originalPath)
+      try { if (pendingHideTimeoutsRef.current[originalPath]) clearTimeout(pendingHideTimeoutsRef.current[originalPath]) } catch (e) {}
+      pendingHideTimeoutsRef.current[originalPath] = setTimeout(() => {
+        try { pendingHiddenRef.current.delete(originalPath) } catch (e) {}
+        try { delete pendingHideTimeoutsRef.current[originalPath] } catch (e) {}
+      }, 2000)
+    } catch (e) {}
+    try {
+      setEnrichCache(prev => ({ ...prev, [originalPath]: Object.assign({}, prev && prev[originalPath] ? prev[originalPath] : {}, { hidden: true }) }))
+      setItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
+      setAllItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
+    } catch (e) {}
+
+    let resp = null
+    let didFinalToast = !!silent
+    try {
+      resp = await axios.post(API('/enrich/hide'), { path: originalPath })
+      const serverKey = resp && resp.data && resp.data.path ? resp.data.path : originalPath
+      if (serverKey && serverKey !== originalPath) touchedLoading.add(serverKey)
+      const returned = resp && resp.data && (resp.data.enrichment || resp.data) ? (resp.data.enrichment || resp.data) : null
+      let authoritative = null
+      try {
+        const er = await axios.get(API('/enrich'), { params: { path: serverKey } }).catch(() => null)
+        authoritative = er && er.data && (er.data.enrichment || er.data) ? (er.data.enrichment || er.data) : null
+      } catch (e) { authoritative = null }
+      const enriched = authoritative ? normalizeEnrichResponse(authoritative) : (returned ? normalizeEnrichResponse(returned) : null)
+
+      if (enriched) {
+        try { pendingHiddenRef.current.delete(serverKey) } catch (e) {}
+        try { if (pendingHideTimeoutsRef.current[serverKey]) { clearTimeout(pendingHideTimeoutsRef.current[serverKey]); delete pendingHideTimeoutsRef.current[serverKey] } } catch (e) {}
+        setEnrichCache(prev => ({ ...prev, [serverKey]: enriched }))
+        if (enriched.hidden || enriched.applied) {
+          setItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
+          setAllItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
+        }
+      } else {
+        try { pendingHiddenRef.current.add(originalPath) } catch (e) {}
+        setEnrichCache(prev => ({ ...prev, [originalPath]: Object.assign({}, prev && prev[originalPath] ? prev[originalPath] : {}, { hidden: true }) }))
+        setItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
+        setAllItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
+      }
+
+      try {
+        const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
+        if (modified && modified.length) {
+          try { dlog('[client] HIDE_MODIFIED_IDS_BG_REFRESH', { path: originalPath, modified }) } catch (e) {}
+          const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
+          for (const sid of toNotify) {
+            ;(async () => {
+              try { await refreshEnrichForPaths([ serverKey || originalPath ]) } catch (e) {}
+            })()
+            try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
+          }
+        } else {
+          try { dlog('[client] HIDE_NO_MODIFIED_IDS_BG', { path: originalPath }) } catch (e) {}
+        }
+      } catch (e) {}
+
+      try {
+        if (enriched && (enriched.hidden || enriched.applied)) {
+          if (!silent) pushToast && pushToast('Hide', 'Item hidden')
+          didFinalToast = true
+        } else {
+          const tryPaths = []
+          if (resp && resp.data && resp.data.path) tryPaths.push(resp.data.path)
+          tryPaths.push(originalPath)
+          let confirmed = false
+          for (const pth of tryPaths) {
+            try {
+              const check = await axios.get(API('/enrich'), { params: { path: pth } }).catch(() => null)
+              const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
+              const norm = auth ? normalizeEnrichResponse(auth) : null
+              if (norm && (norm.hidden || norm.applied)) {
+                setEnrichCache(prev => ({ ...prev, [pth]: norm }))
+                setItems(prev => prev.filter(x => x.canonicalPath !== pth))
+                setAllItems(prev => prev.filter(x => x.canonicalPath !== pth))
+                if (!silent) pushToast && pushToast('Hide', 'Item hidden (confirmed)')
+                didFinalToast = true
+                confirmed = true
+                break
+              }
+            } catch (e) {}
+          }
+          if (!confirmed && !didFinalToast) {
+            try {
+              const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
+              if (!handled) {
+                try { dlog('[client] HIDE_FAILED_NO_TOAST', { path: originalPath }) } catch (e) {}
+              }
+            } catch (e) {
+              try { dlog('[client] HIDE_FAILED_NO_TOAST_ERR', { path: originalPath, err: String(e) }) } catch (ee) {}
+            }
+            didFinalToast = true
+          }
+        }
+      } catch (e) {
+        if (!didFinalToast) {
+          try {
+            const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
+            if (!handled) try { dlog('[client] HIDE_FAILED_NO_TOAST', { path: originalPath }) } catch (ee) {}
+          } catch (ee) {
+            try { dlog('[client] HIDE_FAILED_NO_TOAST_ERR', { path: originalPath, err: String(ee) }) } catch (eee) {}
+          }
+        }
+        didFinalToast = true
+      }
+      return { success: true, path: serverKey || originalPath }
+    } catch (err) {
+      try {
+        const tryPaths = []
+        if (resp && resp.data && resp.data.path) tryPaths.push(resp.data.path)
+        tryPaths.push(originalPath)
+        let confirmed = false
+        for (const pth of tryPaths) {
+          try {
+            const check = await axios.get(API('/enrich'), { params: { path: pth } }).catch(() => null)
+            const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
+            const norm = auth ? normalizeEnrichResponse(auth) : null
+            if (norm && (norm.hidden || norm.applied)) {
+              setEnrichCache(prev => ({ ...prev, [pth]: norm }))
+              setItems(prev => prev.filter(x => x.canonicalPath !== pth))
+              setAllItems(prev => prev.filter(x => x.canonicalPath !== pth))
+              if (!silent) pushToast && pushToast('Hide', 'Item hidden (confirmed)')
+              didFinalToast = true
+              confirmed = true
+              break
+            }
+          } catch (e) {}
+        }
+        if (!confirmed && !didFinalToast) {
+          if (!silent) pushToast && pushToast('Hide', 'Hide failed')
+        }
+      } catch (e) {
+        if (!silent) pushToast && pushToast('Hide', 'Hide failed')
+      }
+      return { success: false, error: err }
+    } finally {
+      safeSetLoadingEnrich(prev => {
+        const n = { ...prev }
+        for (const p of touchedLoading) delete n[p]
+        return n
+      })
     }
   }
 
@@ -1477,7 +1535,9 @@ export default function App() {
     return () => { stopped = true; try { clearInterval(id) } catch (e) {} }
   }, [scanId])
 
-  const selectedCount = Object.keys(selected || {}).length
+  const selectedPathsList = React.useMemo(() => Object.keys(selected || {}).filter(Boolean), [selected])
+  const selectedCount = selectedPathsList.length
+  const selectedHasLoading = selectedPathsList.some(p => loadingEnrich && loadingEnrich[p])
   return (
   <div className={"app" + (selectMode && selectedCount ? ' select-mode-shrink' : '')}>
       {confirmFullScanOpen ? (
@@ -1565,34 +1625,93 @@ export default function App() {
                 {activeScanKind === 'incremental' ? (<><Spinner /><span>Updating…</span></>) : 'Incremental scan'}
               </span>
             </button>
-            {/* Select + Approve wrapper: Approve is absolutely positioned so it doesn't reserve space when hidden */}
+        {/* Global bulk-enrich indicator (shown when many enrich operations are running) */}
             <div className="select-approve-wrap">
-                {selectMode && Object.keys(selected).length ? (
+                {selectMode && selectedCount ? (
                   <button
                     className={"btn-save approve-button visible"}
+                    disabled={selectedHasLoading}
                     onClick={async () => {
                       try {
-                        const selectedPaths = Object.keys(selected).filter(Boolean)
+                        const selectedPaths = [...selectedPathsList]
                         if (!selectedPaths.length) return
                         const selItems = items.filter(it => selectedPaths.includes(it.canonicalPath))
                         if (!selItems.length) return
                         pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
                         const plans = await previewRename(selItems)
                         await applyRename(plans)
-                        setSelected({})
+                        setSelected(prev => {
+                          if (!prev) return {}
+                          const next = { ...prev }
+                          for (const p of selectedPaths) delete next[p]
+                          return next
+                        })
                         pushToast && pushToast('Approve', 'Approve completed')
                       } catch (e) { pushToast && pushToast('Approve', 'Approve failed') }
                     }}
                     title="Approve selected"
                   >Approve selected</button>
                 ) : null}
+                {selectMode && selectedCount ? (
+                  <button
+                    className={"btn-ghost approve-button visible"}
+                    disabled={selectedHasLoading}
+                    onClick={async () => {
+                      const selectedPaths = [...selectedPathsList]
+                      if (!selectedPaths.length) return
+                      const loadingMap = {}
+                      for (const p of selectedPaths) loadingMap[p] = true
+                      safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
+
+                      let successCount = 0
+                      let skippedCount = 0
+                      const failed = []
+                      try {
+                        for (const path of selectedPaths) {
+                          try {
+                            const res = await hideOnePath(path, { silent: true })
+                            if (res && res.success) {
+                              successCount += 1
+                            } else if (res && res.skipped) {
+                              successCount += 1
+                              skippedCount += 1
+                            } else {
+                              failed.push(path)
+                            }
+                          } catch (err) {
+                            failed.push(path)
+                          }
+                        }
+                      } finally {
+                        safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+                        setSelected(prev => {
+                          if (!prev) return {}
+                          const next = { ...prev }
+                          for (const p of selectedPaths) delete next[p]
+                          return next
+                        })
+                      }
+
+                      if (failed.length && successCount) {
+                        pushToast && pushToast('Hide', `Hidden ${successCount}/${selectedPaths.length} items (${failed.length} failed).`)
+                      } else if (failed.length && !successCount) {
+                        pushToast && pushToast('Hide', 'Hide failed for all selected items')
+                      } else {
+                        const skippedNote = skippedCount ? ` (${skippedCount} skipped)` : ''
+                        pushToast && pushToast('Hide', `Hidden ${selectedPaths.length} items${skippedNote}.`)
+                      }
+                    }}
+                    title="Hide selected"
+                  >Hide selected</button>
+                ) : null}
                 {/* Rescan selected: appears only in select mode and when items are selected; does not reserve space when hidden */}
-                {selectMode && Object.keys(selected).length ? (
+                {selectMode && selectedCount ? (
                   <button
                       className={"btn-ghost approve-button visible"}
+                      disabled={selectedHasLoading}
                       onClick={async () => {
                         try {
-                          const selectedPaths = Object.keys(selected).filter(Boolean)
+                          const selectedPaths = [...selectedPathsList]
                           if (!selectedPaths.length) return
                           pushToast && pushToast('Rescan', `Rescanning ${selectedPaths.length} items...`)
                           // Mark selected items as loading so their buttons show spinners while processing
@@ -1631,7 +1750,12 @@ export default function App() {
                             }
                           } catch (e) {}
 
-                          setSelected({})
+                          setSelected(prev => {
+                            if (!prev) return {}
+                            const next = { ...prev }
+                            for (const p of selectedPaths) delete next[p]
+                            return next
+                          })
                           const failureCount = failed.length
                           if (failureCount) {
                             pushToast && pushToast('Rescan', `Rescanned ${successCount}/${selectedPaths.length} items (${failureCount} failed).`)
@@ -1724,7 +1848,7 @@ export default function App() {
           <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
             previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
             selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
-            providerKey={providerKey}
+            providerKey={providerKey} hideOne={hideOnePath}
             searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching} />
               ) : null}
             </section>
@@ -1753,13 +1877,14 @@ function LogsPanel({ logs, refresh, pushToast }) {
   )
 }
 
-function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false }) {
+function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false }) {
   const Row = ({ index, style }) => {
   const it = items[index]
   const rawEnrichment = it ? enrichCache?.[it.canonicalPath] : null
   const enrichment = normalizeEnrichResponse(rawEnrichment)
   useEffect(() => { if (it && !rawEnrichment) enrichOne && enrichOne(it) }, [it?.canonicalPath, rawEnrichment, enrichOne])
   const loading = it && Boolean(loadingEnrich[it.canonicalPath])
+  const isSelected = !!(selectMode && it && selected?.[it.canonicalPath])
 
   // Only use the two canonical outputs: parsed and provider
   const parsed = enrichment?.parsed || null
@@ -1781,11 +1906,37 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
 
   const basename = (it && it.canonicalPath ? it.canonicalPath.split('/').pop() : '')
   const primary = providerRendered || parsedName || basename || ''
+  const handleRowClick = (ev) => {
+    if (!selectMode || !it) return
+    // ignore clicks originating from action buttons or the checkbox container
+    const interactive = ev.target.closest('.actions') || ev.target.closest('button') || ev.target.closest('a') || ev.target.closest('input')
+    if (interactive) return
+    toggleSelect(it.canonicalPath, !isSelected)
+  }
+
     return (
-      <div className="row" style={style}>
+      <div
+        className={"row" + (selectMode ? ' row-select-mode' : '') + (isSelected ? ' row-selected' : '')}
+        style={style}
+        onClick={handleRowClick}
+        role={selectMode ? 'button' : undefined}
+        tabIndex={selectMode ? 0 : undefined}
+        onKeyDown={ev => {
+          if (!selectMode || !it) return
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault()
+            toggleSelect(it.canonicalPath, !isSelected)
+          }
+        }}
+      >
         {selectMode ? (
           <div style={{width:36, display:'flex', alignItems:'center', justifyContent:'center'}}>
-            <input type="checkbox" checked={!!selected[it?.canonicalPath]} onChange={e => toggleSelect(it?.canonicalPath, e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={!!selected[it?.canonicalPath]}
+              onClick={ev => ev.stopPropagation()}
+              onChange={e => toggleSelect(it?.canonicalPath, e.target.checked)}
+            />
           </div>
         ) : <div style={{width:36}} /> }
         <div className="meta">
@@ -1801,249 +1952,71 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
             <div style={{fontSize:11, opacity:0.65, marginTop:3}}>Source: {provider ? 'provider' : (parsed ? 'parsed' : 'unknown')}</div>
           </div>
         </div>
-  <div className="actions">
-      <button title="Apply rename for this item" className="btn-save icon-btn" disabled={loading} onClick={async () => {
+        <div className="actions">
+          <button
+            title="Apply rename for this item"
+            className="btn-save icon-btn"
+            disabled={loading}
+            onClick={async (ev) => {
+              ev.stopPropagation?.()
               if (!it) return
+              let successShown = false
               try {
                 safeSetLoadingEnrich(prev => ({ ...prev, [it.canonicalPath]: true }))
-                // Do not pass a hardcoded template here so the user's configured template is used
                 const plans = await previewRename([it])
                 pushToast && pushToast('Preview ready', 'Rename plan generated — applying now')
-        let successShown = false
-        const res = await applyRename(plans)
-                // interpret server results (array of per-plan results)
+                const res = await applyRename(plans)
                 try {
                   const first = (Array.isArray(res) && res.length) ? res[0] : null
                   const status = first && (first.status || first.result || '')
                   if (status === 'hardlinked' || status === 'copied' || status === 'moved' || status === 'exists' || status === 'dryrun' || status === 'noop') {
                     const kind = (status === 'copied') ? 'Copied (fallback)' : (status === 'hardlinked' ? 'Hardlinked' : (status === 'moved' ? 'Moved' : (status === 'exists' ? 'Exists' : (status === 'dryrun' ? 'Dry run' : 'No-op'))))
-          pushToast && pushToast('Apply', `${kind}: ${first.to || first.path || ''}`)
-          successShown = true
+                    pushToast && pushToast('Apply', `${kind}: ${first.to || first.path || ''}`)
+                    successShown = true
                   } else if (first && first.status === 'error') {
                     pushToast && pushToast('Apply', `Failed: ${first.error || 'unknown error'}`)
                   } else {
-                    // fallback display
                     pushToast && pushToast('Apply result', JSON.stringify(res))
-          successShown = true
+                    successShown = true
                   }
                 } catch (e) {
                   pushToast && pushToast('Apply result', JSON.stringify(res))
                 }
-                // refresh enrichment for this item (server marks source hidden) — do this best-effort in background
-                refreshEnrichForPaths([it.canonicalPath]).catch(()=>{})
+                refreshEnrichForPaths([it.canonicalPath]).catch(() => {})
               } catch (e) {
-        // Only show failure toast if we did not already show a success message
-        try { if (!successShown) pushToast && pushToast('Apply', `Apply failed: ${e && e.message ? e.message : String(e)}`) } catch (ee) { /* swallow */ }
+                try { if (!successShown) pushToast && pushToast('Apply', `Apply failed: ${e && e.message ? e.message : String(e)}`) } catch (err) { /* swallow */ }
               } finally {
                 safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[it.canonicalPath]; return n })
               }
-            }}><IconApply/> <span>Apply</span></button>
-          <button title="Rescan metadata for this item" className="btn-ghost" disabled={loading} onClick={async () => { if (!it) return; pushToast && pushToast('Rescan','Refreshing metadata...'); await enrichOne(it, true) }}>{loading ? <Spinner/> : <><IconRefresh/> <span>Rescan</span></>} </button>
-          <button title="Hide this item" className="btn-ghost" disabled={loading} onClick={async () => {
-            if (!it) return
-            const originalPath = it.canonicalPath
-            try { dlog('[client] HIDE_CLICK', { path: originalPath, itemsLen: (items||[]).length, allItemsLen: (allItems||[]).length, searchQuery }) } catch (e) {}
-            // guard concurrent clicks
-            if (loadingEnrich && loadingEnrich[originalPath]) return
-            safeSetLoadingEnrich(prev => ({ ...prev, [originalPath]: true }))
-            // mark as pending-hidden to avoid background merges re-adding it
-            try {
-              pendingHiddenRef.current.add(originalPath)
-              // clear any existing timeout
-              try { if (pendingHideTimeoutsRef.current[originalPath]) clearTimeout(pendingHideTimeoutsRef.current[originalPath]) } catch (e) {}
-              // clear pending after grace period if no authoritative confirmation arrives
-              pendingHideTimeoutsRef.current[originalPath] = setTimeout(() => {
-                try { pendingHiddenRef.current.delete(originalPath) } catch (e) {}
-                try { delete pendingHideTimeoutsRef.current[originalPath] } catch (e) {}
-              }, 2000)
-            } catch (e) {}
-            // optimistic UI update: remove the item immediately so hide feels instant
-            try {
-              setEnrichCache(prev => ({ ...prev, [originalPath]: Object.assign({}, prev && prev[originalPath] ? prev[originalPath] : {}, { hidden: true }) }))
-              setItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
-              setAllItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
-            } catch (e) {}
-            let resp = null
-            let didFinalToast = false
-            try {
-              // attempt hide
-              resp = await axios.post(API('/enrich/hide'), { path: originalPath })
-              // prefer canonical key returned by server when present
-              const serverKey = resp && resp.data && resp.data.path ? resp.data.path : originalPath
-              const returned = resp && resp.data && (resp.data.enrichment || resp.data) ? (resp.data.enrichment || resp.data) : null
-              // Always fetch authoritative enrichment after the operation to avoid races
-              let authoritative = null
-              try {
-                const er = await axios.get(API('/enrich'), { params: { path: serverKey } }).catch(() => null)
-                authoritative = er && er.data && (er.data.enrichment || er.data) ? (er.data.enrichment || er.data) : null
-              } catch (e) { authoritative = null }
-              const enriched = authoritative ? normalizeEnrichResponse(authoritative) : (returned ? normalizeEnrichResponse(returned) : null)
-
-              // Apply authoritative/optimistic changes to local cache/UI but do NOT show final toast yet.
-              if (enriched) {
-                // authoritative enrichment arrived: clear pending flag for this path
-                try { pendingHiddenRef.current.delete(serverKey) } catch (e) {}
-                try { if (pendingHideTimeoutsRef.current[serverKey]) { clearTimeout(pendingHideTimeoutsRef.current[serverKey]); delete pendingHideTimeoutsRef.current[serverKey] } } catch (e) {}
-                setEnrichCache(prev => ({ ...prev, [serverKey]: enriched }))
-                // remove from visible lists if hidden/applied
-                if (enriched.hidden || enriched.applied) {
-                  setItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
-                  setAllItems(prev => prev.filter(x => x.canonicalPath !== serverKey))
-                }
-              } else {
-                // no authoritative enrichment — fallback to optimistic hide but still attempt to refresh scans
-                try { pendingHiddenRef.current.add(originalPath) } catch (e) {}
-                setEnrichCache(prev => ({ ...prev, [originalPath]: Object.assign({}, prev && prev[originalPath] ? prev[originalPath] : {}, { hidden: true }) }))
-                setItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
-                setAllItems(prev => prev.filter(x => x.canonicalPath !== originalPath))
-              }
-
-              // Refresh affected scans: perform optimistic local removal, then
-              // always trigger background rescan + authoritative per-path enrich
-              // update and notify the server. Do NOT fetch or merge scan pages
-              // here — that can stomp the user's current view/scroll/pagination.
-              try {
-                const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
-                if (modified && modified.length) {
-                  try { dlog('[client] HIDE_MODIFIED_IDS_BG_REFRESH', { path: originalPath, modified }) } catch (e) {}
-                  const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
-                  for (const sid of toNotify) {
-                    // Only refresh per-path enrichment for the affected items.
-                    ;(async () => {
-                      try { await refreshEnrichForPaths([ serverKey || originalPath ]) } catch (e) {}
-                    })()
-                    // Notify server the client refreshed the item for this scan id
-                    try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                  }
-                } else {
-                  try { dlog('[client] HIDE_NO_MODIFIED_IDS_BG', { path: originalPath }) } catch (e) {}
-                }
-              } catch (e) { /* swallow */ }
-
-              // Now that we've reloaded scans (if applicable), confirm final state and show a single toast.
-              try {
-                // If we have an authoritative enriched object that indicates hidden/applied, show success
-                if (enriched && (enriched.hidden || enriched.applied)) {
-                  pushToast && pushToast('Hide', 'Item hidden')
-                  didFinalToast = true
-                } else {
-                  // Otherwise, perform a final authoritative check before declaring failure
-                  const tryPaths = []
-                  if (resp && resp.data && resp.data.path) tryPaths.push(resp.data.path)
-                  tryPaths.push(originalPath)
-                  let confirmed = false
-                  for (const pth of tryPaths) {
-                    try {
-                      const check = await axios.get(API('/enrich'), { params: { path: pth } }).catch(() => null)
-                      const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
-                      const norm = auth ? normalizeEnrichResponse(auth) : null
-                      if (norm && (norm.hidden || norm.applied)) {
-                        // server applied hide — treat as success
-                        setEnrichCache(prev => ({ ...prev, [pth]: norm }))
-                        setItems(prev => prev.filter(x => x.canonicalPath !== pth))
-                        setAllItems(prev => prev.filter(x => x.canonicalPath !== pth))
-                        pushToast && pushToast('Hide', 'Item hidden (confirmed)')
-                        didFinalToast = true
-                        confirmed = true
-                        break
-                      }
-                    } catch (e) {}
-                  }
-                  if (!confirmed && !didFinalToast) {
-                    // genuine failure — but wait briefly for any server-side hide event before giving up
-                    try {
-                        const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
-                        if (!handled) {
-                          dlog('[client] HIDE_FAILED_NO_TOAST', { path: originalPath })
-                        }
-                      } catch (e) {
-                        dlog('[client] HIDE_FAILED_NO_TOAST_ERR', { path: originalPath, err: String(e) })
-                      }
-                    didFinalToast = true
-                  }
-                }
-              } catch (e) {
-                if (!didFinalToast) {
-                  try {
-                    const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
-                    if (!handled) dlog('[client] HIDE_FAILED_NO_TOAST', { path: originalPath })
-                    } catch (e) { dlog('[client] HIDE_FAILED_NO_TOAST_ERR', { path: originalPath, err: String(e) }) }
-                }
-                didFinalToast = true
-              }
-            } catch (err) {
-              // On network error, consult authoritative GET before deciding failure (existing behavior)
-              try {
-                const tryPaths = []
-                if (resp && resp.data && resp.data.path) tryPaths.push(resp.data.path)
-                tryPaths.push(originalPath)
-                let confirmed = false
-                for (const pth of tryPaths) {
-                  try {
-                    const check = await axios.get(API('/enrich'), { params: { path: pth } }).catch(() => null)
-                    const auth = check && check.data && (check.data.enrichment || check.data) ? (check.data.enrichment || check.data) : null
-                    const norm = auth ? normalizeEnrichResponse(auth) : null
-                    if (norm && (norm.hidden || norm.applied)) {
-                      // server likely applied hide but POST failed — treat as success
-                      setEnrichCache(prev => ({ ...prev, [pth]: norm }))
-                      setItems(prev => prev.filter(x => x.canonicalPath !== pth))
-                      setAllItems(prev => prev.filter(x => x.canonicalPath !== pth))
-                      pushToast && pushToast('Hide', 'Item hidden (confirmed)')
-                      confirmed = true
-                      break
-                    }
-                  } catch (e) {}
-                }
-                    if (!confirmed) {
-                      // genuine failure — wait for server hide event briefly before declaring failure
-                      try {
-                const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
-                if (!handled) dlog('[client] HIDE_FAILED_NO_TOAST', { path: originalPath })
-                      } catch (e) { pushToast && pushToast('Hide', 'Failed to hide') }
-                    }
-                // If POST did return modifiedScanIds before network error, trigger
-                // background rescan + per-path enrich refresh and notify server.
-                try {
-                  const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
-                  if (modified && modified.length) {
-                    const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
-                    for (const sid of toNotify) {
-                      ;(async () => {
-                        try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {}
-                      })()
-                      try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                    }
-                  }
-                } catch (ee) {}
-              } catch (ee) {
-                try {
-                  const handled = await handleHideFailure([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath, originalPath ])
-                  if (!handled) dlog('[client] HIDE_FAILED_NO_TOAST', { path: originalPath })
-                } catch (e) { dlog('[client] HIDE_FAILED_NO_TOAST_ERR', { path: originalPath, err: String(e) }) }
-              }
-            } finally {
-              // Always attempt to refresh affected scans so UI matches server state.
-                try {
-                  const modified = (resp && resp.data && Array.isArray(resp.data.modifiedScanIds)) ? resp.data.modifiedScanIds : []
-                  if (modified && modified.length) {
-                    const toNotify = modified.filter(sid => sid === scanId || sid === lastScanId)
-                    for (const sid of toNotify) {
-                      ;(async () => {
-                        try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {}
-                      })()
-                      try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                    }
-                  } else {
-                    const sid = scanId || lastScanId
-                    if (sid) {
-                      ;(async () => { try { await refreshEnrichForPaths([ (resp && resp.data && resp.data.path) ? resp.data.path : originalPath ]) } catch (e) {} })()
-                      try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                    }
-                  }
-                } catch (ee) { /* best-effort refresh */ }
-              safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[originalPath]; return n })
-            }
-          }}>{loading ? <Spinner/> : <><IconCopy/> <span>Hide</span></>}</button>
+            }}
+          >
+            <IconApply/> <span>Apply</span>
+          </button>
+          <button
+            title="Rescan metadata for this item"
+            className="btn-ghost"
+            disabled={loading}
+            onClick={async (ev) => {
+              ev.stopPropagation?.()
+              if (!it) return
+              pushToast && pushToast('Rescan','Refreshing metadata...')
+              await enrichOne(it, true)
+            }}
+          >
+            {loading ? <Spinner/> : <><IconRefresh/> <span>Rescan</span></>}
+          </button>
+          <button
+            title="Hide this item"
+            className="btn-ghost"
+            disabled={loading}
+            onClick={async (ev) => {
+              ev.stopPropagation?.()
+              if (!it || !hideOne) return
+              await hideOne(it.canonicalPath)
+            }}
+          >
+            {loading ? <Spinner/> : <><IconCopy/> <span>Hide</span></>}
+          </button>
         </div>
       </div>
     )
