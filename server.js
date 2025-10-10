@@ -3,6 +3,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const { XMLParser } = require('fast-xml-parser');
 
 // External API integration removed: TMDb-related helpers and https monkey-patch
 // have been disabled to eliminate external HTTP calls. The metaLookup function
@@ -53,6 +54,16 @@ const logsFile = path.join(DATA_DIR, 'logs.txt');
 // Wikipedia episode cache file (persistent)
 const wikiEpisodeCacheFile = path.join(DATA_DIR, 'wiki-episode-cache.json');
 const wikiSearchLogFile = path.join(DATA_DIR, 'wiki-search.log');
+const anidbEpisodeCacheFile = path.join(DATA_DIR, 'anidb-episode-cache.json');
+
+function getTestHook(name) {
+  try {
+    if (module && module.exports && module.exports._test && Object.prototype.hasOwnProperty.call(module.exports._test, name)) {
+      return module.exports._test[name];
+    }
+  } catch (e) {}
+  return undefined;
+}
 
 // ensure we have a persistent session signing key
 const sessionKeyFile = path.join(DATA_DIR, 'session.key');
@@ -109,10 +120,16 @@ try { ensureFile(renderedIndexFile, {}); } catch (e) {}
 try { ensureFile(logsFile, ''); } catch (e) {}
 try { ensureFile(wikiEpisodeCacheFile, {}); } catch (e) {}
 try { ensureFile(wikiSearchLogFile, ''); } catch (e) {}
+try { ensureFile(anidbEpisodeCacheFile, {}); } catch (e) {}
 
 // Wikipedia episode cache (in-memory, persisted to wiki-episode-cache.json)
 let wikiEpisodeCache = {};
 try { wikiEpisodeCache = JSON.parse(fs.readFileSync(wikiEpisodeCacheFile, 'utf8') || '{}') } catch (e) { wikiEpisodeCache = {} }
+
+const ANIDB_EPISODE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+let anidbEpisodeCache = {};
+try { anidbEpisodeCache = JSON.parse(fs.readFileSync(anidbEpisodeCacheFile, 'utf8') || '{}') } catch (e) { anidbEpisodeCache = {} }
+const aniDbXmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '', textNodeName: 'text', trimValues: true });
 
 // Normalize a title for use as a cache key: lowercase, remove punctuation, collapse spaces
 function normalizeForCache(s) {
@@ -292,7 +309,7 @@ async function metaLookup(title, apiKey, opts = {}) {
   if (!title) return Promise.resolve(null)
 
   // Minimal per-host pacing to avoid hammering external APIs
-  const hostPace = { 'graphql.anilist.co': 250, 'kitsu.io': 250, 'api.themoviedb.org': 300 } // ms
+  const hostPace = { 'graphql.anilist.co': 250, 'kitsu.io': 250, 'api.themoviedb.org': 300, 'api.anidb.net': 2200, 'anidb.net': 2200 } // ms
   const lastRequestAt = metaLookup._lastRequestAt = metaLookup._lastRequestAt || {}
   async function pace(host) {
     const now = Date.now()
@@ -337,6 +354,7 @@ async function metaLookup(title, apiKey, opts = {}) {
 
   // Simple HTTP helpers
   const https = require('https')
+  const http = require('http')
   function httpRequest(options, body, timeoutMs = 4000) {
     // allow unit tests to inject a fake httpRequest via module.exports._test._httpRequest
     try {
@@ -344,9 +362,14 @@ async function metaLookup(title, apiKey, opts = {}) {
         return module.exports._test._httpRequest(options, body, timeoutMs)
       }
     } catch (e) { /* ignore and continue with real httpRequest */ }
+    const useHttp = options && ((typeof options.protocol === 'string' && options.protocol.toLowerCase() === 'http:') || options.useHttp)
+    const transport = useHttp ? http : https
+    const requestOptions = Object.assign({}, options)
+    if (requestOptions.protocol) delete requestOptions.protocol
+    if (requestOptions.useHttp) delete requestOptions.useHttp
     return new Promise((resolve, reject) => {
       let timed = false
-      const req = https.request(options, (res) => {
+      const req = transport.request(requestOptions, (res) => {
         let sb = ''
         res.on('data', d => sb += d)
         res.on('end', () => {
@@ -366,7 +389,7 @@ async function metaLookup(title, apiKey, opts = {}) {
     try {
       await pace('graphql.anilist.co')
       // Request relations/season/seasonYear so we can prefer season-specific media when available
-      const query = `query ($search: String) { Page(page:1, perPage:8) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } season seasonYear relations { nodes { id title { romaji english native } } } } } }`;
+  const query = `query ($search: String) { Page(page:1, perPage:8) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } season seasonYear relations { nodes { id title { romaji english native } } } externalLinks { site url } } } }`;
       // If the caller provided a season, try an AniList text search that includes the season (e.g. "Title Season 1")
       const wantedSeason = (opts && typeof opts.season !== 'undefined' && opts.season !== null) ? Number(opts.season) : null
       const tryQueries = []
@@ -638,12 +661,205 @@ async function metaLookup(title, apiKey, opts = {}) {
     } catch (e) { return null }
   }
 
+  function extractAniDbIdFromAniListMedia(media) {
+    try {
+      if (!media) return null
+      const sources = []
+      if (media.externalLinks && Array.isArray(media.externalLinks)) sources.push(media.externalLinks)
+      if (media.raw && media.raw.externalLinks && Array.isArray(media.raw.externalLinks)) sources.push(media.raw.externalLinks)
+      if (media.siteUrl) sources.push([{ site: media.site || '', url: media.siteUrl }])
+      for (const collection of sources) {
+        try {
+          for (const link of collection) {
+            if (!link) continue
+            const siteName = (link.site || '').toString().toLowerCase()
+            const url = (link.url || link.href || '').toString()
+            if (!siteName && !url) continue
+            const isAniDbSite = siteName === 'anidb' || /anidb\.net/i.test(url)
+            if (!isAniDbSite) continue
+            const match = url.match(/anidb\.net\/(?:anime|a)\/(\d+)/i)
+            if (match && match[1]) return parseInt(match[1], 10)
+          }
+        } catch (e) { /* ignore collection errors */ }
+      }
+    } catch (e) {}
+    return null
+  }
+
+  function resolveAniDbBaseCredentials() {
+    let client = null
+    let clientver = null
+    try {
+      if (opts && opts.anidb && opts.anidb.client) client = String(opts.anidb.client).trim()
+      if (opts && opts.anidb && typeof opts.anidb.clientver !== 'undefined' && opts.anidb.clientver !== null) clientver = String(opts.anidb.clientver).trim()
+    } catch (e) {}
+    const username = opts && opts.username ? opts.username : null
+    if (!client && username && users && users[username] && users[username].settings && users[username].settings.anidb_client) {
+      client = String(users[username].settings.anidb_client).trim()
+    }
+    if (!clientver && username && users && users[username] && users[username].settings && typeof users[username].settings.anidb_clientver !== 'undefined' && users[username].settings.anidb_clientver !== null) {
+      clientver = String(users[username].settings.anidb_clientver).trim()
+    }
+    if (!client && serverSettings && serverSettings.anidb_client) client = String(serverSettings.anidb_client).trim()
+    if (!clientver && serverSettings && typeof serverSettings.anidb_clientver !== 'undefined' && serverSettings.anidb_clientver !== null) clientver = String(serverSettings.anidb_clientver).trim()
+    const override = getTestHook('anidbCredentials')
+    if (override) {
+      if (override.client) client = String(override.client).trim()
+      if (typeof override.clientver !== 'undefined' && override.clientver !== null) clientver = String(override.clientver).trim()
+    }
+    return { client: client || null, clientver: clientver || null, protover: 1 }
+  }
+
+  function pickAniDbTitle(nodes, preferred = ['en', 'x-jat', 'ja', 'fr', 'de', 'es']) {
+    if (!Array.isArray(nodes)) nodes = nodes ? [nodes] : []
+    const normalizeNode = (node) => {
+      if (!node) return { lang: null, text: '' }
+      if (typeof node === 'string') return { lang: null, text: node }
+      const lang = node['xml:lang'] || node.lang || node.language || null
+      if (typeof node.text !== 'undefined') return { lang, text: String(node.text) }
+      if (typeof node['#text'] !== 'undefined') return { lang, text: String(node['#text']) }
+      return { lang, text: '' }
+    }
+    const normalized = nodes.map(normalizeNode).filter(n => n && typeof n.text === 'string')
+    for (const langPref of preferred) {
+      const match = normalized.find(n => n.lang && n.lang.toLowerCase() === langPref.toLowerCase() && n.text.trim())
+      if (match) return match.text.trim()
+    }
+    const latinFallback = normalized.find(n => /[A-Za-z]/.test(n.text || ''))
+    if (latinFallback && latinFallback.text) return latinFallback.text.trim()
+    if (normalized.length && normalized[0].text) return normalized[0].text.trim()
+    return null
+  }
+
+  function getAniDbEpno(ep) {
+    if (!ep || !ep.epno) return null
+    if (typeof ep.epno === 'string') return ep.epno.trim()
+    if (typeof ep.epno.text !== 'undefined') return String(ep.epno.text).trim()
+    if (typeof ep.epno['#text'] !== 'undefined') return String(ep.epno['#text']).trim()
+    return null
+  }
+
+  function findAniDbEpisodeMatch(episodes, season, episode) {
+    const pool = Array.isArray(episodes) ? episodes : (episodes ? [episodes] : [])
+    if (!pool.length) return null
+    const targetNum = episode != null && episode !== '' ? Number(episode) : NaN
+    const targetDigits = episode != null ? String(episode).replace(/[^0-9]/g, '') : ''
+    const seasonZero = Number(season) === 0
+    const filteredPool = pool.filter(ep => {
+      try {
+        const type = ep && ep.epno && typeof ep.epno === 'object' && ep.epno.type ? String(ep.epno.type) : null
+        if (seasonZero) return type && type !== '1'
+        return !type || type === '1' || type === 'A'
+      } catch (e) { return !seasonZero }
+    })
+    const searchPool = filteredPool.length ? filteredPool : pool
+    const match = searchPool.find(ep => {
+      const epno = getAniDbEpno(ep)
+      if (!epno) return false
+      const num = Number(epno)
+      if (!Number.isNaN(num) && !Number.isNaN(targetNum) && Math.abs(num - targetNum) < 0.01) return true
+      const digits = epno.replace(/[^0-9]/g, '')
+      if (digits && targetDigits && digits === targetDigits) return true
+      return false
+    })
+    if (match) return match
+    if (!Number.isNaN(targetNum) && searchPool.length) {
+      const idx = Math.max(0, Math.round(targetNum) - 1)
+      if (searchPool[idx]) return searchPool[idx]
+    }
+    return null
+  }
+
+  async function lookupAniDbEpisode(seriesTitle, season, episode, options) {
+    try {
+      if (season == null || episode == null) return null
+      const anidbOpts = options && options.anidb ? options.anidb : null
+      if (!anidbOpts || !anidbOpts.client || !anidbOpts.clientver || !anidbOpts.aid) return null
+      const cacheKey = `aid:${anidbOpts.aid}|s${Number(season)}|e${String(episode)}`
+      const force = !!(options && options.force)
+      if (!force && anidbEpisodeCache && anidbEpisodeCache[cacheKey]) {
+        const cached = anidbEpisodeCache[cacheKey]
+        const age = Date.now() - (cached.ts || 0)
+        if (cached && cached.name && age < ANIDB_EPISODE_CACHE_TTL_MS) {
+          try { appendLog(`META_ANIDB_CACHE_HIT key=${cacheKey}`) } catch (e) {}
+          const { ts, ...rest } = cached
+          return Object.assign({}, rest)
+        }
+      }
+
+      await pace('api.anidb.net')
+      const queryPath = `/httpapi?client=${encodeURIComponent(anidbOpts.client)}&clientver=${encodeURIComponent(anidbOpts.clientver)}&protover=1&request=anime&aid=${encodeURIComponent(anidbOpts.aid)}`
+      const res = await httpRequest({ protocol: 'http:', hostname: 'api.anidb.net', port: 9001, path: queryPath, method: 'GET', headers: { 'Accept': 'application/xml', 'User-Agent': 'renamer/1.0' } }, null, 8000)
+      if (!res || !res.body) return null
+      let parsed = null
+      try { parsed = aniDbXmlParser.parse(res.body) } catch (e) { parsed = null }
+      if (!parsed) return null
+      if (parsed.error) {
+        try { appendLog(`META_ANIDB_ERROR aid=${anidbOpts.aid} err=${String(parsed.error)}`) } catch (e) {}
+        return null
+      }
+      const anime = parsed.anime || null
+      if (!anime) return null
+      const titlesRaw = anime.titles && anime.titles.title ? (Array.isArray(anime.titles.title) ? anime.titles.title : [anime.titles.title]) : []
+      const seriesTitlePreferred = pickAniDbTitle(titlesRaw) || (anidbOpts.seriesTitle || null)
+      const episodesRaw = anime.episodes && anime.episodes.episode ? (Array.isArray(anime.episodes.episode) ? anime.episodes.episode : [anime.episodes.episode]) : []
+      if (!episodesRaw.length) return null
+      const targetEpisode = findAniDbEpisodeMatch(episodesRaw, season, episode)
+      if (!targetEpisode) return null
+      const titlesNode = targetEpisode.title ? (Array.isArray(targetEpisode.title) ? targetEpisode.title : [targetEpisode.title]) : []
+      const chosenTitle = pickAniDbTitle(titlesNode)
+      if (!chosenTitle) return null
+      const epno = getAniDbEpno(targetEpisode)
+      const normalizedTitles = titlesNode.map(t => {
+        if (!t) return null
+        if (typeof t === 'string') return { lang: null, title: t }
+        return { lang: (t['xml:lang'] || t.lang || null), title: t.text != null ? String(t.text) : (t['#text'] != null ? String(t['#text']) : '') }
+      }).filter(t => t && t.title)
+
+      const result = {
+        provider: 'anidb',
+        name: chosenTitle.trim(),
+        raw: {
+          source: 'anidb',
+          aid: anidbOpts.aid,
+          seriesTitle: seriesTitlePreferred || null,
+          epno,
+          titles: normalizedTitles,
+          episodeId: targetEpisode && targetEpisode.id ? targetEpisode.id : null
+        },
+        episode: {
+          name: chosenTitle.trim(),
+          provider: 'anidb',
+          aid: anidbOpts.aid,
+          epno,
+          titles: normalizedTitles
+        }
+      }
+
+      anidbEpisodeCache[cacheKey] = Object.assign({ ts: Date.now() }, result)
+      try { writeJson(anidbEpisodeCacheFile, anidbEpisodeCache) } catch (e) {}
+      module.exports.anidbEpisodeCache = anidbEpisodeCache
+      try { appendLog(`META_ANIDB_CACHE_SAVE key=${cacheKey}`) } catch (e) {}
+      return result
+    } catch (e) {
+      try { appendLog(`META_ANIDB_LOOKUP_ERROR season=${season} episode=${episode} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+      return null
+    }
+  }
+
   // Wikipedia episode title lookup using MediaWiki API (best-effort)
   async function lookupWikipediaEpisode(seriesTitle, season, episode, options) {
     try {
       // reload persistent cache from disk to respect external test clears
       try { wikiEpisodeCache = JSON.parse(fs.readFileSync(wikiEpisodeCacheFile, 'utf8') || '{}') } catch (e) { wikiEpisodeCache = wikiEpisodeCache || {} }
       if (!seriesTitle || season == null || episode == null) return null
+      try {
+        const aniDbHit = await lookupAniDbEpisode(seriesTitle, season, episode, options)
+        if (aniDbHit && aniDbHit.name) {
+          try { appendLog(`META_ANIDB_EPISODE_OK aid=${options && options.anidb ? options.anidb.aid : '<none>'} title=${aniDbHit.name.slice(0,200)}`) } catch (e) {}
+          return aniDbHit
+        }
+      } catch (e) { /* continue with Wikipedia fallback */ }
       const force = options && options.force ? true : false
       // Accept either a string title or an array/object of title variants
       let titleVariants = []
@@ -1079,6 +1295,7 @@ async function metaLookup(title, apiKey, opts = {}) {
       // Attempt Wikipedia episode lookup first (best-effort). If Wikipedia finds a
       // localized episode title, prefer it and skip TMDb/Kitsu episode lookups.
       let ep = null
+      let seriesDisplayName = stripAniListSeasonSuffix(a && a.name ? a.name : v, a && (a.raw || a))
       try {
         // build title variants from AniList media (english/romaji/native + related nodes)
         let titleVariants = []
@@ -1098,8 +1315,12 @@ async function metaLookup(title, apiKey, opts = {}) {
           // fallback to raw name
           if (!titleVariants.length && a && a.name) titleVariants.push(a.name)
         } catch (e) { titleVariants = [(a && a.name) ? a.name : v] }
+    const anidbCredsForMedia = Object.assign({}, baseAniDbCreds)
+    const aniDbId = extractAniDbIdFromAniListMedia((a && a.raw) ? a.raw : a)
+    if (aniDbId) anidbCredsForMedia.aid = aniDbId
+    if (a && a.name) anidbCredsForMedia.seriesTitle = a.name
   // normalize title variants passed to Wikipedia lookup as well
-  const wikiEp = await lookupWikipediaEpisode(titleVariants.map(normalizeSearchQuery), opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey })
+  const wikiEp = await lookupWikipediaEpisode(titleVariants.map(normalizeSearchQuery), opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey, anidb: anidbCredsForMedia })
         // Only accept Wikipedia result if parent series matches intended show
         let intendedSeries = (a && a.name) ? a.name : v
         let wikiParentMatch = false
@@ -1136,6 +1357,9 @@ async function metaLookup(title, apiKey, opts = {}) {
             try {
               const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
               const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+              if (tmEpCheck && tmEpCheck.name) {
+                seriesDisplayName = stripAniListSeasonSuffix(tmEpCheck.name, a && (a.raw || a)) || seriesDisplayName
+              }
               if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
                 const tmNameCheck = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim()
                 const wikiGood = isMeaningfulTitle(wikiEp.name)
@@ -1179,6 +1403,9 @@ async function metaLookup(title, apiKey, opts = {}) {
         const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
         try { appendLog(`META_TMDB_EP_AFTER_ANILIST tmLookup=${tmLookupName} anilist=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
         const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+        if (tmEp && tmEp.name) {
+          seriesDisplayName = stripAniListSeasonSuffix(tmEp.name, a && (a.raw || a)) || seriesDisplayName
+        }
         if (tmEp && tmEp.episode) {
           const tmEpTitle = String(tmEp.episode.name || tmEp.episode.title || '').trim()
           try {
@@ -1212,7 +1439,7 @@ async function metaLookup(title, apiKey, opts = {}) {
       }
 
       // capture result and break out of the loop
-      aniListResult = { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
+      aniListResult = { name: seriesDisplayName, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
       break
     }
     if (aniListResult) return aniListResult
@@ -1230,9 +1457,10 @@ async function metaLookup(title, apiKey, opts = {}) {
       for (let i = 0; i < Math.min(pvars.length, 3); i++) {
         const a = await searchAniList(pvars[i])
         try { appendLog(`META_ANILIST_PARENT_SEARCH q=${pvars[i]} found=${a ? 'yes' : 'no'}`) } catch (e) {}
-        if (!a) continue
+    if (!a) continue
 
-        let ep = null
+    let ep = null
+    let seriesDisplayName = stripAniListSeasonSuffix(a && a.name ? a.name : pvars[i], a && (a.raw || a))
 
         // First: try Wikipedia for an episode title
         try {
@@ -1253,7 +1481,11 @@ async function metaLookup(title, apiKey, opts = {}) {
             }
             if (!titleVariantsP.length) titleVariantsP.push((a && a.name) ? a.name : parentCandidate)
           } catch (e) { titleVariantsP = [(a && a.name) ? a.name : parentCandidate] }
-          const wikiEp = await lookupWikipediaEpisode(titleVariantsP, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey })
+          const anidbCredsForParent = Object.assign({}, baseAniDbCreds)
+          const aniDbParentId = extractAniDbIdFromAniListMedia((a && a.raw) ? a.raw : a)
+          if (aniDbParentId) anidbCredsForParent.aid = aniDbParentId
+          if (a && a.name) anidbCredsForParent.seriesTitle = a.name
+            const wikiEp = await lookupWikipediaEpisode(titleVariantsP, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey, anidb: anidbCredsForParent })
           // Only accept Wikipedia result if parent series matches intended show
           let intendedSeries = (a && a.name) ? a.name : parentCandidate
           let wikiParentMatch = false
@@ -1268,6 +1500,9 @@ async function metaLookup(title, apiKey, opts = {}) {
               try {
                 const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
                 const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+                if (tmEpCheck && tmEpCheck.name) {
+                  seriesDisplayName = stripAniListSeasonSuffix(tmEpCheck.name, a && (a.raw || a)) || seriesDisplayName
+                }
                 if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
                   const tmParentName = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim()
                     const tmHasLatin = /[A-Za-z]/.test(tmParentName)
@@ -1309,6 +1544,9 @@ async function metaLookup(title, apiKey, opts = {}) {
               const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
               try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT tmLookup=${tmLookupName} anilist=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
               const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+              if (tmEp && tmEp.name) {
+                seriesDisplayName = stripAniListSeasonSuffix(tmEp.name, a && (a.raw || a)) || seriesDisplayName
+              }
               if (tmEp && tmEp.episode) {
                 ep = tmEp.episode
                 try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
@@ -1331,7 +1569,7 @@ async function metaLookup(title, apiKey, opts = {}) {
         // TMDb is only attempted once above when an API key is present; Kitsu remains the
         // fallback provider for anime when TMDb did not provide episode information.
 
-        return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
+    return { name: seriesDisplayName, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
       }
     }
 
@@ -1346,7 +1584,7 @@ async function metaLookup(title, apiKey, opts = {}) {
             const wikiTryTitles = []
             if (t.name) wikiTryTitles.push(t.name)
             if (variants[i]) wikiTryTitles.push(variants[i])
-            const wikiEp = await lookupWikipediaEpisode(wikiTryTitles.length ? wikiTryTitles : t.name, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { tmdbKey: apiKey, force: false })
+            const wikiEp = await lookupWikipediaEpisode(wikiTryTitles.length ? wikiTryTitles : t.name, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { tmdbKey: apiKey, force: false, anidb: baseAniDbCreds })
             if (wikiEp && wikiEp.name) {
               try { appendLog(`META_WIKIPEDIA_PREFERRED_AFTER_TMDB q=${t.name || variants[i]} wiki=${wikiEp.name}`) } catch (e) {}
               return { name: t.name, raw: Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' }), episode: { name: wikiEp.name } }
@@ -2808,82 +3046,9 @@ app.post('/api/debug/client-refreshed', requireAuth, (req, res) => {
     if (path) appendLog(`CLIENT_REFRESHED path=${path}`)
     if (scanId) appendLog(`CLIENT_REFRESHED_SCAN id=${scanId}`)
 
-    // Correlate recent HIDE events with this client-refreshed notification.
-    // If a HIDE for the same path or affecting the same scanId occurred recently,
-    // emit a reconciliation/confirmation event so clients polling hide-events see it
-    // and treat the hide as successful (avoids spurious "Failed to hide" toasts).
-    try {
-      const now = Date.now()
-      const WINDOW_MS = 10 * 1000 // 10s window to consider recent hides
-      const reconciled = []
-      if (path && Array.isArray(hideEvents)) {
-        const key = canonicalize(path)
-        // find the most recent hide event for this path within the window
-        for (let i = hideEvents.length - 1; i >= 0; i--) {
-          const ev = hideEvents[i]
-          if (!ev || !ev.ts) continue
-          if (ev.path === key && (now - ev.ts) <= WINDOW_MS) {
-            // push a confirmation event derived from the original
-            try {
-              const confirm = { ts: now, path: key, originalPath: ev.originalPath || path, modifiedScanIds: ev.modifiedScanIds || [], reconciled: true }
-              // avoid appending near-duplicate confirmations (clients may post repeatedly)
-              let shouldAppend = true
-              try {
-                const last = Array.isArray(hideEvents) && hideEvents.length ? hideEvents[hideEvents.length - 1] : null
-                const DUP_MS = 2000
-                if (last && last.reconciled && last.path === confirm.path && Math.abs(now - last.ts) <= DUP_MS) {
-                  shouldAppend = false
-                }
-              } catch (e) { /* non-fatal duplicate check */ }
-              if (shouldAppend) {
-                hideEvents.push(confirm)
-                try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
-                if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
-                appendLog(`HIDE_RECONCILED path=${path} via=clientRefreshed`)
-                reconciled.push(path)
-              } else {
-                appendLog && appendLog(`HIDE_RECONCILED_SKIPPED path=${path} reason=dupe`)
-              }
-            } catch (e) {}
-            break
-          }
-          // stop searching once events are older than the window
-          if ((now - ev.ts) > WINDOW_MS) break
-        }
-      }
-      if (scanId && Array.isArray(hideEvents)) {
-        // find any hide events that listed this scanId as modified within the window
-        const sidStr = String(scanId)
-        for (let i = hideEvents.length - 1; i >= 0; i--) {
-          const ev = hideEvents[i]
-          if (!ev || !ev.ts) continue
-          if ((now - ev.ts) > WINDOW_MS) break
-          try {
-            if (Array.isArray(ev.modifiedScanIds) && ev.modifiedScanIds.map(String).indexOf(sidStr) !== -1) {
-              const confirm = { ts: now, path: ev.path, originalPath: ev.originalPath || null, modifiedScanIds: ev.modifiedScanIds || [], reconciled: true }
-              // avoid appending near-duplicate confirmations for scanId branch
-              let shouldAppend2 = true
-              try {
-                const last2 = Array.isArray(hideEvents) && hideEvents.length ? hideEvents[hideEvents.length - 1] : null
-                const DUP_MS2 = 2000
-                if (last2 && last2.reconciled && last2.path === confirm.path && Math.abs(now - last2.ts) <= DUP_MS2) {
-                  shouldAppend2 = false
-                }
-              } catch (e) { /* non-fatal */ }
-              if (shouldAppend2) {
-                hideEvents.push(confirm)
-                try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
-                if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200)
-                appendLog(`HIDE_RECONCILED scan=${scanId} path=${ev.originalPath || ev.path} via=clientRefreshed`)
-                reconciled.push(ev.path || ev.originalPath || sidStr)
-              } else {
-                appendLog && appendLog(`HIDE_RECONCILED_SKIPPED scan=${scanId} path=${ev.originalPath || ev.path} reason=dupe`)
-              }
-            }
-          } catch (e) {}
-        }
-      }
-    } catch (e) { /* best-effort correlation; don't fail the request */ }
+    // Previously this endpoint attempted to correlate recent hide events and emit
+    // reconciliation logs. That noisy behavior is disabled so the client simply
+    // acknowledges the refresh without generating additional events or log spam.
 
     return res.json({ ok: true })
   } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }) }
@@ -3733,6 +3898,7 @@ module.exports.extractYear = extractYear;
 module.exports.normalizeEnrichEntry = normalizeEnrichEntry;
 // Expose enrichCache for debugging/tests
 module.exports.enrichCache = enrichCache;
+module.exports.anidbEpisodeCache = anidbEpisodeCache;
 // Export internal helpers for test harnesses (non-production)
 module.exports._test = module.exports._test || {};
 module.exports._test.fullScanLibrary = typeof fullScanLibrary !== 'undefined' ? fullScanLibrary : null;
@@ -3745,6 +3911,7 @@ module.exports._test.processParsedItem = typeof processParsedItem !== 'undefined
 // expose internal helpers for unit tests
 module.exports._test.stripAniListSeasonSuffix = typeof stripAniListSeasonSuffix !== 'undefined' ? stripAniListSeasonSuffix : null;
 module.exports._test.lookupWikipediaEpisode = typeof lookupWikipediaEpisode !== 'undefined' ? lookupWikipediaEpisode : null;
+module.exports._test.anidbEpisodeCache = anidbEpisodeCache;
 // expose wikiEpisodeCache for tests so unit tests can clear it
 module.exports.wikiEpisodeCache = wikiEpisodeCache;
 

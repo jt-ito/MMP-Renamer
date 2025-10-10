@@ -254,7 +254,10 @@ export default function App() {
       const MIN_MS = 2000
       if (now - last < MIN_MS) return
       clientRefreshedMapRef.current[key] = now
-      try { await axios.post(API('/debug/client-refreshed'), { scanId, path }).catch(()=>null) } catch (e) {}
+      // No-op: hide actions already update UI optimistically and background sync will
+      // reconcile scans. Retain debounce bookkeeping for compatibility while avoiding
+      // unnecessary network calls that previously generated HIDE_RECONCILED logs.
+      return
     } catch (e) {}
   }
   // dynamic weighting heuristic: store recent durations in localStorage and compute weights

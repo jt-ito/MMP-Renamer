@@ -18,7 +18,7 @@ describe('metaLookup AniList season-augmented search', function() {
         const q = (j && j.variables && j.variables.search) ? j.variables.search : ''
         if (String(q).toLowerCase().indexOf('season 1') !== -1 || String(q).toLowerCase().indexOf('(season 1)') !== -1) {
           // return a season-specific media
-          const resp = { data: { Page: { media: [{ id: 9999, title: { romaji: 'Test Show Season 1', english: null, native: 'Test Show S1' }, seasonYear: 2024 }] } } }
+          const resp = { data: { Page: { media: [{ id: 9999, title: { romaji: 'Test Show Season 1', english: null, native: 'Test Show S1' }, seasonYear: 2024, externalLinks: [] }] } } }
           return Promise.resolve({ statusCode: 200, headers: {}, body: JSON.stringify(resp) })
         }
       } catch (e) {}

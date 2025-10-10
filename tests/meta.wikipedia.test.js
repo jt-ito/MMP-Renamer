@@ -8,6 +8,7 @@ describe('Wikipedia episode lookup (parent-derived AniList flow)', function() {
 
     // Fake httpRequest to simulate AniList and Wikipedia responses
     server._test = server._test || {}
+    server._test.anidbCredentials = null
     server._test._httpRequest = async function(options, body, timeoutMs) {
       const hostname = options && options.hostname
       const path = options && options.path
@@ -23,7 +24,7 @@ describe('Wikipedia episode lookup (parent-derived AniList flow)', function() {
           }
           // If searching for the parent candidate 'Test Show' return one media
           if (/Test Show/i.test(search)) {
-            const resp = { data: { Page: { media: [ { id: 100, title: { romaji: 'Test Show', english: null, native: 'Test Show' }, relations: { nodes: [] } } ] } } }
+            const resp = { data: { Page: { media: [ { id: 100, title: { romaji: 'Test Show', english: null, native: 'Test Show' }, relations: { nodes: [] }, externalLinks: [] } ] } } }
             return { statusCode: 200, headers: {}, body: JSON.stringify(resp) }
           }
         } catch (e) {
@@ -57,6 +58,14 @@ describe('Wikipedia episode lookup (parent-derived AniList flow)', function() {
     }
 
     try {
+      try {
+        if (server.wikiEpisodeCache) for (const k of Object.keys(server.wikiEpisodeCache)) delete server.wikiEpisodeCache[k]
+        const wcFile = require('path').join(__dirname, '..', 'data', 'wiki-episode-cache.json')
+        require('fs').writeFileSync(wcFile, JSON.stringify({}), 'utf8')
+      } catch (e) {}
+      try {
+        if (server.anidbEpisodeCache) for (const k of Object.keys(server.anidbEpisodeCache)) delete server.anidbEpisodeCache[k]
+      } catch (e) {}
       // Call metaLookup with a title that will not be found, but provide parentCandidate so
       // the parent-derived AniList branch runs and should consult Wikipedia.
       const res = await server.metaLookup('NoMatchTitle', null, { parentCandidate: 'Test Show', season: 1, episode: 3 })
@@ -66,6 +75,7 @@ describe('Wikipedia episode lookup (parent-derived AniList flow)', function() {
       // restore original hook
       if (orig) server._test._httpRequest = orig
       else delete server._test._httpRequest
+      delete server._test.anidbCredentials
     }
   })
 })
