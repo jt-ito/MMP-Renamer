@@ -477,6 +477,7 @@ async function metaLookup(title, apiKey, opts = {}) {
   // Simple HTTP helpers
   const https = require('https')
   const http = require('http')
+  const zlib = require('zlib')
   function httpRequest(options, body, timeoutMs = 4000) {
     // allow unit tests to inject a fake httpRequest via module.exports._test._httpRequest
     try {
@@ -489,14 +490,50 @@ async function metaLookup(title, apiKey, opts = {}) {
     const requestOptions = Object.assign({}, options)
     if (requestOptions.protocol) delete requestOptions.protocol
     if (requestOptions.useHttp) delete requestOptions.useHttp
+    // clone headers so we don't mutate caller-provided objects
+    requestOptions.headers = Object.assign({}, requestOptions.headers)
+    if (!requestOptions.headers['Accept-Encoding'] && !requestOptions.headers['accept-encoding']) {
+      requestOptions.headers['Accept-Encoding'] = 'gzip, deflate, br'
+    }
     return new Promise((resolve, reject) => {
       let timed = false
       const req = transport.request(requestOptions, (res) => {
-        let sb = ''
-        res.on('data', d => sb += d)
+        const chunks = []
+        res.on('data', d => {
+          try {
+            if (d == null) return
+            if (Buffer.isBuffer(d)) chunks.push(d)
+            else chunks.push(Buffer.from(d))
+          } catch (e) {}
+        })
         res.on('end', () => {
           if (timed) return
-          resolve({ statusCode: res.statusCode, headers: res.headers, body: sb })
+          try {
+            const rawBuffer = chunks.length ? Buffer.concat(chunks) : Buffer.alloc(0)
+            const encHeader = (() => {
+              try {
+                const h = res && res.headers ? (res.headers['content-encoding'] || res.headers['Content-Encoding'] || '') : ''
+                return String(h || '').toLowerCase()
+              } catch (e) { return '' }
+            })()
+            let decodedBuffer = rawBuffer
+            if (encHeader.includes('gzip')) {
+              try { decodedBuffer = zlib.gunzipSync(rawBuffer) } catch (e) { decodedBuffer = rawBuffer }
+            } else if (encHeader.includes('deflate')) {
+              try { decodedBuffer = zlib.inflateSync(rawBuffer) } catch (e) { decodedBuffer = rawBuffer }
+            } else if (encHeader.includes('br') && typeof zlib.brotliDecompressSync === 'function') {
+              try { decodedBuffer = zlib.brotliDecompressSync(rawBuffer) } catch (e) { decodedBuffer = rawBuffer }
+            }
+            let bodyString = null
+            try {
+              bodyString = decodedBuffer.toString('utf8')
+            } catch (e) {
+              try { bodyString = decodedBuffer.toString() } catch (ee) { bodyString = '' }
+            }
+            resolve({ statusCode: res.statusCode, headers: res.headers, body: bodyString })
+          } catch (e) {
+            resolve({ statusCode: res.statusCode, headers: res.headers, body: '' })
+          }
         })
       })
       req.on('error', (err) => { if (timed) return; reject(err) })
