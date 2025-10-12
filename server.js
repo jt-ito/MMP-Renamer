@@ -786,7 +786,30 @@ async function metaLookup(title, apiKey, opts = {}) {
     try {
       const anidbOpts = options && options.anidb ? options.anidb : options
       if (!anidbOpts || !anidbOpts.client || !anidbOpts.clientver) return null
-      const candidatesRaw = Array.isArray(titleCandidates) ? titleCandidates.slice(0, 6) : [titleCandidates]
+      const seenCanonical = new Set()
+      const generated = []
+      const pushCandidate = (raw) => {
+        if (!raw) return
+        const cannon = normalizeForCache(raw)
+        if (!cannon || seenCanonical.has(cannon)) return
+        seenCanonical.add(cannon)
+        generated.push(raw)
+      }
+      const baseCandidates = Array.isArray(titleCandidates) ? titleCandidates : [titleCandidates]
+      for (const raw of baseCandidates) {
+        const str = String(raw || '').trim()
+        if (!str) continue
+        pushCandidate(str)
+        const normalized = normalizeSearchQuery(str)
+        if (normalized && normalized !== str) pushCandidate(normalized)
+        const stripped = str.replace(/[!,:;\-]+/g, ' ').replace(/\s+/g, ' ').trim()
+        if (stripped && stripped !== str) pushCandidate(stripped)
+        if (str.includes(':')) {
+          const beforeColon = str.split(':')[0]
+          if (beforeColon && beforeColon.trim() !== str) pushCandidate(beforeColon.trim())
+        }
+      }
+      const candidatesRaw = generated.slice(0, 10)
       const seenKeys = new Set()
       for (const rawTitle of candidatesRaw) {
         const title = String(rawTitle || '').trim()
@@ -805,6 +828,7 @@ async function metaLookup(title, apiKey, opts = {}) {
         }
 
         try {
+          try { appendLog(`META_ANIDB_TITLE_LOOKUP_ATTEMPT title=${title}`) } catch (e) {}
           await pace('api.anidb.net')
           const queryPath = `/httpapi?client=${encodeURIComponent(anidbOpts.client)}&clientver=${encodeURIComponent(anidbOpts.clientver)}&protover=1&request=anime&aname=${encodeURIComponent(title)}`
           const res = await httpRequest({ protocol: 'http:', hostname: 'api.anidb.net', port: 9001, path: queryPath, method: 'GET', headers: { 'Accept': 'application/xml', 'User-Agent': 'renamer/1.0' } }, null, 8000)
