@@ -2,6 +2,7 @@ const assert = require('assert')
 const server = require('../server')
 
 describe('AniDB episode lookup', function() {
+  this.timeout(5000)
   it('should fetch episode titles from AniDB when available', async function() {
     const orig = server._test && server._test._httpRequest ? server._test._httpRequest : null
     server._test = server._test || {}
@@ -65,11 +66,107 @@ describe('AniDB episode lookup', function() {
       } catch (e) {}
       try {
         if (server.anidbEpisodeCache) for (const key of Object.keys(server.anidbEpisodeCache)) delete server.anidbEpisodeCache[key]
+        if (server.anidbAnimeCache) for (const key of Object.keys(server.anidbAnimeCache)) delete server.anidbAnimeCache[key]
       } catch (e) {}
 
       const res = await server.metaLookup('AniDB Show', null, { season: 1, episode: 2 })
       assert.ok(res && res.episode && res.episode.name, 'Expected AniDB episode name')
       assert.strictEqual(res.episode.name, 'AniDB Episode Title')
+      assert.strictEqual(res.episode.provider, 'anidb')
+    } finally {
+      if (orig) server._test._httpRequest = orig
+      else delete server._test._httpRequest
+      delete server._test.anidbCredentials
+    }
+  })
+
+  it('should fall back to AniDB title lookup when AniList has no AniDB link', async function() {
+    const orig = server._test && server._test._httpRequest ? server._test._httpRequest : null
+    server._test = server._test || {}
+    server._test.anidbCredentials = { client: 'testclient', clientver: '1' }
+    server._test._httpRequest = async function(options, body) {
+      const host = options && options.hostname ? options.hostname : ''
+      const reqPath = (options && options.path) ? options.path : ''
+      if (host === 'graphql.anilist.co') {
+        const j = body ? JSON.parse(body) : {}
+        const search = j && j.variables && j.variables.search ? String(j.variables.search) : ''
+        if (/Fallback Show/i.test(search)) {
+          const resp = {
+            data: {
+              Page: {
+                media: [
+                  {
+                    id: 201,
+                    title: { romaji: 'Fallback Show', english: 'Fallback Show', native: 'フォールバックショー' },
+                    relations: { nodes: [] },
+                    externalLinks: []
+                  }
+                ]
+              }
+            }
+          }
+          return { statusCode: 200, headers: {}, body: JSON.stringify(resp) }
+        }
+        return { statusCode: 200, headers: {}, body: JSON.stringify({ data: { Page: { media: [] } } }) }
+      }
+      if (host === 'api.anidb.net' && /&aname=/i.test(reqPath)) {
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<anime id="8888">
+  <titles>
+    <title xml:lang="en" type="main">Fallback Show</title>
+  </titles>
+  <episodes>
+    <episode id="1">
+      <epno type="1">1</epno>
+      <title xml:lang="en">Fallback Pilot</title>
+    </episode>
+    <episode id="2">
+      <epno type="1">2</epno>
+      <title xml:lang="en">Fallback Episode Title</title>
+    </episode>
+  </episodes>
+</anime>`
+        return { statusCode: 200, headers: {}, body: xml }
+      }
+      if (host === 'api.anidb.net' && /&aid=8888/.test(reqPath)) {
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<anime id="8888">
+  <titles>
+    <title xml:lang="en" type="main">Fallback Show</title>
+  </titles>
+  <episodes>
+    <episode id="1">
+      <epno type="1">1</epno>
+      <title xml:lang="en">Fallback Pilot</title>
+    </episode>
+    <episode id="2">
+      <epno type="1">2</epno>
+      <title xml:lang="en">Fallback Episode Title</title>
+    </episode>
+  </episodes>
+</anime>`
+        return { statusCode: 200, headers: {}, body: xml }
+      }
+      if (host === 'en.wikipedia.org') {
+        throw new Error('Wikipedia should not be queried when AniDB fallback provides data')
+      }
+      return { statusCode: 200, headers: {}, body: '{}' }
+    }
+
+    try {
+      try {
+        if (server.wikiEpisodeCache) for (const key of Object.keys(server.wikiEpisodeCache)) delete server.wikiEpisodeCache[key]
+        const wcFile = require('path').join(__dirname, '..', 'data', 'wiki-episode-cache.json')
+        require('fs').writeFileSync(wcFile, JSON.stringify({}), 'utf8')
+      } catch (e) {}
+      try {
+        if (server.anidbEpisodeCache) for (const key of Object.keys(server.anidbEpisodeCache)) delete server.anidbEpisodeCache[key]
+        if (server.anidbAnimeCache) for (const key of Object.keys(server.anidbAnimeCache)) delete server.anidbAnimeCache[key]
+      } catch (e) {}
+
+      const res = await server.metaLookup('Fallback Show', null, { season: 1, episode: 2 })
+      assert.ok(res && res.episode && res.episode.name, 'Expected AniDB fallback episode name')
+      assert.strictEqual(res.episode.name, 'Fallback Episode Title')
       assert.strictEqual(res.episode.provider, 'anidb')
     } finally {
       if (orig) server._test._httpRequest = orig

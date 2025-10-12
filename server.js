@@ -55,6 +55,7 @@ const logsFile = path.join(DATA_DIR, 'logs.txt');
 const wikiEpisodeCacheFile = path.join(DATA_DIR, 'wiki-episode-cache.json');
 const wikiSearchLogFile = path.join(DATA_DIR, 'wiki-search.log');
 const anidbEpisodeCacheFile = path.join(DATA_DIR, 'anidb-episode-cache.json');
+const anidbAnimeCacheFile = path.join(DATA_DIR, 'anidb-anime-cache.json');
 
 function getTestHook(name) {
   try {
@@ -121,14 +122,18 @@ try { ensureFile(logsFile, ''); } catch (e) {}
 try { ensureFile(wikiEpisodeCacheFile, {}); } catch (e) {}
 try { ensureFile(wikiSearchLogFile, ''); } catch (e) {}
 try { ensureFile(anidbEpisodeCacheFile, {}); } catch (e) {}
+try { ensureFile(anidbAnimeCacheFile, {}); } catch (e) {}
 
 // Wikipedia episode cache (in-memory, persisted to wiki-episode-cache.json)
 let wikiEpisodeCache = {};
 try { wikiEpisodeCache = JSON.parse(fs.readFileSync(wikiEpisodeCacheFile, 'utf8') || '{}') } catch (e) { wikiEpisodeCache = {} }
 
 const ANIDB_EPISODE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+const ANIDB_ANIME_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 let anidbEpisodeCache = {};
 try { anidbEpisodeCache = JSON.parse(fs.readFileSync(anidbEpisodeCacheFile, 'utf8') || '{}') } catch (e) { anidbEpisodeCache = {} }
+let anidbAnimeCache = {};
+try { anidbAnimeCache = JSON.parse(fs.readFileSync(anidbAnimeCacheFile, 'utf8') || '{}') } catch (e) { anidbAnimeCache = {} }
 const aniDbXmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '', textNodeName: 'text', trimValues: true });
 
 // Normalize a title for use as a cache key: lowercase, remove punctuation, collapse spaces
@@ -389,7 +394,7 @@ async function metaLookup(title, apiKey, opts = {}) {
     try {
       await pace('graphql.anilist.co')
       // Request relations/season/seasonYear so we can prefer season-specific media when available
-  const query = `query ($search: String) { Page(page:1, perPage:8) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } season seasonYear relations { nodes { id title { romaji english native } } } externalLinks { site url } } } }`;
+  const query = `query ($search: String) { Page(page:1, perPage:8) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } season seasonYear relations { nodes { id title { romaji english native } externalLinks { site url } } } externalLinks { site url } } } }`;
       // If the caller provided a season, try an AniList text search that includes the season (e.g. "Title Season 1")
       const wantedSeason = (opts && typeof opts.season !== 'undefined' && opts.season !== null) ? Number(opts.season) : null
       const tryQueries = []
@@ -667,6 +672,13 @@ async function metaLookup(title, apiKey, opts = {}) {
       const sources = []
       if (media.externalLinks && Array.isArray(media.externalLinks)) sources.push(media.externalLinks)
       if (media.raw && media.raw.externalLinks && Array.isArray(media.raw.externalLinks)) sources.push(media.raw.externalLinks)
+      if (media.relations && Array.isArray(media.relations.nodes)) {
+        for (const rel of media.relations.nodes) {
+          try {
+            if (rel && rel.externalLinks && Array.isArray(rel.externalLinks)) sources.push(rel.externalLinks)
+          } catch (e) {}
+        }
+      }
       if (media.siteUrl) sources.push([{ site: media.site || '', url: media.siteUrl }])
       for (const collection of sources) {
         try {
@@ -766,6 +778,61 @@ async function metaLookup(title, apiKey, opts = {}) {
     if (!Number.isNaN(targetNum) && searchPool.length) {
       const idx = Math.max(0, Math.round(targetNum) - 1)
       if (searchPool[idx]) return searchPool[idx]
+    }
+    return null
+  }
+
+  async function resolveAniDbIdByTitle(titleCandidates, options) {
+    try {
+      const anidbOpts = options && options.anidb ? options.anidb : options
+      if (!anidbOpts || !anidbOpts.client || !anidbOpts.clientver) return null
+      const candidatesRaw = Array.isArray(titleCandidates) ? titleCandidates.slice(0, 6) : [titleCandidates]
+      const seenKeys = new Set()
+      for (const rawTitle of candidatesRaw) {
+        const title = String(rawTitle || '').trim()
+        if (!title) continue
+        const cacheKey = `title:${normalizeForCache(title)}`
+        if (seenKeys.has(cacheKey)) continue
+        seenKeys.add(cacheKey)
+
+        const cached = anidbAnimeCache && anidbAnimeCache[cacheKey]
+        if (cached && cached.aid) {
+          const age = Date.now() - (cached.ts || 0)
+          if (!(options && options.force) && age < ANIDB_ANIME_CACHE_TTL_MS) {
+            try { appendLog(`META_ANIDB_TITLE_CACHE_HIT title=${title} aid=${cached.aid}`) } catch (e) {}
+            return { aid: cached.aid, title: cached.title || title }
+          }
+        }
+
+        try {
+          await pace('api.anidb.net')
+          const queryPath = `/httpapi?client=${encodeURIComponent(anidbOpts.client)}&clientver=${encodeURIComponent(anidbOpts.clientver)}&protover=1&request=anime&aname=${encodeURIComponent(title)}`
+          const res = await httpRequest({ protocol: 'http:', hostname: 'api.anidb.net', port: 9001, path: queryPath, method: 'GET', headers: { 'Accept': 'application/xml', 'User-Agent': 'renamer/1.0' } }, null, 8000)
+          if (!res || !res.body) continue
+          let parsed = null
+          try { parsed = aniDbXmlParser.parse(res.body) } catch (e) { parsed = null }
+          if (!parsed || parsed.error) {
+            try { appendLog(`META_ANIDB_TITLE_LOOKUP_FAIL title=${title} reason=${parsed && parsed.error ? String(parsed.error).slice(0,120) : 'parse'}`) } catch (e) {}
+            continue
+          }
+          const animeNode = parsed.anime || null
+          if (!animeNode) continue
+          const rawAid = animeNode.id != null ? animeNode.id : (animeNode.aid != null ? animeNode.aid : null)
+          const numericAid = rawAid != null ? parseInt(rawAid, 10) : null
+          if (!numericAid || Number.isNaN(numericAid)) continue
+          const titlesRaw = animeNode.titles && animeNode.titles.title ? (Array.isArray(animeNode.titles.title) ? animeNode.titles.title : [animeNode.titles.title]) : []
+          const preferredTitle = pickAniDbTitle(titlesRaw) || title
+          anidbAnimeCache[cacheKey] = { aid: numericAid, title: preferredTitle, ts: Date.now() }
+          try { writeJson(anidbAnimeCacheFile, anidbAnimeCache) } catch (e) {}
+          module.exports.anidbAnimeCache = anidbAnimeCache
+          try { appendLog(`META_ANIDB_TITLE_LOOKUP_OK title=${title} aid=${numericAid} preferred=${String(preferredTitle || '').slice(0,120)}`) } catch (e) {}
+          return { aid: numericAid, title: preferredTitle }
+        } catch (err) {
+          try { appendLog(`META_ANIDB_TITLE_LOOKUP_ERR title=${title} err=${err && err.message ? err.message : String(err)}`) } catch (e) {}
+        }
+      }
+    } catch (err) {
+      try { appendLog(`META_ANIDB_TITLE_LOOKUP_THROW err=${err && err.message ? err.message : String(err)}`) } catch (e) {}
     }
     return null
   }
@@ -1325,6 +1392,15 @@ async function metaLookup(title, apiKey, opts = {}) {
     const aniDbId = extractAniDbIdFromAniListMedia((a && a.raw) ? a.raw : a)
     if (aniDbId) anidbCredsForMedia.aid = aniDbId
     if (a && a.name) anidbCredsForMedia.seriesTitle = a.name
+    if (!anidbCredsForMedia.aid) {
+      try {
+        const fallbackAid = await resolveAniDbIdByTitle(titleVariants, { anidb: Object.assign({}, anidbCredsForMedia), force: !!(opts && opts.force) })
+        if (fallbackAid && fallbackAid.aid) {
+          anidbCredsForMedia.aid = fallbackAid.aid
+          if (!anidbCredsForMedia.seriesTitle && fallbackAid.title) anidbCredsForMedia.seriesTitle = fallbackAid.title
+        }
+      } catch (e) { try { appendLog(`META_ANIDB_TITLE_LOOKUP_THROW_PIPE err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+    }
   // normalize title variants passed to Wikipedia lookup as well
   const wikiEp = await lookupWikipediaEpisode(titleVariants.map(normalizeSearchQuery), opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey, anidb: anidbCredsForMedia })
         if (wikiEp && wikiEp.provider === 'anidb') {
@@ -3913,6 +3989,7 @@ module.exports.normalizeEnrichEntry = normalizeEnrichEntry;
 // Expose enrichCache for debugging/tests
 module.exports.enrichCache = enrichCache;
 module.exports.anidbEpisodeCache = anidbEpisodeCache;
+module.exports.anidbAnimeCache = anidbAnimeCache;
 // Export internal helpers for test harnesses (non-production)
 module.exports._test = module.exports._test || {};
 module.exports._test.fullScanLibrary = typeof fullScanLibrary !== 'undefined' ? fullScanLibrary : null;
