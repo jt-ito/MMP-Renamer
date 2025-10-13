@@ -2539,6 +2539,16 @@ app.post('/api/scan', async (req, res) => {
   function incrementalScanLibrary(libPath) { return scanLib.incrementalScanLibrary(libPath, { scanCacheFile, ignoredDirs: IGNORED_DIRS, videoExts: VIDEO_EXTS, canonicalize: canonicalize, uuidv4 }); }
 
   let items = [];
+  let toProcessCandidates = [];
+  let isInitialScan = false;
+  const includeForEnrichment = (candidatePath) => {
+    try {
+      const key = canonicalize(candidatePath);
+      const entry = enrichCache[key] || null;
+      if (entry && (entry.hidden || entry.applied)) return false;
+      return true;
+    } catch (e) { return true; }
+  };
   try {
     // Load prior scan cache to decide between full vs incremental scan
     const priorCache = loadScanCache();
@@ -2546,6 +2556,7 @@ app.post('/api/scan', async (req, res) => {
       // No prior cache - perform full scan to collect candidates
       try {
         items = fullScanLibrary(libPath);
+        isInitialScan = true;
       } catch (err) {
         appendLog(`SCAN_ERROR ${err.message}`);
         return res.status(500).json({ error: err.message });
@@ -2589,39 +2600,33 @@ app.post('/api/scan', async (req, res) => {
       // ensure items includes canonicalPath/id entries for artifact
       // Filter out entries that are marked hidden or already applied in enrichCache so restored scans respect those flags
       items = items.map(it => ({ id: it.id || uuidv4(), canonicalPath: it.canonicalPath, scannedAt: it.scannedAt || Date.now() }))
-        .filter(it => {
-          try {
-            const k = canonicalize(it.canonicalPath);
-            const e = enrichCache[k] || null;
-            if (e && (e.hidden || e.applied)) return false;
-            return true;
-          } catch (e) { return true; }
-        });
+        .filter(it => includeForEnrichment(it.canonicalPath));
+      toProcessCandidates = items.slice();
     } else {
       // incremental scan: optimized walk to detect new/changed files and removals
-      const { toProcess, currentCache, removed } = incrementalScanLibrary(libPath);
+      const incResult = incrementalScanLibrary(libPath);
+      const toProcess = incResult && Array.isArray(incResult.toProcess) ? incResult.toProcess : [];
+      const currentCache = incResult && incResult.currentCache ? incResult.currentCache : { files: {}, dirs: {} };
+      const removed = incResult && Array.isArray(incResult.removed) ? incResult.removed : [];
       // If incremental scan returned currentCache but lacks initialScanAt, preserve prior marker if present
       try {
         const prior = loadScanCache();
         if (prior && prior.initialScanAt && !currentCache.initialScanAt) currentCache.initialScanAt = prior.initialScanAt;
-      } catch (e) {}
-  // remove stale entries
-  for (const r of removed) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
-  // process new/changed items
-  for (const it of toProcess) doProcessParsedItem(it, session);
+    } catch (e) {}
+    // remove stale entries
+    for (const r of removed) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
+    // process new/changed items
+    for (const it of toProcess) doProcessParsedItem(it, session);
       // persist current cache map (currentCache is { files, dirs })
       saveScanCache(currentCache);
       // build items array for artifact from currentCache.files
       // Exclude items that are marked hidden or applied in the enrich cache so restored scans don't re-show them
       items = Object.keys(currentCache.files || {}).map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }))
-        .filter(it => {
-          try {
-            const k = canonicalize(it.canonicalPath);
-            const e = enrichCache[k] || null;
-            if (e && (e.hidden || e.applied)) return false;
-            return true;
-          } catch (e) { return true; }
-        });
+        .filter(it => includeForEnrichment(it.canonicalPath));
+      toProcessCandidates = toProcess.filter(it => {
+        const candidatePath = (it && it.canonicalPath) ? it.canonicalPath : (typeof it === 'string' ? it : null);
+        return candidatePath ? includeForEnrichment(candidatePath) : false;
+      });
     }
   try { if (db) db.setKV('parsedCache', parsedCache); else writeJson(parsedCacheFile, parsedCache); } catch (e) {}
     try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
@@ -2632,7 +2637,7 @@ app.post('/api/scan', async (req, res) => {
   // Determine enrichment candidates: when doing incremental scans we only want to
   // refresh metadata for new/changed items (toProcess). For full scans, use the
   // artifact items as before.
-  const enrichCandidates = (typeof toProcess !== 'undefined' && Array.isArray(toProcess) && toProcess.length) ? toProcess : items;
+  const enrichCandidates = toProcessCandidates.length ? toProcessCandidates : (isInitialScan ? items : []);
   const artifact = { id: scanId, libraryId: libraryId || 'local', totalCount: items.length, items, generatedAt: Date.now() };
   scans[scanId] = artifact;
   // Persist scans and prune older scan artifacts so we keep only the two most recent scans.
@@ -2666,7 +2671,7 @@ app.post('/api/scan', async (req, res) => {
   // Launch background enrichment (first N items) using centralized helper. Keep behavior identical.
   try {
     backgroundStarted = true;
-    void backgroundEnrichFirstN(scanId, enrichCandidates, req.session, libPath, lockKey, 12);
+    if (enrichCandidates.length) void backgroundEnrichFirstN(scanId, enrichCandidates, req.session, libPath, lockKey, 12);
   } catch (e) { appendLog(`BACKGROUND_FIRSTN_LAUNCH_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); activeScans.delete(lockKey); appendLog(`SCAN_LOCK_RELEASED path=${libPath}`); }
   } catch (err) {
     try { appendLog(`SCAN_HANDLER_FAIL scan=${scanId} err=${err && err.message ? err.message : String(err)}`); } catch (e) {}
@@ -2696,9 +2701,18 @@ app.post('/api/scan/incremental', async (req, res) => {
   const scanLib = require('./lib/scan');
   function loadScanCache() { return scanLib.loadScanCache(scanCacheFile); }
   function saveScanCache(obj) { return scanLib.saveScanCache(scanCacheFile, obj); }
+  const includeForEnrichment = (candidatePath) => {
+    try {
+      const key = canonicalize(candidatePath);
+      const entry = enrichCache[key] || null;
+      if (entry && (entry.hidden || entry.applied)) return false;
+      return true;
+    } catch (e) { return true; }
+  };
 
   // if no prior cache exists, fall back to full scan to collect candidates
   let items = [];
+  let toProcessCandidates = [];
   try {
     let prior = loadScanCache();
     // If scan cache is missing but we have a prior saved scan artifact, bootstrap
@@ -2730,21 +2744,27 @@ app.post('/api/scan/incremental', async (req, res) => {
 
     if (!prior || !prior.files || Object.keys(prior.files).length === 0) {
       // fallback to full scan if we couldn't bootstrap prior cache
-      items = scanLib.fullScanLibrary(libPath, { ignoredDirs: new Set(['node_modules','.git','.svn','__pycache__']), videoExts: ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'], canonicalize, uuidv4 });
+      items = scanLib.fullScanLibrary(libPath, { ignoredDirs: new Set(['node_modules','.git','.svn','__pycache__']), videoExts: ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'], canonicalize, uuidv4 })
+        .map(it => ({ id: it.id || uuidv4(), canonicalPath: it.canonicalPath, scannedAt: it.scannedAt || Date.now() }))
+        .filter(it => includeForEnrichment(it.canonicalPath));
+      toProcessCandidates = items.slice();
     } else {
       const inc = scanLib.incrementalScanLibrary(libPath, { scanCacheFile, ignoredDirs: new Set(['node_modules','.git','.svn','__pycache__']), videoExts: ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'], canonicalize, uuidv4 });
       // incremental returns { toProcess, currentCache, removed }
-      const { toProcess, currentCache, removed } = inc || {};
+      const toProcess = inc && Array.isArray(inc.toProcess) ? inc.toProcess : [];
+      const currentCache = inc && inc.currentCache ? inc.currentCache : { files: {}, dirs: {} };
+      const removed = inc && Array.isArray(inc.removed) ? inc.removed : [];
       // remove stale entries
       for (const r of (removed || [])) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
       // do minimal parsing for new/changed entries
-      for (const it of (toProcess || [])) doProcessParsedItem(it, req.session || {});
+      for (const it of toProcess) doProcessParsedItem(it, req.session || {});
       // persist new cache and build items array from currentCache
       if (currentCache) saveScanCache(currentCache);
       // Start with all files known in the current cache
       const basePaths = Object.keys((currentCache && currentCache.files) || {});
       const seen = new Set(basePaths);
-      items = basePaths.map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }));
+      items = basePaths.map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }))
+        .filter(it => includeForEnrichment(it.canonicalPath));
       // Ensure recently-processed new/changed items (toProcess) are included so clients
       // see newly discovered files immediately after incremental scan.
       if (Array.isArray(toProcess) && toProcess.length) {
@@ -2753,11 +2773,15 @@ app.post('/api/scan/incremental', async (req, res) => {
             const pth = (it && it.canonicalPath) ? it.canonicalPath : String(it || '');
             if (!seen.has(pth)) {
               seen.add(pth);
-              items.push({ id: uuidv4(), canonicalPath: pth, scannedAt: Date.now() });
+              if (includeForEnrichment(pth)) items.push({ id: uuidv4(), canonicalPath: pth, scannedAt: Date.now() });
             }
           } catch (e) { /* best-effort */ }
         }
       }
+      toProcessCandidates = toProcess.filter(it => {
+        const candidatePath = (it && it.canonicalPath) ? it.canonicalPath : (typeof it === 'string' ? it : null);
+        return candidatePath ? includeForEnrichment(candidatePath) : false;
+      });
     }
   } catch (e) {
     appendLog(`INCREMENTAL_SCAN_FAIL err=${e && e.message ? e.message : String(e)}`);
@@ -2776,7 +2800,8 @@ app.post('/api/scan/incremental', async (req, res) => {
   const sampleLimit = Number.isInteger(parseInt(req.query && req.query.limit)) ? parseInt(req.query.limit) : 100;
   const sample = items.slice(0, sampleLimit);
   res.json({ scanId, totalCount: items.length, items: sample });
-  try { void backgroundEnrichFirstN(scanId, items, req.session, libPath, `scanPath:${libPath}`, 12); } catch (e) { appendLog(`INCREMENTAL_BACKGROUND_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
+  const enrichCandidates = toProcessCandidates.length ? toProcessCandidates : [];
+  try { if (enrichCandidates.length) void backgroundEnrichFirstN(scanId, enrichCandidates, req.session, libPath, `scanPath:${libPath}`, 12); } catch (e) { appendLog(`INCREMENTAL_BACKGROUND_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
 });
 
 app.get('/api/scan/:scanId', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
