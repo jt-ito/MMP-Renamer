@@ -498,6 +498,30 @@ async function metaLookup(title, apiKey, opts = {}) {
     } catch (e) { pick = items[0] }
   }
   if (!pick) return null
+  // If the chosen AniList pick doesn't actually resemble the original query (low word overlap),
+  // try to find a better candidate among the returned items. This prevents cases where a
+  // loosely-related or popular show (e.g., Attack on Titan) is selected instead of a small
+  // series that more closely matches the query tokens.
+  try {
+    const pickedTitle = (pick && pick.title) ? (pick.title.english || pick.title.romaji || pick.title.native || '') : ''
+    const pickOverlap = wordOverlap(String(pickedTitle), String(q || ''))
+    const MIN_ACCEPTABLE_OVERLAP = 0.35
+    if (pickOverlap < MIN_ACCEPTABLE_OVERLAP) {
+      let best = pickOverlap
+      let better = null
+      for (const it of items) {
+        try {
+          const candTitle = (it && it.title) ? (it.title.english || it.title.romaji || it.title.native || '') : ''
+          const ov = wordOverlap(String(candTitle), String(q || ''))
+          if (ov > best) { best = ov; better = it }
+        } catch (e) {}
+      }
+      if (better) {
+        try { appendLog(`META_ANILIST_PICK_OVERRODE orig=${String(pickedTitle).slice(0,120)} new=${String(better && better.title && (better.title.english||better.title.romaji||better.title.native) || '').slice(0,120)} q=${String(q).slice(0,120)} ov=${best}`) } catch (e) {}
+        pick = better
+      }
+    }
+  } catch (e) { /* best-effort */ }
   // pick English when available, otherwise romaji, otherwise native
   // If the selected pick itself is a season-specific entry (e.g. "3rd Season") but its relations include
   // a parent/series node that does NOT contain a season token, prefer returning that parent node instead
