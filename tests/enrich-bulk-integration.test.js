@@ -18,7 +18,7 @@ describe('externalEnrich TMDb tmLookupName behavior', function() {
       // Provide minimal JSON bodies depending on hostname to guide code paths
       if (hostname === 'graphql.anilist.co') {
         // Respond with a media item that includes seasonYear to simulate AniList indicating a season
-  const resp = { data: { Page: { media: [ { id: 1, title: { english: 'Fake Show 2', romaji: 'Fake Show 2', native: 'Fake Show 2' }, seasonYear: 2020, relations: { nodes: [] }, externalLinks: [] } ] } } }
+        const resp = { data: { Page: { media: [ { id: 1, title: { english: 'Fake Show 2', romaji: 'Fake Show 2', native: 'Fake Show 2' }, seasonYear: 2020, relations: { nodes: [] } } ] } } }
         return { statusCode: 200, headers: {}, body: JSON.stringify(resp) }
       }
       if (hostname === 'api.themoviedb.org') {
@@ -50,7 +50,7 @@ describe('externalEnrich TMDb tmLookupName behavior', function() {
       const path = options && options.path
       recorded.push({ hostname, path, body })
       if (hostname === 'graphql.anilist.co') {
-  const resp = { data: { Page: { media: [ { id: 2, title: { english: 'Kaiju No. 8', romaji: 'Kaiju No. 8', native: 'Kaiju No. 8' }, relations: { nodes: [] }, externalLinks: [] } ] } } }
+        const resp = { data: { Page: { media: [ { id: 2, title: { english: 'Kaiju No. 8', romaji: 'Kaiju No. 8', native: 'Kaiju No. 8' }, relations: { nodes: [] } } ] } } }
         return { statusCode: 200, headers: {}, body: JSON.stringify(resp) }
       }
       if (hostname === 'api.themoviedb.org') {

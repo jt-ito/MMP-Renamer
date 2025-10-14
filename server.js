@@ -3,7 +3,6 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
-const { XMLParser } = require('fast-xml-parser');
 
 // External API integration removed: TMDb-related helpers and https monkey-patch
 // have been disabled to eliminate external HTTP calls. The metaLookup function
@@ -54,17 +53,6 @@ const logsFile = path.join(DATA_DIR, 'logs.txt');
 // Wikipedia episode cache file (persistent)
 const wikiEpisodeCacheFile = path.join(DATA_DIR, 'wiki-episode-cache.json');
 const wikiSearchLogFile = path.join(DATA_DIR, 'wiki-search.log');
-const anidbEpisodeCacheFile = path.join(DATA_DIR, 'anidb-episode-cache.json');
-const anidbAnimeCacheFile = path.join(DATA_DIR, 'anidb-anime-cache.json');
-
-function getTestHook(name) {
-  try {
-    if (module && module.exports && module.exports._test && Object.prototype.hasOwnProperty.call(module.exports._test, name)) {
-      return module.exports._test[name];
-    }
-  } catch (e) {}
-  return undefined;
-}
 
 // ensure we have a persistent session signing key
 const sessionKeyFile = path.join(DATA_DIR, 'session.key');
@@ -121,20 +109,10 @@ try { ensureFile(renderedIndexFile, {}); } catch (e) {}
 try { ensureFile(logsFile, ''); } catch (e) {}
 try { ensureFile(wikiEpisodeCacheFile, {}); } catch (e) {}
 try { ensureFile(wikiSearchLogFile, ''); } catch (e) {}
-try { ensureFile(anidbEpisodeCacheFile, {}); } catch (e) {}
-try { ensureFile(anidbAnimeCacheFile, {}); } catch (e) {}
 
 // Wikipedia episode cache (in-memory, persisted to wiki-episode-cache.json)
 let wikiEpisodeCache = {};
 try { wikiEpisodeCache = JSON.parse(fs.readFileSync(wikiEpisodeCacheFile, 'utf8') || '{}') } catch (e) { wikiEpisodeCache = {} }
-
-const ANIDB_EPISODE_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
-const ANIDB_ANIME_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
-let anidbEpisodeCache = {};
-try { anidbEpisodeCache = JSON.parse(fs.readFileSync(anidbEpisodeCacheFile, 'utf8') || '{}') } catch (e) { anidbEpisodeCache = {} }
-let anidbAnimeCache = {};
-try { anidbAnimeCache = JSON.parse(fs.readFileSync(anidbAnimeCacheFile, 'utf8') || '{}') } catch (e) { anidbAnimeCache = {} }
-const aniDbXmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '', textNodeName: 'text', trimValues: true });
 
 // Normalize a title for use as a cache key: lowercase, remove punctuation, collapse spaces
 function normalizeForCache(s) {
@@ -314,7 +292,7 @@ async function metaLookup(title, apiKey, opts = {}) {
   if (!title) return Promise.resolve(null)
 
   // Minimal per-host pacing to avoid hammering external APIs
-  const hostPace = { 'graphql.anilist.co': 250, 'kitsu.io': 250, 'api.themoviedb.org': 300, 'api.anidb.net': 2200, 'anidb.net': 2200 } // ms
+  const hostPace = { 'graphql.anilist.co': 250, 'kitsu.io': 250, 'api.themoviedb.org': 300 } // ms
   const lastRequestAt = metaLookup._lastRequestAt = metaLookup._lastRequestAt || {}
   async function pace(host) {
     const now = Date.now()
@@ -357,127 +335,8 @@ async function metaLookup(title, apiKey, opts = {}) {
 
   // Use top-level stripAniListSeasonSuffix helper
 
-  function collectAniListTitlePairs(mediaNode) {
-    const pairs = []
-    const seen = new Set()
-    const queue = []
-    const enqueue = (node, ctx) => {
-      if (!node) return
-      queue.push({ node, context: ctx || node })
-    }
-    enqueue(mediaNode, mediaNode && mediaNode.raw ? mediaNode.raw : mediaNode)
-    if (mediaNode && mediaNode.raw && mediaNode.raw !== mediaNode) {
-      enqueue(mediaNode.raw, mediaNode.raw)
-    }
-    const relationCollections = []
-    try {
-      if (mediaNode && mediaNode.relations && Array.isArray(mediaNode.relations.nodes)) relationCollections.push(mediaNode.relations.nodes)
-    } catch (e) {}
-    try {
-      if (mediaNode && mediaNode.raw && mediaNode.raw.relations && Array.isArray(mediaNode.raw.relations.nodes)) relationCollections.push(mediaNode.raw.relations.nodes)
-    } catch (e) {}
-    for (const coll of relationCollections) {
-      for (const rel of coll) {
-        enqueue(rel, rel)
-      }
-    }
-
-    const pushPair = (title, context) => {
-      try {
-        if (!title) return
-        const normalized = String(title).trim()
-        if (!normalized) return
-        const key = normalized + '|' + (context && context.id ? context.id : '')
-        if (seen.has(key)) return
-        seen.add(key)
-        pairs.push({ title: normalized, context: context || null })
-      } catch (e) {}
-    }
-
-    const addFromNode = (node, ctx) => {
-      if (!node) return
-      const titleObj = node.title || {}
-      pushPair(titleObj.english, ctx)
-      pushPair(titleObj.romaji, ctx)
-      pushPair(titleObj.native, ctx)
-      pushPair(titleObj.userPreferred, ctx)
-      pushPair(node.name, ctx)
-      pushPair(node.english, ctx)
-      pushPair(node.romaji, ctx)
-      pushPair(node.native, ctx)
-      pushPair(node.userPreferred, ctx)
-      if (Array.isArray(node.synonyms)) {
-        for (const syn of node.synonyms) pushPair(syn, ctx)
-      }
-    }
-
-    while (queue.length) {
-      const { node, context } = queue.shift()
-      addFromNode(node, context)
-    }
-
-    return pairs
-  }
-
-  function buildAniDbTitleCandidatesFromAniList(mediaNode, fallbackName, baseQuery) {
-    const rawPairs = collectAniListTitlePairs(mediaNode)
-    if ((!rawPairs || !rawPairs.length) && fallbackName) {
-      rawPairs.push({ title: String(fallbackName), context: mediaNode && mediaNode.raw ? mediaNode.raw : mediaNode })
-    }
-    const results = []
-    const seen = new Set()
-    const pushVariant = (value) => {
-      try {
-        if (!value) return
-        let str = String(value)
-        if (str.normalize) {
-          try { str = str.normalize('NFKC') } catch (e) {}
-        }
-        str = str.trim()
-        if (!str) return
-        const key = str.toLowerCase()
-        if (seen.has(key)) return
-        seen.add(key)
-        results.push(str)
-      } catch (e) {}
-    }
-
-    const process = (title, context) => {
-      if (!title) return
-      let base = String(title)
-      try { if (base.normalize) base = base.normalize('NFKC') } catch (e) {}
-      base = base.trim()
-      if (!base) return
-      pushVariant(base)
-      const seasonless = stripAniListSeasonSuffix(base, context)
-      if (seasonless && seasonless !== base) pushVariant(seasonless)
-      const colonIdx = base.search(/[:：]/)
-      if (colonIdx > -1) {
-        const beforeColon = base.slice(0, colonIdx).trim()
-        if (beforeColon && beforeColon.length >= 2) pushVariant(beforeColon)
-      }
-      const punctuationLight = base.replace(/[!！?？]/g, ' ').replace(/[“”"'‘’]/g, '').replace(/[〜～、，・·･]/g, ' ').replace(/\s+/g, ' ').trim()
-      if (punctuationLight && punctuationLight !== base) pushVariant(punctuationLight)
-      const parenReduced = base.replace(/\s*[\(\[（【「『][^\)\]\）】」』]*[\)\]\）】」』]\s*/g, ' ').replace(/\s+/g, ' ').trim()
-      if (parenReduced && parenReduced !== base) pushVariant(parenReduced)
-      const exclamStripped = base.replace(/[!！]+$/g, '').trim()
-      if (exclamStripped && exclamStripped !== base) pushVariant(exclamStripped)
-    }
-
-    for (const pair of rawPairs) {
-      process(pair.title, pair.context)
-    }
-
-    if (fallbackName) process(fallbackName, mediaNode && mediaNode.raw ? mediaNode.raw : mediaNode)
-    if (baseQuery) pushVariant(baseQuery)
-
-    return results.slice(0, 24)
-  }
-
   // Simple HTTP helpers
   const https = require('https')
-  const http = require('http')
-  const zlib = require('zlib')
   function httpRequest(options, body, timeoutMs = 4000) {
     // allow unit tests to inject a fake httpRequest via module.exports._test._httpRequest
     try {
@@ -485,55 +344,14 @@ async function metaLookup(title, apiKey, opts = {}) {
         return module.exports._test._httpRequest(options, body, timeoutMs)
       }
     } catch (e) { /* ignore and continue with real httpRequest */ }
-    const useHttp = options && ((typeof options.protocol === 'string' && options.protocol.toLowerCase() === 'http:') || options.useHttp)
-    const transport = useHttp ? http : https
-    const requestOptions = Object.assign({}, options)
-    if (requestOptions.protocol) delete requestOptions.protocol
-    if (requestOptions.useHttp) delete requestOptions.useHttp
-    // clone headers so we don't mutate caller-provided objects
-    requestOptions.headers = Object.assign({}, requestOptions.headers)
-    if (!requestOptions.headers['Accept-Encoding'] && !requestOptions.headers['accept-encoding']) {
-      requestOptions.headers['Accept-Encoding'] = 'gzip, deflate, br'
-    }
     return new Promise((resolve, reject) => {
       let timed = false
-      const req = transport.request(requestOptions, (res) => {
-        const chunks = []
-        res.on('data', d => {
-          try {
-            if (d == null) return
-            if (Buffer.isBuffer(d)) chunks.push(d)
-            else chunks.push(Buffer.from(d))
-          } catch (e) {}
-        })
+      const req = https.request(options, (res) => {
+        let sb = ''
+        res.on('data', d => sb += d)
         res.on('end', () => {
           if (timed) return
-          try {
-            const rawBuffer = chunks.length ? Buffer.concat(chunks) : Buffer.alloc(0)
-            const encHeader = (() => {
-              try {
-                const h = res && res.headers ? (res.headers['content-encoding'] || res.headers['Content-Encoding'] || '') : ''
-                return String(h || '').toLowerCase()
-              } catch (e) { return '' }
-            })()
-            let decodedBuffer = rawBuffer
-            if (encHeader.includes('gzip')) {
-              try { decodedBuffer = zlib.gunzipSync(rawBuffer) } catch (e) { decodedBuffer = rawBuffer }
-            } else if (encHeader.includes('deflate')) {
-              try { decodedBuffer = zlib.inflateSync(rawBuffer) } catch (e) { decodedBuffer = rawBuffer }
-            } else if (encHeader.includes('br') && typeof zlib.brotliDecompressSync === 'function') {
-              try { decodedBuffer = zlib.brotliDecompressSync(rawBuffer) } catch (e) { decodedBuffer = rawBuffer }
-            }
-            let bodyString = null
-            try {
-              bodyString = decodedBuffer.toString('utf8')
-            } catch (e) {
-              try { bodyString = decodedBuffer.toString() } catch (ee) { bodyString = '' }
-            }
-            resolve({ statusCode: res.statusCode, headers: res.headers, body: bodyString })
-          } catch (e) {
-            resolve({ statusCode: res.statusCode, headers: res.headers, body: '' })
-          }
+          resolve({ statusCode: res.statusCode, headers: res.headers, body: sb })
         })
       })
       req.on('error', (err) => { if (timed) return; reject(err) })
@@ -548,29 +366,7 @@ async function metaLookup(title, apiKey, opts = {}) {
     try {
       await pace('graphql.anilist.co')
       // Request relations/season/seasonYear so we can prefer season-specific media when available
-  const query = `query ($search: String) {
-    Page(page:1, perPage:8) {
-      media(search: $search, type: ANIME) {
-        id
-        title { romaji english native userPreferred }
-        synonyms
-        format
-        episodes
-        startDate { year }
-        season
-        seasonYear
-        relations {
-          nodes {
-            id
-            title { romaji english native userPreferred }
-            synonyms
-            externalLinks { site url }
-          }
-        }
-        externalLinks { site url }
-      }
-    }
-  }`;
+      const query = `query ($search: String) { Page(page:1, perPage:8) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } season seasonYear relations { nodes { id title { romaji english native } } } } } }`;
       // If the caller provided a season, try an AniList text search that includes the season (e.g. "Title Season 1")
       const wantedSeason = (opts && typeof opts.season !== 'undefined' && opts.season !== null) ? Number(opts.season) : null
       const tryQueries = []
@@ -842,325 +638,12 @@ async function metaLookup(title, apiKey, opts = {}) {
     } catch (e) { return null }
   }
 
-  function extractAniDbIdFromAniListMedia(media) {
-    try {
-      if (!media) return null
-      const sources = []
-      if (media.externalLinks && Array.isArray(media.externalLinks)) sources.push(media.externalLinks)
-      if (media.raw && media.raw.externalLinks && Array.isArray(media.raw.externalLinks)) sources.push(media.raw.externalLinks)
-      if (media.relations && Array.isArray(media.relations.nodes)) {
-        for (const rel of media.relations.nodes) {
-          try {
-            if (rel && rel.externalLinks && Array.isArray(rel.externalLinks)) sources.push(rel.externalLinks)
-          } catch (e) {}
-        }
-      }
-      if (media.siteUrl) sources.push([{ site: media.site || '', url: media.siteUrl }])
-      for (const collection of sources) {
-        try {
-          for (const link of collection) {
-            if (!link) continue
-            const siteName = (link.site || '').toString().toLowerCase()
-            const url = (link.url || link.href || '').toString()
-            if (!siteName && !url) continue
-            const isAniDbSite = siteName === 'anidb' || /anidb\.net/i.test(url)
-            if (!isAniDbSite) continue
-            const match = url.match(/anidb\.net\/(?:anime|a)\/(\d+)/i)
-            if (match && match[1]) return parseInt(match[1], 10)
-          }
-        } catch (e) { /* ignore collection errors */ }
-      }
-    } catch (e) {}
-    return null
-  }
-
-  function resolveAniDbBaseCredentials() {
-    let client = null
-    let clientver = null
-    try {
-      if (opts && opts.anidb && opts.anidb.client) client = String(opts.anidb.client).trim()
-      if (opts && opts.anidb && typeof opts.anidb.clientver !== 'undefined' && opts.anidb.clientver !== null) clientver = String(opts.anidb.clientver).trim()
-    } catch (e) {}
-    const username = opts && opts.username ? opts.username : null
-    if (!client && username && users && users[username] && users[username].settings && users[username].settings.anidb_client) {
-      client = String(users[username].settings.anidb_client).trim()
-    }
-    if (!clientver && username && users && users[username] && users[username].settings && typeof users[username].settings.anidb_clientver !== 'undefined' && users[username].settings.anidb_clientver !== null) {
-      clientver = String(users[username].settings.anidb_clientver).trim()
-    }
-    if (!client && serverSettings && serverSettings.anidb_client) client = String(serverSettings.anidb_client).trim()
-    if (!clientver && serverSettings && typeof serverSettings.anidb_clientver !== 'undefined' && serverSettings.anidb_clientver !== null) clientver = String(serverSettings.anidb_clientver).trim()
-    const override = getTestHook('anidbCredentials')
-    if (override) {
-      if (override.client) client = String(override.client).trim()
-      if (typeof override.clientver !== 'undefined' && override.clientver !== null) clientver = String(override.clientver).trim()
-    }
-    return { client: client || null, clientver: clientver || null, protover: 1 }
-  }
-
-  function pickAniDbTitle(nodes, preferred = ['en', 'x-jat', 'ja', 'fr', 'de', 'es']) {
-    if (!Array.isArray(nodes)) nodes = nodes ? [nodes] : []
-    const normalizeNode = (node) => {
-      if (!node) return { lang: null, text: '' }
-      if (typeof node === 'string') return { lang: null, text: node }
-      const lang = node['xml:lang'] || node.lang || node.language || null
-      if (typeof node.text !== 'undefined') return { lang, text: String(node.text) }
-      if (typeof node['#text'] !== 'undefined') return { lang, text: String(node['#text']) }
-      return { lang, text: '' }
-    }
-    const normalized = nodes.map(normalizeNode).filter(n => n && typeof n.text === 'string')
-    for (const langPref of preferred) {
-      const match = normalized.find(n => n.lang && n.lang.toLowerCase() === langPref.toLowerCase() && n.text.trim())
-      if (match) return match.text.trim()
-    }
-    const latinFallback = normalized.find(n => /[A-Za-z]/.test(n.text || ''))
-    if (latinFallback && latinFallback.text) return latinFallback.text.trim()
-    if (normalized.length && normalized[0].text) return normalized[0].text.trim()
-    return null
-  }
-
-  function getAniDbEpno(ep) {
-    if (!ep || !ep.epno) return null
-    if (typeof ep.epno === 'string') return ep.epno.trim()
-    if (typeof ep.epno.text !== 'undefined') return String(ep.epno.text).trim()
-    if (typeof ep.epno['#text'] !== 'undefined') return String(ep.epno['#text']).trim()
-    return null
-  }
-
-  function findAniDbEpisodeMatch(episodes, season, episode) {
-    const pool = Array.isArray(episodes) ? episodes : (episodes ? [episodes] : [])
-    if (!pool.length) return null
-    const targetNum = episode != null && episode !== '' ? Number(episode) : NaN
-    const targetDigits = episode != null ? String(episode).replace(/[^0-9]/g, '') : ''
-    const seasonZero = Number(season) === 0
-    const filteredPool = pool.filter(ep => {
-      try {
-        const type = ep && ep.epno && typeof ep.epno === 'object' && ep.epno.type ? String(ep.epno.type) : null
-        if (seasonZero) return type && type !== '1'
-        return !type || type === '1' || type === 'A'
-      } catch (e) { return !seasonZero }
-    })
-    const searchPool = filteredPool.length ? filteredPool : pool
-    const match = searchPool.find(ep => {
-      const epno = getAniDbEpno(ep)
-      if (!epno) return false
-      const num = Number(epno)
-      if (!Number.isNaN(num) && !Number.isNaN(targetNum) && Math.abs(num - targetNum) < 0.01) return true
-      const digits = epno.replace(/[^0-9]/g, '')
-      if (digits && targetDigits && digits === targetDigits) return true
-      return false
-    })
-    if (match) return match
-    if (!Number.isNaN(targetNum) && searchPool.length) {
-      const idx = Math.max(0, Math.round(targetNum) - 1)
-      if (searchPool[idx]) return searchPool[idx]
-    }
-    return null
-  }
-
-  async function resolveAniDbIdByTitle(titleCandidates, options) {
-    try {
-      const anidbOpts = options && options.anidb ? options.anidb : options
-      if (!anidbOpts || !anidbOpts.client || !anidbOpts.clientver) return null
-      const seenCanonical = new Set()
-      const generated = []
-      const pushCandidate = (raw) => {
-        if (!raw) return
-        let str = String(raw).trim()
-        if (!str) return
-        let cannon = normalizeForCache(str)
-        if (!cannon) cannon = str.toLowerCase()
-        if (seenCanonical.has(cannon)) return
-        seenCanonical.add(cannon)
-        generated.push(str)
-      }
-      const baseCandidates = Array.isArray(titleCandidates) ? titleCandidates : [titleCandidates]
-      for (const raw of baseCandidates) {
-        const str = String(raw || '').trim()
-        if (!str) continue
-        pushCandidate(str)
-        const normalized = normalizeSearchQuery(str)
-        if (normalized && normalized !== str) pushCandidate(normalized)
-        const stripped = str.replace(/[!,:;\-]+/g, ' ').replace(/\s+/g, ' ').trim()
-        if (stripped && stripped !== str) pushCandidate(stripped)
-        if (str.includes(':')) {
-          const beforeColon = str.split(':')[0]
-          if (beforeColon && beforeColon.trim() !== str) pushCandidate(beforeColon.trim())
-        }
-        const altColon = str.replace(/[:：]\s*.+$/, '').trim()
-        if (altColon && altColon !== str) pushCandidate(altColon)
-        const punctLight = str.replace(/[!！?？]/g, ' ').replace(/[〜～、，・·･]/g,' ').replace(/\s+/g,' ').trim()
-        if (punctLight && punctLight !== str) pushCandidate(punctLight)
-        const parenReduced = str.replace(/\s*[\(\[（【「『][^\)\]\）】」』]*[\)\]\）】」』]\s*/g, ' ').replace(/\s+/g,' ').trim()
-        if (parenReduced && parenReduced !== str) pushCandidate(parenReduced)
-        const exless = str.replace(/[!！]+$/g,'').trim()
-        if (exless && exless !== str) pushCandidate(exless)
-      }
-      const candidatesRaw = generated.slice(0, 20)
-      const seenKeys = new Set()
-      for (const rawTitle of candidatesRaw) {
-        const title = String(rawTitle || '').trim()
-        if (!title) continue
-  const cacheKeyNorm = normalizeForCache(title) || title.toLowerCase()
-  const cacheKey = `title:${cacheKeyNorm}`
-        if (seenKeys.has(cacheKey)) continue
-        seenKeys.add(cacheKey)
-
-        const cached = anidbAnimeCache && anidbAnimeCache[cacheKey]
-        if (cached && cached.aid) {
-          const age = Date.now() - (cached.ts || 0)
-          if (!(options && options.force) && age < ANIDB_ANIME_CACHE_TTL_MS) {
-            try { appendLog(`META_ANIDB_TITLE_CACHE_HIT title=${title} aid=${cached.aid}`) } catch (e) {}
-            return { aid: cached.aid, title: cached.title || title }
-          }
-        }
-
-        try {
-          try { appendLog(`META_ANIDB_TITLE_LOOKUP_ATTEMPT title=${title}`) } catch (e) {}
-          await pace('api.anidb.net')
-          const queryPath = `/httpapi?client=${encodeURIComponent(anidbOpts.client)}&clientver=${encodeURIComponent(anidbOpts.clientver)}&protover=1&request=anime&aname=${encodeURIComponent(title)}`
-          const res = await httpRequest({ protocol: 'http:', hostname: 'api.anidb.net', port: 9001, path: queryPath, method: 'GET', headers: { 'Accept': 'application/xml', 'User-Agent': 'renamer/1.0' } }, null, 8000)
-          const status = res && typeof res.statusCode !== 'undefined' ? res.statusCode : '<none>'
-          const bodySnippet = (() => {
-            try {
-              if (!res || !res.body) return '<empty>'
-              return String(res.body).replace(/\s+/g,' ').trim().slice(0, 180)
-            } catch (e) { return '<unavailable>' }
-          })()
-          if (!res || !res.body) {
-            try { appendLog(`META_ANIDB_TITLE_LOOKUP_NO_MATCH title=${title} status=${status} snippet=${bodySnippet}`) } catch (e) {}
-            continue
-          }
-          let parsed = null
-          try { parsed = aniDbXmlParser.parse(res.body) } catch (e) { parsed = null }
-          if (!parsed) {
-            try { appendLog(`META_ANIDB_TITLE_LOOKUP_ERROR title=${title} status=${status} reason=parse snippet=${bodySnippet}`) } catch (e) {}
-            continue
-          }
-          if (parsed.error) {
-            try { appendLog(`META_ANIDB_TITLE_LOOKUP_ERROR title=${title} status=${status} reason=${String(parsed.error).slice(0,120)} snippet=${bodySnippet}`) } catch (e) {}
-            continue
-          }
-          const animeNode = parsed.anime || null
-          if (!animeNode) {
-            try { appendLog(`META_ANIDB_TITLE_LOOKUP_NO_MATCH title=${title} status=${status} snippet=${bodySnippet}`) } catch (e) {}
-            continue
-          }
-          const rawAid = animeNode.id != null ? animeNode.id : (animeNode.aid != null ? animeNode.aid : null)
-          const numericAid = rawAid != null ? parseInt(rawAid, 10) : null
-          if (!numericAid || Number.isNaN(numericAid)) continue
-          const titlesRaw = animeNode.titles && animeNode.titles.title ? (Array.isArray(animeNode.titles.title) ? animeNode.titles.title : [animeNode.titles.title]) : []
-          const preferredTitle = pickAniDbTitle(titlesRaw) || title
-          anidbAnimeCache[cacheKey] = { aid: numericAid, title: preferredTitle, ts: Date.now() }
-          try { writeJson(anidbAnimeCacheFile, anidbAnimeCache) } catch (e) {}
-          module.exports.anidbAnimeCache = anidbAnimeCache
-          try { appendLog(`META_ANIDB_TITLE_LOOKUP_MATCH title=${title} aid=${numericAid} preferred=${String(preferredTitle || '').slice(0,120)} status=${status}`) } catch (e) {}
-          return { aid: numericAid, title: preferredTitle }
-        } catch (err) {
-          try { appendLog(`META_ANIDB_TITLE_LOOKUP_ERROR title=${title} status=${err && err.statusCode ? err.statusCode : '<none>'} err=${err && err.message ? err.message : String(err)}`) } catch (e) {}
-        }
-      }
-    } catch (err) {
-      try { appendLog(`META_ANIDB_TITLE_LOOKUP_THROW err=${err && err.message ? err.message : String(err)}`) } catch (e) {}
-    }
-    return null
-  }
-
-  async function lookupAniDbEpisode(seriesTitle, season, episode, options) {
-    try {
-      if (season == null || episode == null) return null
-      const anidbOpts = options && options.anidb ? options.anidb : null
-      if (!anidbOpts || !anidbOpts.client || !anidbOpts.clientver || !anidbOpts.aid) {
-        try {
-          appendLog(`META_ANIDB_SKIP season=${season} episode=${episode} aid=${anidbOpts && anidbOpts.aid ? anidbOpts.aid : '<none>'} client=${anidbOpts && anidbOpts.client ? 'yes' : 'no'} clientver=${anidbOpts && anidbOpts.clientver ? 'yes' : 'no'}`)
-        } catch (e) {}
-        return null
-      }
-      const cacheKey = `aid:${anidbOpts.aid}|s${Number(season)}|e${String(episode)}`
-      const force = !!(options && options.force)
-      if (!force && anidbEpisodeCache && anidbEpisodeCache[cacheKey]) {
-        const cached = anidbEpisodeCache[cacheKey]
-        const age = Date.now() - (cached.ts || 0)
-        if (cached && cached.name && age < ANIDB_EPISODE_CACHE_TTL_MS) {
-          try { appendLog(`META_ANIDB_CACHE_HIT key=${cacheKey}`) } catch (e) {}
-          const { ts, ...rest } = cached
-          return Object.assign({}, rest)
-        }
-      }
-
-      await pace('api.anidb.net')
-      const queryPath = `/httpapi?client=${encodeURIComponent(anidbOpts.client)}&clientver=${encodeURIComponent(anidbOpts.clientver)}&protover=1&request=anime&aid=${encodeURIComponent(anidbOpts.aid)}`
-      const res = await httpRequest({ protocol: 'http:', hostname: 'api.anidb.net', port: 9001, path: queryPath, method: 'GET', headers: { 'Accept': 'application/xml', 'User-Agent': 'renamer/1.0' } }, null, 8000)
-      if (!res || !res.body) return null
-      let parsed = null
-      try { parsed = aniDbXmlParser.parse(res.body) } catch (e) { parsed = null }
-      if (!parsed) return null
-      if (parsed.error) {
-        try { appendLog(`META_ANIDB_ERROR aid=${anidbOpts.aid} err=${String(parsed.error)}`) } catch (e) {}
-        return null
-      }
-      const anime = parsed.anime || null
-      if (!anime) return null
-      const titlesRaw = anime.titles && anime.titles.title ? (Array.isArray(anime.titles.title) ? anime.titles.title : [anime.titles.title]) : []
-      const seriesTitlePreferred = pickAniDbTitle(titlesRaw) || (anidbOpts.seriesTitle || null)
-      const episodesRaw = anime.episodes && anime.episodes.episode ? (Array.isArray(anime.episodes.episode) ? anime.episodes.episode : [anime.episodes.episode]) : []
-      if (!episodesRaw.length) return null
-      const targetEpisode = findAniDbEpisodeMatch(episodesRaw, season, episode)
-      if (!targetEpisode) return null
-      const titlesNode = targetEpisode.title ? (Array.isArray(targetEpisode.title) ? targetEpisode.title : [targetEpisode.title]) : []
-      const chosenTitle = pickAniDbTitle(titlesNode)
-      if (!chosenTitle) return null
-      const epno = getAniDbEpno(targetEpisode)
-      const normalizedTitles = titlesNode.map(t => {
-        if (!t) return null
-        if (typeof t === 'string') return { lang: null, title: t }
-        return { lang: (t['xml:lang'] || t.lang || null), title: t.text != null ? String(t.text) : (t['#text'] != null ? String(t['#text']) : '') }
-      }).filter(t => t && t.title)
-
-      const result = {
-        provider: 'anidb',
-        name: chosenTitle.trim(),
-        raw: {
-          source: 'anidb',
-          aid: anidbOpts.aid,
-          seriesTitle: seriesTitlePreferred || null,
-          epno,
-          titles: normalizedTitles,
-          episodeId: targetEpisode && targetEpisode.id ? targetEpisode.id : null
-        },
-        episode: {
-          name: chosenTitle.trim(),
-          provider: 'anidb',
-          aid: anidbOpts.aid,
-          epno,
-          titles: normalizedTitles
-        }
-      }
-
-      anidbEpisodeCache[cacheKey] = Object.assign({ ts: Date.now() }, result)
-      try { writeJson(anidbEpisodeCacheFile, anidbEpisodeCache) } catch (e) {}
-      module.exports.anidbEpisodeCache = anidbEpisodeCache
-      try { appendLog(`META_ANIDB_CACHE_SAVE key=${cacheKey}`) } catch (e) {}
-      return result
-    } catch (e) {
-      try { appendLog(`META_ANIDB_LOOKUP_ERROR season=${season} episode=${episode} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
-      return null
-    }
-  }
-
   // Wikipedia episode title lookup using MediaWiki API (best-effort)
   async function lookupWikipediaEpisode(seriesTitle, season, episode, options) {
     try {
       // reload persistent cache from disk to respect external test clears
       try { wikiEpisodeCache = JSON.parse(fs.readFileSync(wikiEpisodeCacheFile, 'utf8') || '{}') } catch (e) { wikiEpisodeCache = wikiEpisodeCache || {} }
       if (!seriesTitle || season == null || episode == null) return null
-      try {
-        const aniDbHit = await lookupAniDbEpisode(seriesTitle, season, episode, options)
-        if (aniDbHit && aniDbHit.name) {
-          try { appendLog(`META_ANIDB_EPISODE_OK aid=${options && options.anidb ? options.anidb.aid : '<none>'} title=${aniDbHit.name.slice(0,200)}`) } catch (e) {}
-          return aniDbHit
-        }
-      } catch (e) { /* continue with Wikipedia fallback */ }
       const force = options && options.force ? true : false
       // Accept either a string title or an array/object of title variants
       let titleVariants = []
@@ -1584,7 +1067,6 @@ async function metaLookup(title, apiKey, opts = {}) {
 
   // Try AniList variants, then parent, then TMDb fallback
   try {
-    const baseAniDbCreds = resolveAniDbBaseCredentials()
     // normalize search title to avoid SxxEyy noise
     const variants = makeVariants(normalizeSearchQuery(title || ''))
     // try filename-derived variants first
@@ -1597,46 +1079,31 @@ async function metaLookup(title, apiKey, opts = {}) {
       // Attempt Wikipedia episode lookup first (best-effort). If Wikipedia finds a
       // localized episode title, prefer it and skip TMDb/Kitsu episode lookups.
       let ep = null
-      let seriesDisplayName = stripAniListSeasonSuffix(a && a.name ? a.name : v, a && (a.raw || a))
       try {
         // build title variants from AniList media (english/romaji/native + related nodes)
         let titleVariants = []
         try {
-          titleVariants = buildAniDbTitleCandidatesFromAniList(a, (a && a.name) ? a.name : null, v)
-        } catch (e) {
-          titleVariants = []
-        }
-        if (!titleVariants || !titleVariants.length) {
-          const fallbackTitle = (a && a.name) ? a.name : v
-          if (fallbackTitle) titleVariants = [fallbackTitle]
-          else titleVariants = []
-        }
-    const anidbCredsForMedia = Object.assign({}, baseAniDbCreds)
-    const aniDbId = extractAniDbIdFromAniListMedia((a && a.raw) ? a.raw : a)
-    if (aniDbId) anidbCredsForMedia.aid = aniDbId
-    if (a && a.name) anidbCredsForMedia.seriesTitle = a.name
-    if (!anidbCredsForMedia.aid) {
-      try {
-        const fallbackAid = await resolveAniDbIdByTitle(titleVariants, { anidb: Object.assign({}, anidbCredsForMedia), force: !!(opts && opts.force) })
-        if (fallbackAid && fallbackAid.aid) {
-          anidbCredsForMedia.aid = fallbackAid.aid
-          if (!anidbCredsForMedia.seriesTitle && fallbackAid.title) anidbCredsForMedia.seriesTitle = fallbackAid.title
-        }
-      } catch (e) { try { appendLog(`META_ANIDB_TITLE_LOOKUP_THROW_PIPE err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
-    }
-  // normalize title variants passed to Wikipedia lookup as well
-  const wikiEp = await lookupWikipediaEpisode(titleVariants.map(normalizeSearchQuery), opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey, anidb: anidbCredsForMedia })
-        if (wikiEp && wikiEp.provider === 'anidb') {
-          if (wikiEp.raw && wikiEp.raw.seriesTitle) {
-            seriesDisplayName = stripAniListSeasonSuffix(wikiEp.raw.seriesTitle, (a && (a.raw || a)) || wikiEp.raw) || seriesDisplayName
+          if (a && a.title) {
+            if (a.title.english) titleVariants.push(a.title.english)
+            if (a.title.romaji) titleVariants.push(a.title.romaji)
+            if (a.title.native) titleVariants.push(a.title.native)
           }
-          ep = wikiEp.episode ? Object.assign({}, wikiEp.episode) : { name: wikiEp.name, provider: 'anidb' }
-          try { appendLog(`META_ANIDB_EP_AFTER_ANILIST aid=${anidbCredsForMedia && anidbCredsForMedia.aid ? anidbCredsForMedia.aid : '<none>'} title=${wikiEp && wikiEp.name ? wikiEp.name.slice(0,200) : '<none>'}`) } catch (e) {}
-        } else if (wikiEp && wikiEp.name) {
-          // Only accept Wikipedia result if parent series matches intended show
-          let intendedSeries = (a && a.name) ? a.name : v
-          let wikiParentMatch = false
-          if (wikiEp && (wikiEp.raw && (wikiEp.raw.page || wikiEp.raw.original))) {
+          if (a && a.relations && Array.isArray(a.relations.nodes)) {
+            for (const rn of a.relations.nodes) {
+              if (rn && rn.title && rn.title.english) titleVariants.push(rn.title.english)
+              if (rn && rn.title && rn.title.romaji) titleVariants.push(rn.title.romaji)
+              if (rn && rn.title && rn.title.native) titleVariants.push(rn.title.native)
+            }
+          }
+          // fallback to raw name
+          if (!titleVariants.length && a && a.name) titleVariants.push(a.name)
+        } catch (e) { titleVariants = [(a && a.name) ? a.name : v] }
+  // normalize title variants passed to Wikipedia lookup as well
+  const wikiEp = await lookupWikipediaEpisode(titleVariants.map(normalizeSearchQuery), opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey })
+        // Only accept Wikipedia result if parent series matches intended show
+        let intendedSeries = (a && a.name) ? a.name : v
+        let wikiParentMatch = false
+          if (wikiEp && (wikiEp.raw && (wikiEp.raw.page || wikiEp.raw.original) || wikiEp.name)) {
             // stronger matching: use word overlap between page title / lead text and the candidate titles
             try {
               const pageTitle = (wikiEp.raw && wikiEp.raw.page) ? String(wikiEp.raw.page) : null
@@ -1663,51 +1130,47 @@ async function metaLookup(title, apiKey, opts = {}) {
               }
             } catch (e) { /* best-effort */ }
           }
-          if (wikiParentMatch) {
-            // If TMDb key present, verify with TMDb and prefer its episode title when available
-            if (apiKey) {
-              try {
-                const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
-                const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-                if (tmEpCheck && tmEpCheck.name) {
-                  seriesDisplayName = stripAniListSeasonSuffix(tmEpCheck.name, a && (a.raw || a)) || seriesDisplayName
-                }
-                if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
-                  const tmNameCheck = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim()
-                  const wikiGood = isMeaningfulTitle(wikiEp.name)
-                  // Prefer titles that contain Latin characters (English-like) when available
-                  const tmHasLatin = /[A-Za-z]/.test(tmNameCheck)
-                  const wikiHasLatin = /[A-Za-z]/.test(String(wikiEp.name || ''))
-                  if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck) && tmHasLatin) {
-                    ep = tmEpCheck.episode
-                    try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI q=${a.name || v} tm=${tmNameCheck}`) } catch (e) {}
-                  } else if (wikiGood && wikiHasLatin) {
-                    ep = { name: wikiEp.name }
-                    try { appendLog(`META_WIKIPEDIA_PREFERRED_OVER_TM_PLACEHOLDER q=${a.name || v} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
-                  } else if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck)) {
-                    // accept TMDb even if non-Latin when no English-like wiki title present
-                    ep = tmEpCheck.episode
-                    try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_NONLATIN q=${a.name || v} tm=${tmNameCheck}`) } catch (e) {}
-                  } else if (wikiGood) {
-                    // fallback to wiki result (may be non-Latin)
-                    ep = { name: wikiEp.name }
-                    try { appendLog(`META_WIKIPEDIA_FALLBACK_NONLATIN q=${a.name || v} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
-                  }
-                } else {
+          if (wikiEp && wikiEp.name && wikiParentMatch) {
+          // If TMDb key present, verify with TMDb and prefer its episode title when available
+          if (apiKey) {
+            try {
+              const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
+              const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+              if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
+                const tmNameCheck = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim()
+                const wikiGood = isMeaningfulTitle(wikiEp.name)
+                // Prefer titles that contain Latin characters (English-like) when available
+                const tmHasLatin = /[A-Za-z]/.test(tmNameCheck)
+                const wikiHasLatin = /[A-Za-z]/.test(String(wikiEp.name || ''))
+                if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck) && tmHasLatin) {
+                  ep = tmEpCheck.episode
+                  try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI q=${a.name || v} tm=${tmNameCheck}`) } catch (e) {}
+                } else if (wikiGood && wikiHasLatin) {
                   ep = { name: wikiEp.name }
-                  try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
+                  try { appendLog(`META_WIKIPEDIA_PREFERRED_OVER_TM_PLACEHOLDER q=${a.name || v} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
+                } else if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck)) {
+                  // accept TMDb even if non-Latin when no English-like wiki title present
+                  ep = tmEpCheck.episode
+                  try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_NONLATIN q=${a.name || v} tm=${tmNameCheck}`) } catch (e) {}
+                } else if (wikiGood) {
+                  // fallback to wiki result (may be non-Latin)
+                  ep = { name: wikiEp.name }
+                  try { appendLog(`META_WIKIPEDIA_FALLBACK_NONLATIN q=${a.name || v} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
                 }
-              } catch (e) {
+              } else {
                 ep = { name: wikiEp.name }
                 try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
               }
-            } else {
+            } catch (e) {
               ep = { name: wikiEp.name }
               try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
             }
           } else {
-            try { appendLog(`META_WIKIPEDIA_PARENT_MISMATCH intended=${intendedSeries} gotPage=${wikiEp.raw && wikiEp.raw.page ? wikiEp.raw.page : '<none>'}`) } catch (e) {}
+            ep = { name: wikiEp.name }
+            try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
           }
+        } else if (wikiEp && wikiEp.name && !wikiParentMatch) {
+          try { appendLog(`META_WIKIPEDIA_PARENT_MISMATCH intended=${intendedSeries} gotPage=${wikiEp.raw && wikiEp.raw.page ? wikiEp.raw.page : '<none>'}`) } catch (e) {}
         }
       } catch (e) {}
 
@@ -1716,9 +1179,6 @@ async function metaLookup(title, apiKey, opts = {}) {
         const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
         try { appendLog(`META_TMDB_EP_AFTER_ANILIST tmLookup=${tmLookupName} anilist=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
         const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-        if (tmEp && tmEp.name) {
-          seriesDisplayName = stripAniListSeasonSuffix(tmEp.name, a && (a.raw || a)) || seriesDisplayName
-        }
         if (tmEp && tmEp.episode) {
           const tmEpTitle = String(tmEp.episode.name || tmEp.episode.title || '').trim()
           try {
@@ -1752,7 +1212,7 @@ async function metaLookup(title, apiKey, opts = {}) {
       }
 
       // capture result and break out of the loop
-      aniListResult = { name: seriesDisplayName, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
+      aniListResult = { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
       break
     }
     if (aniListResult) return aniListResult
@@ -1770,10 +1230,9 @@ async function metaLookup(title, apiKey, opts = {}) {
       for (let i = 0; i < Math.min(pvars.length, 3); i++) {
         const a = await searchAniList(pvars[i])
         try { appendLog(`META_ANILIST_PARENT_SEARCH q=${pvars[i]} found=${a ? 'yes' : 'no'}`) } catch (e) {}
-    if (!a) continue
+        if (!a) continue
 
-    let ep = null
-    let seriesDisplayName = stripAniListSeasonSuffix(a && a.name ? a.name : pvars[i], a && (a.raw || a))
+        let ep = null
 
         // First: try Wikipedia for an episode title
         try {
@@ -1794,11 +1253,7 @@ async function metaLookup(title, apiKey, opts = {}) {
             }
             if (!titleVariantsP.length) titleVariantsP.push((a && a.name) ? a.name : parentCandidate)
           } catch (e) { titleVariantsP = [(a && a.name) ? a.name : parentCandidate] }
-          const anidbCredsForParent = Object.assign({}, baseAniDbCreds)
-          const aniDbParentId = extractAniDbIdFromAniListMedia((a && a.raw) ? a.raw : a)
-          if (aniDbParentId) anidbCredsForParent.aid = aniDbParentId
-          if (a && a.name) anidbCredsForParent.seriesTitle = a.name
-            const wikiEp = await lookupWikipediaEpisode(titleVariantsP, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey, anidb: anidbCredsForParent })
+          const wikiEp = await lookupWikipediaEpisode(titleVariantsP, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey })
           // Only accept Wikipedia result if parent series matches intended show
           let intendedSeries = (a && a.name) ? a.name : parentCandidate
           let wikiParentMatch = false
@@ -1813,9 +1268,6 @@ async function metaLookup(title, apiKey, opts = {}) {
               try {
                 const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
                 const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-                if (tmEpCheck && tmEpCheck.name) {
-                  seriesDisplayName = stripAniListSeasonSuffix(tmEpCheck.name, a && (a.raw || a)) || seriesDisplayName
-                }
                 if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
                   const tmParentName = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim()
                     const tmHasLatin = /[A-Za-z]/.test(tmParentName)
@@ -1857,9 +1309,6 @@ async function metaLookup(title, apiKey, opts = {}) {
               const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
               try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT tmLookup=${tmLookupName} anilist=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
               const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-              if (tmEp && tmEp.name) {
-                seriesDisplayName = stripAniListSeasonSuffix(tmEp.name, a && (a.raw || a)) || seriesDisplayName
-              }
               if (tmEp && tmEp.episode) {
                 ep = tmEp.episode
                 try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
@@ -1882,7 +1331,7 @@ async function metaLookup(title, apiKey, opts = {}) {
         // TMDb is only attempted once above when an API key is present; Kitsu remains the
         // fallback provider for anime when TMDb did not provide episode information.
 
-    return { name: seriesDisplayName, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
+        return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
       }
     }
 
@@ -1897,7 +1346,7 @@ async function metaLookup(title, apiKey, opts = {}) {
             const wikiTryTitles = []
             if (t.name) wikiTryTitles.push(t.name)
             if (variants[i]) wikiTryTitles.push(variants[i])
-            const wikiEp = await lookupWikipediaEpisode(wikiTryTitles.length ? wikiTryTitles : t.name, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { tmdbKey: apiKey, force: false, anidb: baseAniDbCreds })
+            const wikiEp = await lookupWikipediaEpisode(wikiTryTitles.length ? wikiTryTitles : t.name, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { tmdbKey: apiKey, force: false })
             if (wikiEp && wikiEp.name) {
               try { appendLog(`META_WIKIPEDIA_PREFERRED_AFTER_TMDB q=${t.name || variants[i]} wiki=${wikiEp.name}`) } catch (e) {}
               return { name: t.name, raw: Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' }), episode: { name: wikiEp.name } }
@@ -2539,16 +1988,6 @@ app.post('/api/scan', async (req, res) => {
   function incrementalScanLibrary(libPath) { return scanLib.incrementalScanLibrary(libPath, { scanCacheFile, ignoredDirs: IGNORED_DIRS, videoExts: VIDEO_EXTS, canonicalize: canonicalize, uuidv4 }); }
 
   let items = [];
-  let toProcessCandidates = [];
-  let isInitialScan = false;
-  const includeForEnrichment = (candidatePath) => {
-    try {
-      const key = canonicalize(candidatePath);
-      const entry = enrichCache[key] || null;
-      if (entry && (entry.hidden || entry.applied)) return false;
-      return true;
-    } catch (e) { return true; }
-  };
   try {
     // Load prior scan cache to decide between full vs incremental scan
     const priorCache = loadScanCache();
@@ -2556,7 +1995,6 @@ app.post('/api/scan', async (req, res) => {
       // No prior cache - perform full scan to collect candidates
       try {
         items = fullScanLibrary(libPath);
-        isInitialScan = true;
       } catch (err) {
         appendLog(`SCAN_ERROR ${err.message}`);
         return res.status(500).json({ error: err.message });
@@ -2600,33 +2038,39 @@ app.post('/api/scan', async (req, res) => {
       // ensure items includes canonicalPath/id entries for artifact
       // Filter out entries that are marked hidden or already applied in enrichCache so restored scans respect those flags
       items = items.map(it => ({ id: it.id || uuidv4(), canonicalPath: it.canonicalPath, scannedAt: it.scannedAt || Date.now() }))
-        .filter(it => includeForEnrichment(it.canonicalPath));
-      toProcessCandidates = items.slice();
+        .filter(it => {
+          try {
+            const k = canonicalize(it.canonicalPath);
+            const e = enrichCache[k] || null;
+            if (e && (e.hidden || e.applied)) return false;
+            return true;
+          } catch (e) { return true; }
+        });
     } else {
       // incremental scan: optimized walk to detect new/changed files and removals
-      const incResult = incrementalScanLibrary(libPath);
-      const toProcess = incResult && Array.isArray(incResult.toProcess) ? incResult.toProcess : [];
-      const currentCache = incResult && incResult.currentCache ? incResult.currentCache : { files: {}, dirs: {} };
-      const removed = incResult && Array.isArray(incResult.removed) ? incResult.removed : [];
+      const { toProcess, currentCache, removed } = incrementalScanLibrary(libPath);
       // If incremental scan returned currentCache but lacks initialScanAt, preserve prior marker if present
       try {
         const prior = loadScanCache();
         if (prior && prior.initialScanAt && !currentCache.initialScanAt) currentCache.initialScanAt = prior.initialScanAt;
-    } catch (e) {}
-    // remove stale entries
-    for (const r of removed) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
-    // process new/changed items
-    for (const it of toProcess) doProcessParsedItem(it, session);
+      } catch (e) {}
+  // remove stale entries
+  for (const r of removed) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
+  // process new/changed items
+  for (const it of toProcess) doProcessParsedItem(it, session);
       // persist current cache map (currentCache is { files, dirs })
       saveScanCache(currentCache);
       // build items array for artifact from currentCache.files
       // Exclude items that are marked hidden or applied in the enrich cache so restored scans don't re-show them
       items = Object.keys(currentCache.files || {}).map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }))
-        .filter(it => includeForEnrichment(it.canonicalPath));
-      toProcessCandidates = toProcess.filter(it => {
-        const candidatePath = (it && it.canonicalPath) ? it.canonicalPath : (typeof it === 'string' ? it : null);
-        return candidatePath ? includeForEnrichment(candidatePath) : false;
-      });
+        .filter(it => {
+          try {
+            const k = canonicalize(it.canonicalPath);
+            const e = enrichCache[k] || null;
+            if (e && (e.hidden || e.applied)) return false;
+            return true;
+          } catch (e) { return true; }
+        });
     }
   try { if (db) db.setKV('parsedCache', parsedCache); else writeJson(parsedCacheFile, parsedCache); } catch (e) {}
     try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
@@ -2637,7 +2081,7 @@ app.post('/api/scan', async (req, res) => {
   // Determine enrichment candidates: when doing incremental scans we only want to
   // refresh metadata for new/changed items (toProcess). For full scans, use the
   // artifact items as before.
-  const enrichCandidates = toProcessCandidates.length ? toProcessCandidates : (isInitialScan ? items : []);
+  const enrichCandidates = (typeof toProcess !== 'undefined' && Array.isArray(toProcess) && toProcess.length) ? toProcess : items;
   const artifact = { id: scanId, libraryId: libraryId || 'local', totalCount: items.length, items, generatedAt: Date.now() };
   scans[scanId] = artifact;
   // Persist scans and prune older scan artifacts so we keep only the two most recent scans.
@@ -2671,7 +2115,7 @@ app.post('/api/scan', async (req, res) => {
   // Launch background enrichment (first N items) using centralized helper. Keep behavior identical.
   try {
     backgroundStarted = true;
-    if (enrichCandidates.length) void backgroundEnrichFirstN(scanId, enrichCandidates, req.session, libPath, lockKey, 12);
+    void backgroundEnrichFirstN(scanId, enrichCandidates, req.session, libPath, lockKey, 12);
   } catch (e) { appendLog(`BACKGROUND_FIRSTN_LAUNCH_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); activeScans.delete(lockKey); appendLog(`SCAN_LOCK_RELEASED path=${libPath}`); }
   } catch (err) {
     try { appendLog(`SCAN_HANDLER_FAIL scan=${scanId} err=${err && err.message ? err.message : String(err)}`); } catch (e) {}
@@ -2701,18 +2145,9 @@ app.post('/api/scan/incremental', async (req, res) => {
   const scanLib = require('./lib/scan');
   function loadScanCache() { return scanLib.loadScanCache(scanCacheFile); }
   function saveScanCache(obj) { return scanLib.saveScanCache(scanCacheFile, obj); }
-  const includeForEnrichment = (candidatePath) => {
-    try {
-      const key = canonicalize(candidatePath);
-      const entry = enrichCache[key] || null;
-      if (entry && (entry.hidden || entry.applied)) return false;
-      return true;
-    } catch (e) { return true; }
-  };
 
   // if no prior cache exists, fall back to full scan to collect candidates
   let items = [];
-  let toProcessCandidates = [];
   try {
     let prior = loadScanCache();
     // If scan cache is missing but we have a prior saved scan artifact, bootstrap
@@ -2744,27 +2179,21 @@ app.post('/api/scan/incremental', async (req, res) => {
 
     if (!prior || !prior.files || Object.keys(prior.files).length === 0) {
       // fallback to full scan if we couldn't bootstrap prior cache
-      items = scanLib.fullScanLibrary(libPath, { ignoredDirs: new Set(['node_modules','.git','.svn','__pycache__']), videoExts: ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'], canonicalize, uuidv4 })
-        .map(it => ({ id: it.id || uuidv4(), canonicalPath: it.canonicalPath, scannedAt: it.scannedAt || Date.now() }))
-        .filter(it => includeForEnrichment(it.canonicalPath));
-      toProcessCandidates = items.slice();
+      items = scanLib.fullScanLibrary(libPath, { ignoredDirs: new Set(['node_modules','.git','.svn','__pycache__']), videoExts: ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'], canonicalize, uuidv4 });
     } else {
       const inc = scanLib.incrementalScanLibrary(libPath, { scanCacheFile, ignoredDirs: new Set(['node_modules','.git','.svn','__pycache__']), videoExts: ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'], canonicalize, uuidv4 });
       // incremental returns { toProcess, currentCache, removed }
-      const toProcess = inc && Array.isArray(inc.toProcess) ? inc.toProcess : [];
-      const currentCache = inc && inc.currentCache ? inc.currentCache : { files: {}, dirs: {} };
-      const removed = inc && Array.isArray(inc.removed) ? inc.removed : [];
+      const { toProcess, currentCache, removed } = inc || {};
       // remove stale entries
       for (const r of (removed || [])) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
       // do minimal parsing for new/changed entries
-      for (const it of toProcess) doProcessParsedItem(it, req.session || {});
+      for (const it of (toProcess || [])) doProcessParsedItem(it, req.session || {});
       // persist new cache and build items array from currentCache
       if (currentCache) saveScanCache(currentCache);
       // Start with all files known in the current cache
       const basePaths = Object.keys((currentCache && currentCache.files) || {});
       const seen = new Set(basePaths);
-      items = basePaths.map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }))
-        .filter(it => includeForEnrichment(it.canonicalPath));
+      items = basePaths.map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }));
       // Ensure recently-processed new/changed items (toProcess) are included so clients
       // see newly discovered files immediately after incremental scan.
       if (Array.isArray(toProcess) && toProcess.length) {
@@ -2773,15 +2202,11 @@ app.post('/api/scan/incremental', async (req, res) => {
             const pth = (it && it.canonicalPath) ? it.canonicalPath : String(it || '');
             if (!seen.has(pth)) {
               seen.add(pth);
-              if (includeForEnrichment(pth)) items.push({ id: uuidv4(), canonicalPath: pth, scannedAt: Date.now() });
+              items.push({ id: uuidv4(), canonicalPath: pth, scannedAt: Date.now() });
             }
           } catch (e) { /* best-effort */ }
         }
       }
-      toProcessCandidates = toProcess.filter(it => {
-        const candidatePath = (it && it.canonicalPath) ? it.canonicalPath : (typeof it === 'string' ? it : null);
-        return candidatePath ? includeForEnrichment(candidatePath) : false;
-      });
     }
   } catch (e) {
     appendLog(`INCREMENTAL_SCAN_FAIL err=${e && e.message ? e.message : String(e)}`);
@@ -2800,8 +2225,7 @@ app.post('/api/scan/incremental', async (req, res) => {
   const sampleLimit = Number.isInteger(parseInt(req.query && req.query.limit)) ? parseInt(req.query.limit) : 100;
   const sample = items.slice(0, sampleLimit);
   res.json({ scanId, totalCount: items.length, items: sample });
-  const enrichCandidates = toProcessCandidates.length ? toProcessCandidates : [];
-  try { if (enrichCandidates.length) void backgroundEnrichFirstN(scanId, enrichCandidates, req.session, libPath, `scanPath:${libPath}`, 12); } catch (e) { appendLog(`INCREMENTAL_BACKGROUND_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
+  try { void backgroundEnrichFirstN(scanId, items, req.session, libPath, `scanPath:${libPath}`, 12); } catch (e) { appendLog(`INCREMENTAL_BACKGROUND_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
 });
 
 app.get('/api/scan/:scanId', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
@@ -3003,7 +2427,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_client', 'anidb_clientver', 'scan_output_path', 'rename_template', 'default_meta_provider'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_output_path', 'rename_template', 'default_meta_provider'];
       for (const k of allowed) if (body[k] !== undefined) serverSettings[k] = body[k];
       writeJson(settingsFile, serverSettings);
       appendLog(`SETTINGS_SAVED_GLOBAL by=${username} keys=${Object.keys(body).join(',')}`);
@@ -3014,7 +2438,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_client', 'anidb_clientver', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider'];
     for (const k of allowed) { if (body[k] !== undefined) users[username].settings[k] = body[k]; }
     writeJson(usersFile, users);
     appendLog(`SETTINGS_SAVED_USER user=${username} keys=${Object.keys(body).join(',')}`);
@@ -4236,8 +3660,6 @@ module.exports.extractYear = extractYear;
 module.exports.normalizeEnrichEntry = normalizeEnrichEntry;
 // Expose enrichCache for debugging/tests
 module.exports.enrichCache = enrichCache;
-module.exports.anidbEpisodeCache = anidbEpisodeCache;
-module.exports.anidbAnimeCache = anidbAnimeCache;
 // Export internal helpers for test harnesses (non-production)
 module.exports._test = module.exports._test || {};
 module.exports._test.fullScanLibrary = typeof fullScanLibrary !== 'undefined' ? fullScanLibrary : null;
@@ -4250,7 +3672,6 @@ module.exports._test.processParsedItem = typeof processParsedItem !== 'undefined
 // expose internal helpers for unit tests
 module.exports._test.stripAniListSeasonSuffix = typeof stripAniListSeasonSuffix !== 'undefined' ? stripAniListSeasonSuffix : null;
 module.exports._test.lookupWikipediaEpisode = typeof lookupWikipediaEpisode !== 'undefined' ? lookupWikipediaEpisode : null;
-module.exports._test.anidbEpisodeCache = anidbEpisodeCache;
 // expose wikiEpisodeCache for tests so unit tests can clear it
 module.exports.wikiEpisodeCache = wikiEpisodeCache;
 

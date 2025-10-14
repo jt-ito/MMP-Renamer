@@ -17,12 +17,12 @@ describe('metaLookup S01E01v2 mis-selection regression', function() {
         const q = j && j.variables && j.variables.search ? String(j.variables.search).toLowerCase() : ''
         // Simulate search that returns 3rd season when season text present
         if (q.indexOf('season 3') !== -1 || q.indexOf('(season 3)') !== -1 || q.indexOf('3rd season') !== -1) {
-          const resp = { data: { Page: { media: [{ id: 3003, title: { romaji: 'Example Show 3rd Season', english: null, native: 'Example S3' } , seasonYear: 2022, externalLinks: [] }] } } }
+          const resp = { data: { Page: { media: [{ id: 3003, title: { romaji: 'Example Show 3rd Season', english: null, native: 'Example S3' } , seasonYear: 2022 }] } } }
           return Promise.resolve({ statusCode: 200, headers: {}, body: JSON.stringify(resp) })
         }
         // Simulate plain parent search returning a parent series entry (no season tokens)
         if (q.indexOf('example show') !== -1) {
-          const resp = { data: { Page: { media: [{ id: 1001, title: { romaji: 'Example Show', english: null, native: 'Example' } , seasonYear: 2024, externalLinks: [] }] } } }
+          const resp = { data: { Page: { media: [{ id: 1001, title: { romaji: 'Example Show', english: null, native: 'Example' } , seasonYear: 2024 }] } } }
           return Promise.resolve({ statusCode: 200, headers: {}, body: JSON.stringify(resp) })
         }
       } catch (e) {}

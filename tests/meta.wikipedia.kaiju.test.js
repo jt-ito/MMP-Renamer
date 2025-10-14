@@ -19,7 +19,7 @@ describe('Wikipedia episode extractor - Kaiju fixture', function() {
       // AniList GraphQL POST
       if (host.includes('anilist.co')) {
         // return a minimal media result with titles
-        const resp = { data: { Page: { media: [ { id: 1, title: { english: 'Kaiju No. 8', romaji: 'Kaiju No. 8', native: '怪獣8号' }, relations: { nodes: [] }, externalLinks: [] } ] } } };
+        const resp = { data: { Page: { media: [ { id: 1, title: { english: 'Kaiju No. 8', romaji: 'Kaiju No. 8', native: '怪獣8号' }, relations: { nodes: [] } } ] } } };
         return { statusCode: 200, body: JSON.stringify(resp) };
       }
       // Wikipedia search

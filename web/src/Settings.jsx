@@ -36,11 +36,11 @@ function renderPreviewSample(template) {
 export default function Settings({ pushToast }){
   // keys: tmdb for TMDb (keep backward compatibility with tvdb_api_key)
   const [tmdbKey, setTmdbKey] = useState('')
-  const [anidbClient, setAnidbClient] = useState('')
-  const [anidbClientVer, setAnidbClientVer] = useState('')
+  const [anilistKey, setAnilistKey] = useState('')
   const [defaultProvider, setDefaultProvider] = useState('tmdb')
   const [renameTemplate, setRenameTemplate] = useState('{title} - {epLabel} - {episodeTitle}')
   const [showTmdbKey, setShowTmdbKey] = useState(false)
+  const [showAnilistKey, setShowAnilistKey] = useState(false)
   const [inputPath, setInputPath] = useState('')
   const [outputPath, setOutputPath] = useState('')
   const [dirty, setDirty] = useState(false)
@@ -52,8 +52,7 @@ export default function Settings({ pushToast }){
         const user = (r.data && r.data.userSettings) ? r.data.userSettings : null
         if (user) {
           setTmdbKey(user.tmdb_api_key || user.tvdb_api_key || '')
-          setAnidbClient(user.anidb_client || '')
-          setAnidbClientVer((user.anidb_clientver ?? '').toString())
+          setAnilistKey(user.anilist_api_key || '')
           setDefaultProvider(user.default_meta_provider || 'tmdb')
           setRenameTemplate(user.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}')
           setInputPath(user.scan_input_path || '')
@@ -63,22 +62,19 @@ export default function Settings({ pushToast }){
       } catch (e) {}
       try {
   const v = localStorage.getItem('tmdb_api_key') || localStorage.getItem('tvdb_api_key') || ''
-  const c = localStorage.getItem('anidb_client') || ''
-  const cv = localStorage.getItem('anidb_clientver') || ''
+  const a = localStorage.getItem('anilist_api_key') || ''
         const inp = localStorage.getItem('scan_input_path') || ''
         const out = localStorage.getItem('scan_output_path') || ''
         const dp = localStorage.getItem('default_meta_provider') || 'tmdb'
-  setTmdbKey(v); setAnidbClient(c); setAnidbClientVer(cv); setInputPath(inp); setOutputPath(out); setDefaultProvider(dp)
+  setTmdbKey(v); setAnilistKey(a); setInputPath(inp); setOutputPath(out); setDefaultProvider(dp)
       } catch (e) {}
     }).catch(()=>{
       try {
         const v = localStorage.getItem('tmdb_api_key') || localStorage.getItem('tvdb_api_key') || ''
-        const c = localStorage.getItem('anidb_client') || ''
-        const cv = localStorage.getItem('anidb_clientver') || ''
         const inp = localStorage.getItem('scan_input_path') || ''
         const out = localStorage.getItem('scan_output_path') || ''
         const dp = localStorage.getItem('default_meta_provider') || 'tmdb'
-        setTmdbKey(v); setAnidbClient(c); setAnidbClientVer(cv); setInputPath(inp); setOutputPath(out); setDefaultProvider(dp)
+        setTmdbKey(v); setInputPath(inp); setOutputPath(out); setDefaultProvider(dp)
       } catch (e) {}
     })
   }, [])
@@ -103,15 +99,14 @@ export default function Settings({ pushToast }){
     try {
       // save locally as fallback (tmdb)
       try { localStorage.setItem('tmdb_api_key', tmdbKey); localStorage.setItem('tvdb_api_key', tmdbKey) } catch (e) {}
-  try { localStorage.setItem('anidb_client', anidbClient) } catch (e) {}
-  try { localStorage.setItem('anidb_clientver', anidbClientVer) } catch (e) {}
+  try { localStorage.setItem('anilist_api_key', anilistKey) } catch (e) {}
       try { localStorage.setItem('default_meta_provider', defaultProvider) } catch (e) {}
       localStorage.setItem('rename_template', renameTemplate)
       localStorage.setItem('scan_input_path', inputPath)
       localStorage.setItem('scan_output_path', outputPath)
       // persist server-side as per-user settings by default
-  axios.post(API('/settings'), { tmdb_api_key: tmdbKey, tvdb_api_key: tmdbKey, anilist_api_key: undefined, anidb_client: anidbClient, anidb_clientver: anidbClientVer, default_meta_provider: defaultProvider, scan_input_path: inputPath, scan_output_path: outputPath, rename_template: renameTemplate })
-        .then(() => { setDirty(false); pushToast && pushToast('Settings', 'Saved') })
+  axios.post(API('/settings'), { tmdb_api_key: tmdbKey, tvdb_api_key: tmdbKey, anilist_api_key: anilistKey, default_meta_provider: defaultProvider, scan_input_path: inputPath, scan_output_path: outputPath, rename_template: renameTemplate })
+        .then(() => pushToast && pushToast('Settings', 'Saved'))
         .catch(() => pushToast && pushToast('Settings', 'Saved locally; failed to save server-side'))
     } catch (e) { pushToast && pushToast('Error', 'Failed to save') }
   }
@@ -119,20 +114,17 @@ export default function Settings({ pushToast }){
   function clearAll(){
     try {
       setTmdbKey('')
-  setAnidbClient('')
-  setAnidbClientVer('')
+  setAnilistKey('')
       setDefaultProvider('tmdb')
       setInputPath('')
       setOutputPath('')
       localStorage.removeItem('tmdb_api_key')
       localStorage.removeItem('tvdb_api_key')
-  localStorage.removeItem('anidb_client')
-  localStorage.removeItem('anidb_clientver')
+  localStorage.removeItem('anilist_api_key')
       localStorage.removeItem('default_meta_provider')
       localStorage.removeItem('scan_input_path')
       localStorage.removeItem('scan_output_path')
-  axios.post(API('/settings'), { tmdb_api_key: '', anidb_client: '', anidb_clientver: '', default_meta_provider: 'tmdb', tvdb_api_key: '', scan_input_path: '', scan_output_path: '' }).catch(()=>{})
-      setDirty(false)
+  axios.post(API('/settings'), { tmdb_api_key: '', anilist_api_key: '', default_meta_provider: 'tmdb', tvdb_api_key: '', scan_input_path: '', scan_output_path: '' }).catch(()=>{})
       pushToast && pushToast('Settings', 'Cleared')
     } catch (e) { pushToast && pushToast('Error', 'Failed to clear') }
   }
@@ -168,29 +160,18 @@ export default function Settings({ pushToast }){
         </div>
 
         <div style={{marginTop:12}}>
-          <label style={{fontSize:13, color:'var(--muted)'}}>AniDB Client Name</label>
+          <label style={{fontSize:13, color:'var(--muted)'}}>AniList API Key</label>
           <div style={{display:'flex', gap:8, marginTop:6}}>
             <input
-              type='text'
-              value={anidbClient}
-              onChange={e=>{ setAnidbClient(e.target.value); setDirty(true) }}
-              placeholder="Registered AniDB client identifier"
+              type={showAnilistKey ? 'text' : 'password'}
+              value={anilistKey}
+              onChange={e=>{ setAnilistKey(e.target.value); setDirty(true) }}
+              placeholder="Enter AniList API key (optional)"
               style={{flex:1, padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
             />
+            <button className="btn-ghost" onClick={() => setShowAnilistKey(s => !s)}>{showAnilistKey ? 'Hide' : 'Show'}</button>
           </div>
-          <div style={{marginTop:12}}>
-            <label style={{fontSize:13, color:'var(--muted)'}}>AniDB Client Version</label>
-            <input
-              type='text'
-              value={anidbClientVer}
-              onChange={e=>{ setAnidbClientVer(e.target.value); setDirty(true) }}
-              placeholder="Numeric version registered with AniDB"
-              style={{width:'100%', marginTop:6, padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
-            />
-          </div>
-          <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>
-            Register a client name and version with AniDB's <a href="https://anidb.net/perl-bin/animedb.pl?show=api" target="_blank" rel="noreferrer" style={{color:'var(--accent)'}}>HTTP API</a> to receive episode metadata directly. Only the client name and version are needed; protover is handled automatically.
-          </div>
+          <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>AniList is used to find anime series titles (preferred). The saved key is obfuscated by default; toggle <strong>Show</strong> to reveal it temporarily.</div>
         </div>
 
   {/* Input path moved below the template section per UX request */}

@@ -5,14 +5,14 @@ OVERVIEW
 This document describes the entire MMP-Renamer application using the project's internal terms and concepts ("MMP terms"). It is intended for developers, integrators, and power users who need a single source-of-truth mapping of features, data flows, configuration, diagnostics, and operational behavior.
 
 CORE PURPOSE
-- MMP-Renamer scans a filesystem input path for video files, parses filenames to extract canonical tokens (title, parsedName, season, episode, episodeTitle, episodeRange), performs AniList-powered series search, enriches episode data from TMDb, and produces a "renamed" or "rendered" target name using a configurable template. Renames are executed as hardlinks in the configured output path.
+- MMP-Renamer scans a filesystem input path for video files, parses filenames to extract canonical tokens (title, parsedName, season, episode, episodeTitle, episodeRange), looks up authoritative metadata from external providers (primary: TMDb, fallback: Kitsu for anime), and produces a "renamed" or "rendered" target name using a configurable template. Renames are executed as hardlinks in the configured output path.
 
 KEY MMP TERMS → CODE SYMBOLS
 - parsed / parsedName / parseFilename: the filename parser implemented in `lib/filename-parser.js`. Outputs: title, parsedName, season, episode, episodeTitle, episodeRange, year.
 - guess / formattedParsedName: internal "best guess" metadata built from the filename parse and provider results during `externalEnrich`.
 - provider / provider block: the external metadata result returned from `metaLookup` and stored under an enrich cache provider entry.
-- AniList: primary series discovery provider hit first to normalize titles before querying TMDb.
-- TMDb: primary metadata provider; looked up by `metaLookup()` after AniList search and via TMDb HTTP API (api.themoviedb.org). Uses TV season/episode endpoints, including season-0 for specials.
+- TMDb: primary metadata provider; looked up by `metaLookup()` and via TMDb HTTP API (api.themoviedb.org). Uses TV/movie search, tv season/episode endpoints, season-0 for specials.
+- Kitsu: anime fallback provider (kitsu.io). Only used if TMDb fails or when preferred for anime.
 - parentCandidate / parentPath: a derived human-friendly series title from the parent folder (never used to derive season/episode numbers, only as series title fallback). Derived from `opts.parentCandidate` or parsing the parent folder basename.
 - specials / season-0: fractional/decimal episodes are classified as specials; special lookup uses season 0 lists and name-similarity against parsedEpisodeTitle.
 - normSeason / normEpisode: normalized season/episode derived from filename parsing and used as the authoritative season/episode values everywhere.
@@ -35,8 +35,9 @@ ARCHITECTURE & DATA FLOW
    - `externalEnrich(canonicalPath, providedKey, opts)` is the orchestrator.
    - It computes `seriesName`, `episodeTitle`, `normSeason`, `normEpisode` (filename-first, canonical). These are authoritative for S/E.
    - Builds `metaOpts` and calls `metaLookup(title, apiKey, metaOpts)`.
-      - `metaLookup` generates normalized title variants, queries AniList for canonical matches, and then performs TMDb searches (tv search when season/episode provided). Episode-level endpoints are fetched when season/episode values are available.
-      - If TMDb fails on filename-derived variants, `externalEnrich` attempts a parent-based lookup: `metaLookup(parentCandidate, tmdbKey, parentMetaOpts)` where `parentMetaOpts` explicitly includes `season` and `episode` set from filename (never from parent).
+   - `metaLookup` generates variants for title search, performs TMDb searches first (multi or tv search depending on opts.season/episode), then attempts episode-level endpoints when season/episode provided.
+   - If TMDb fails on filename-derived variants, `externalEnrich` will attempt a parent-based lookup: `metaLookup(parentCandidate, tmdbKey, parentMetaOpts)` where `parentMetaOpts` explicitly includes `season` and `episode` set from filename (never from parent).
+   - If TMDb fails entirely, Kitsu is tried as a fallback (for anime). Kitsu episode endpoints are attempted when `opts.episode` is present.
 
 4. Provider matching heuristics
    - Variant generation: cleans separators, strips bracketed suffixes, shortens to word prefixes, lowercase variants, appends year when available.
@@ -69,6 +70,7 @@ DIAGNOSTICS & LOGGING (MMP terms)
   - `META_PARENT_INVOCATION attempting tryParentTmdb parentCandidate=... parentPath=...`
   - `META_PARENT_INVOCATION result=found|none`
   - `META_PARENT_FALLBACK` invoking metaLookup parentCandidate=... optsSeason=... optsEpisode=...
+  - `META_KITSU_ATTEMPT` q=... results=N
 - These markers are used to trace exact lookup flows and determine where fallback logic was engaged.
 
 WEB UI & ENDPOINTS
@@ -126,8 +128,8 @@ CHANGE LOG SUMMARY (important recent edits)
 
 UNANSWERED / FUTURE IMPROVEMENTS
 - Expand variant generation with transliteration/canonical English titles when parent lookup still fails for anime or obscure titles.
-- Add a retry/backoff for transient AniList/TMDb errors and better error visibility in `meta/status` endpoint.
-- Add unit tests that simulate AniList/TMDb responses so CI can validate parent-fallback and specials behavior.
+- Add a retry/backoff for transient TMDb/Kitsu errors and better error visibility in `meta/status` endpoint.
+- Add unit tests that simulate TMDb/Kitsu responses so CI can validate parent-fallback and specials behavior.
 
 CONTACT & MAINTAINER
 - Repo: MMP-Renamer (branch: main)
