@@ -439,10 +439,28 @@ async function metaLookup(title, apiKey, opts = {}) {
     return null
   }
 
+  function isSpecialMedia(media) {
+    try {
+      if (!media) return false
+      const fmt = media.format ? String(media.format).toUpperCase() : ''
+      if (fmt === 'SPECIAL') return true
+      const titles = []
+      if (media.title) titles.push(media.title.english, media.title.romaji, media.title.native)
+      for (const t of titles) {
+        if (t && /\bspecial\b/i.test(String(t))) return true
+      }
+      return false
+    } catch (e) { return false }
+  }
+
   // Use top-level stripAniListSeasonSuffix helper
 
   // prefer items whose seasonYear or title/relations indicate the requested season/year
   let pick = null
+  const requestWantsSpecial = ((opts && Number(opts.season) === 0)
+    || (opts && opts.episode != null && String(opts.episode).includes('.'))
+    || (typeof title === 'string' && /\bspecial\b/i.test(title))
+    || (typeof q === 'string' && /\bspecial\b/i.test(q))) ? true : false
   const wantedYear = (opts && (typeof opts.seasonYear !== 'undefined' || typeof opts.year !== 'undefined')) ? Number((opts.seasonYear != null ? opts.seasonYear : opts.year)) : null
   if (wantedSeason !== null || wantedYear !== null) {
     for (const it of items) {
@@ -490,7 +508,11 @@ async function metaLookup(title, apiKey, opts = {}) {
           for (const c of candidates) {
             try { if (extractSeasonNumberFromTitle(c)) { anySeason = true; break } } catch (e) {}
           }
-          if (!anySeason) { nonSeason = it; break }
+          if (!anySeason) {
+            if (!requestWantsSpecial && isSpecialMedia(it)) continue
+            nonSeason = it
+            break
+          }
         } catch (e) {}
       }
       if (nonSeason) pick = nonSeason
@@ -504,6 +526,7 @@ async function metaLookup(title, apiKey, opts = {}) {
   // series that more closely matches the query tokens.
   try {
     const pickedTitle = (pick && pick.title) ? (pick.title.english || pick.title.romaji || pick.title.native || '') : ''
+    const pickIsSpecial = isSpecialMedia(pick)
     const pickOverlap = wordOverlap(String(pickedTitle), String(q || ''))
     const MIN_ACCEPTABLE_OVERLAP = 0.35
     if (pickOverlap < MIN_ACCEPTABLE_OVERLAP) {
@@ -513,6 +536,7 @@ async function metaLookup(title, apiKey, opts = {}) {
         try {
           const candTitle = (it && it.title) ? (it.title.english || it.title.romaji || it.title.native || '') : ''
           const ov = wordOverlap(String(candTitle), String(q || ''))
+          if (!requestWantsSpecial && !pickIsSpecial && isSpecialMedia(it)) continue
           if (ov > best) { best = ov; better = it }
         } catch (e) {}
       }
@@ -522,6 +546,10 @@ async function metaLookup(title, apiKey, opts = {}) {
       }
     }
   } catch (e) { /* best-effort */ }
+  if (!requestWantsSpecial && isSpecialMedia(pick)) {
+    const fallback = items.find(it => !isSpecialMedia(it))
+    if (fallback) pick = fallback
+  }
   // pick English when available, otherwise romaji, otherwise native
   // If the selected pick itself is a season-specific entry (e.g. "3rd Season") but its relations include
   // a parent/series node that does NOT contain a season token, prefer returning that parent node instead
