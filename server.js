@@ -1832,17 +1832,23 @@ function doProcessParsedItem(it, session) {
     const parseFilename = require('./lib/filename-parser');
     const base = path.basename(it.canonicalPath, path.extname(it.canonicalPath));
     const key = canonicalize(it.canonicalPath);
-    let parsed = parsedCache[key] || null;
-    if (!parsed) {
-      try {
-        const guess = parseFilename(base);
-        parsed = { title: guess.title, parsedName: guess.parsedName, season: guess.season, episode: guess.episode, episodeRange: guess.episodeRange || null, timestamp: Date.now() };
-        parsedCache[key] = parsed;
-      } catch (e) { parsed = null }
+    const prior = parsedCache[key] || null;
+    let parsed = null;
+    try {
+      const guess = parseFilename(base);
+      parsed = { title: guess.title, parsedName: guess.parsedName, season: guess.season, episode: guess.episode, episodeRange: guess.episodeRange || null, timestamp: Date.now() };
+    } catch (parseErr) {
+      if (prior) {
+        parsed = Object.assign({}, prior, { timestamp: Date.now() });
+      } else {
+        throw parseErr;
+      }
     }
     if (parsed) {
+      const now = Date.now();
+      parsed.timestamp = now;
       try {
-        // render parsed name using template from session or server
+        // Always render using latest parser output so rescans pick up improvements.
         const userTemplate = (session && session.username && users[session.username] && users[session.username].settings && users[session.username].settings.rename_template) ? users[session.username].settings.rename_template : null;
         const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
         function pad(n){ return String(n).padStart(2,'0') }
@@ -1862,11 +1868,11 @@ function doProcessParsedItem(it, session) {
           .replace('{tmdbId}', '')
         let parsedRendered = String(nameWithoutExtRaw).replace(/\s{2,}/g, ' ').trim();
         try { parsedRendered = parsedRendered.replace(/\s*\(\s*\)\s*/g, '').replace(/\s*[-–—]\s*$/g, '').replace(/\s{2,}/g, ' ').trim(); } catch (e) {}
-        parsedCache[key] = Object.assign({}, parsedCache[key] || {}, { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() });
-        const parsedBlock = { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, timestamp: Date.now() };
-        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
+        const parsedBlock = { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, episodeRange: parsed.episodeRange || null, timestamp: now };
+        parsedCache[key] = Object.assign({}, parsedCache[key] || {}, parsedBlock);
+        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, sourceId: 'parsed-cache', cachedAt: now }));
       } catch (e) {
-        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeTitle: '', language: 'en', timestamp: Date.now() }));
+        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeRange: parsed.episodeRange || null, episodeTitle: '', language: 'en', timestamp: now }));
       }
     }
   } catch (e) { appendLog(`PARSE_ITEM_FAIL path=${it && it.canonicalPath} err=${e && e.message ? e.message : String(e)}`) }
@@ -3696,6 +3702,7 @@ module.exports.extractYear = extractYear;
 module.exports.normalizeEnrichEntry = normalizeEnrichEntry;
 // Expose enrichCache for debugging/tests
 module.exports.enrichCache = enrichCache;
+module.exports.parsedCache = parsedCache;
 // Export internal helpers for test harnesses (non-production)
 module.exports._test = module.exports._test || {};
 module.exports._test.fullScanLibrary = typeof fullScanLibrary !== 'undefined' ? fullScanLibrary : null;
@@ -3704,7 +3711,8 @@ module.exports._test.searchTmdbAndEpisode = typeof searchTmdbAndEpisode !== 'und
 module.exports._test.incrementalScanLibrary = typeof incrementalScanLibrary !== 'undefined' ? incrementalScanLibrary : null;
 module.exports._test.loadScanCache = typeof loadScanCache !== 'undefined' ? loadScanCache : null;
 module.exports._test.saveScanCache = typeof saveScanCache !== 'undefined' ? saveScanCache : null;
-module.exports._test.processParsedItem = typeof processParsedItem !== 'undefined' ? processParsedItem : null;
+module.exports._test.processParsedItem = doProcessParsedItem;
+module.exports._test.doProcessParsedItem = doProcessParsedItem;
 // expose internal helpers for unit tests
 module.exports._test.stripAniListSeasonSuffix = typeof stripAniListSeasonSuffix !== 'undefined' ? stripAniListSeasonSuffix : null;
 module.exports._test.lookupWikipediaEpisode = typeof lookupWikipediaEpisode !== 'undefined' ? lookupWikipediaEpisode : null;
