@@ -70,4 +70,29 @@ describe('lib/scan.js', function() {
     const read = JSON.parse(fs.readFileSync(scanCacheFile, 'utf8'));
     assert.ok(read && read.files && typeof read.initialScanAt === 'number', 'expected valid JSON after atomic save');
   });
+
+  it('buildIncrementalItems prioritizes fresh paths so UI samples show new files first', function() {
+    const currentCache = {
+      files: {
+        '/media/library/old-show.mkv': { id: 'cache-old', mtime: 1000 },
+        '/media/library/new-show.mkv': { id: 'cache-new', mtime: 2000 },
+      }
+    };
+    const toProcess = [
+      { canonicalPath: '/media/library/new-show.mkv', id: 'fresh-existing', scannedAt: 3000 },
+      { canonicalPath: '/media/library/brand-new.mkv', id: 'fresh-new', scannedAt: 4000 },
+    ];
+    let seq = 0;
+    const makeId = () => `test-${++seq}`;
+    const items = scanLib.buildIncrementalItems(currentCache, toProcess, makeId);
+    assert.deepStrictEqual(items.map(it => it.canonicalPath), [
+      '/media/library/new-show.mkv',
+      '/media/library/brand-new.mkv',
+      '/media/library/old-show.mkv'
+    ]);
+    assert.strictEqual(items[0].id, 'fresh-existing', 'should reuse id from toProcess for existing cache entry');
+    assert.strictEqual(items[1].id, 'fresh-new', 'should reuse id from toProcess for brand new entry');
+    assert.strictEqual(items[2].id, 'cache-old', 'should reuse cache id for untouched entries');
+    assert.ok(items[0].scannedAt >= 3000, 'expected scannedAt for fresh entry to reflect discovery time');
+  });
 });

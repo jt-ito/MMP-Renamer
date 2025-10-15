@@ -2212,25 +2212,9 @@ app.post('/api/scan/incremental', async (req, res) => {
       for (const r of (removed || [])) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
       // do minimal parsing for new/changed entries
       for (const it of (toProcess || [])) doProcessParsedItem(it, req.session || {});
-      // persist new cache and build items array from currentCache
+      // persist new cache and build items array from currentCache, prioritizing fresh items first
       if (currentCache) saveScanCache(currentCache);
-      // Start with all files known in the current cache
-      const basePaths = Object.keys((currentCache && currentCache.files) || {});
-      const seen = new Set(basePaths);
-      items = basePaths.map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }));
-      // Ensure recently-processed new/changed items (toProcess) are included so clients
-      // see newly discovered files immediately after incremental scan.
-      if (Array.isArray(toProcess) && toProcess.length) {
-        for (const it of toProcess) {
-          try {
-            const pth = (it && it.canonicalPath) ? it.canonicalPath : String(it || '');
-            if (!seen.has(pth)) {
-              seen.add(pth);
-              items.push({ id: uuidv4(), canonicalPath: pth, scannedAt: Date.now() });
-            }
-          } catch (e) { /* best-effort */ }
-        }
-      }
+      items = scanLib.buildIncrementalItems(currentCache, toProcess, uuidv4);
     }
   } catch (e) {
     appendLog(`INCREMENTAL_SCAN_FAIL err=${e && e.message ? e.message : String(e)}`);

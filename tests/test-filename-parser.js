@@ -17,6 +17,13 @@ function run() {
   // parsedName should not contain the episode title 'Clover Is Born'
   assert.ok(!/Clover Is Born/i.test(res.parsedName), `parsedName should not include episode title, got '${res.parsedName}'`)
 
+  // Sequels with trailing numerals should keep the number in the title and parse the episode correctly.
+  const tawawa = parse('[RoS] Getsuyoubi no Tawawa 2 - 01 [E1C925F2].mkv')
+  assert.strictEqual(tawawa.title, 'Getsuyoubi no Tawawa 2', `expected sequel title to retain "2", got '${tawawa.title}'`)
+  assert.strictEqual(tawawa.season, 1, `expected default season 1 got ${tawawa.season}`)
+  assert.strictEqual(tawawa.episode, 1, `expected episode 1 got ${tawawa.episode}`)
+  assert.strictEqual(tawawa.parsedName, 'Getsuyoubi no Tawawa 2 - S01E01', `expected parsedName to reflect S01E01, got '${tawawa.parsedName}'`)
+
   console.log('filename-parser tests passed')
 }
 
