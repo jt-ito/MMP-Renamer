@@ -432,9 +432,26 @@ async function metaLookup(title, apiKey, opts = {}) {
         const k = String(m[1] || '').toLowerCase()
         if (map[k]) return map[k]
       }
-      // fallback: trailing digits like "Title 2" (only if short)
+      // fallback: trailing digits like "Title 2" — only treat as season when
+      // the title is short (likely an explicit season marker) or contains
+      // only 1-2 words (e.g., "Show 2"). This avoids treating long series
+      // names with sequel numerals (e.g., "Getsuyoubi no Tawawa 2") as seasons.
       m = s.match(/(?:[\(\[\- ]|\b)(\d{1,2})(?:[\)\]\- ]|\b)$/)
-      if (m && m[1]) return parseInt(m[1],10)
+      if (m && m[1]) {
+        try {
+          const trimmed = s.trim();
+          const words = trimmed.split(/\s+/).filter(Boolean);
+          const trailingNum = parseInt(m[1], 10);
+          if (Number.isNaN(trailingNum)) return null;
+          if (trimmed.length <= 20 || words.length <= 2) {
+            return trailingNum;
+          }
+          const precedingWord = words.length >= 2 ? words[words.length - 2].toLowerCase() : '';
+          const blocked = new Set(['part','movie','film','volume','vol','chapter','episode','ep','ova','special','sp','disc']);
+          const validSequel = trailingNum >= 2 && trailingNum <= 12 && words.length >= 3 && !blocked.has(precedingWord);
+          if (validSequel) return trailingNum;
+        } catch (e) { /* ignore and do not treat as season */ }
+      }
     } catch (e) {}
     return null
   }
