@@ -337,7 +337,19 @@ async function metaLookup(title, apiKey, opts = {}) {
   }
 
   function normalize(s) { try { return String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim() } catch (e) { return String(s || '') } }
-  function wordOverlap(a,b){ try { const wa = normalize(a).split(' ').filter(Boolean); const wb = normalize(b).split(' ').filter(Boolean); if (!wa.length || !wb.length) return 0; const common = wa.filter(x=>wb.indexOf(x)!==-1); return common.length/Math.max(wa.length, wb.length); } catch (e){ return 0 } }
+  function wordOverlap(a,b){
+    try {
+      const wa = normalize(a).split(' ').filter(Boolean)
+      const wb = normalize(b).split(' ').filter(Boolean)
+      if (!wa.length || !wb.length) return 0
+      const common = wa.filter(x => wb.indexOf(x) !== -1)
+      if (!common.length) return 0
+      const recall = common.length / wa.length
+      const precision = common.length / wb.length
+      // emphasize covering all query tokens (recall) but retain some precision signal so generic matches don't dominate
+      return (recall * 0.75) + (precision * 0.25)
+    } catch (e){ return 0 }
+  }
 
   // Strip common episode tokens and trailing episode titles from candidate search strings
   function normalizeSearchQuery(s) {
@@ -424,7 +436,7 @@ async function metaLookup(title, apiKey, opts = {}) {
   const opt = { hostname: 'graphql.anilist.co', path: '/', method: 'POST', headers }
           // perform queries in order (season-augmented first when available)
           let items = null
-          const MIN_SEASON_QUERY_OVERLAP = 0.25
+          const MIN_SEASON_QUERY_OVERLAP = 0.6
           function bestOverlapAgainstBase(list) {
             try {
               if (!Array.isArray(list) || !list.length) return 0
