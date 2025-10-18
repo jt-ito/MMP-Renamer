@@ -241,9 +241,43 @@ function normalizeEnrichEntry(entry) {
     out.season = (typeof out.season !== 'undefined' && out.season !== null) ? out.season : (out.parsed && typeof out.parsed.season !== 'undefined' ? out.parsed.season : null);
     out.episode = (typeof out.episode !== 'undefined' && out.episode !== null) ? out.episode : (out.parsed && typeof out.parsed.episode !== 'undefined' ? out.parsed.episode : null);
     out.timestamp = out.timestamp || Date.now();
+    const normalizedFailure = normalizeProviderFailure(entry.providerFailure);
+    out.providerFailure = normalizedFailure;
+    if (out.provider && out.provider.matched) out.providerFailure = null;
     return out;
   } catch (e) {
     return entry || {};
+  }
+}
+
+function normalizeProviderFailure(block) {
+  try {
+    if (!block) return null;
+    const out = {};
+    out.provider = block.provider || null;
+    if (typeof block.reason !== 'undefined') out.reason = block.reason;
+    if (typeof block.code !== 'undefined') out.code = block.code;
+    const prevAttempts = Number.isFinite(block.attemptCount) ? Number(block.attemptCount) : parseInt(block.attemptCount, 10);
+    out.attemptCount = Number.isFinite(prevAttempts) && prevAttempts > 0 ? prevAttempts : 1;
+    const lastTsRaw = (block.lastAttemptAt != null) ? Number(block.lastAttemptAt) : Date.now();
+    out.lastAttemptAt = Number.isFinite(lastTsRaw) && lastTsRaw > 0 ? lastTsRaw : Date.now();
+    if (block.firstAttemptAt != null) {
+      const firstTs = Number(block.firstAttemptAt);
+      if (Number.isFinite(firstTs) && firstTs > 0) out.firstAttemptAt = firstTs;
+    }
+    if (!out.firstAttemptAt) out.firstAttemptAt = out.lastAttemptAt;
+    if (block.lastError != null) out.lastError = String(block.lastError);
+    if (block.lastSkipAt != null) {
+      const skipTs = Number(block.lastSkipAt);
+      if (Number.isFinite(skipTs) && skipTs > 0) out.lastSkipAt = skipTs;
+    }
+    if (block.skipCount != null) {
+      const skipCount = Number(block.skipCount);
+      if (Number.isFinite(skipCount) && skipCount >= 0) out.skipCount = skipCount;
+    }
+    return out;
+  } catch (e) {
+    return null;
   }
 }
 
@@ -1443,6 +1477,20 @@ async function metaLookup(title, apiKey, opts = {}) {
 
 async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   try { console.log('DEBUG: externalEnrich START path=', canonicalPath, 'providedKeyPresent=', !!providedKey); } catch (e) {}
+  const key = canonicalize(canonicalPath);
+  const forceLookup = !!(opts && opts.force);
+  const existingEntry = enrichCache[key] || null;
+  if (existingEntry && existingEntry.providerFailure && !forceLookup) {
+    try {
+      const pf = existingEntry.providerFailure;
+      appendLog(`META_PROVIDER_SKIP path=${key} reason=${pf && pf.reason ? pf.reason : 'cached-failure'} attempts=${pf && pf.attemptCount ? pf.attemptCount : 0}`);
+    } catch (e) { /* logging best-effort */ }
+    const updated = markProviderFailureSkip(key) || existingEntry;
+    return Object.assign({}, updated || existingEntry || {});
+  }
+  let attemptedProvider = false;
+  let providerResult = null;
+  let providerError = null;
   // lightweight filename parser to strip common release tags and extract season/episode
   const base = path.basename(canonicalPath, path.extname(canonicalPath));
   const parseFilename = require('./lib/filename-parser');
@@ -1564,6 +1612,8 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // normalize preferred provider to tmdb (kitsu removed)
   preferredProvider = 'tmdb'
   if (tmdbKey || preferredProvider) {
+    attemptedProvider = true;
+    let res = null;
     try {
   try { console.log('DEBUG: externalEnrich will attempt metaLookup seriesLookupTitle=', seriesLookupTitle, 'tmdbKeyPresent=', !!tmdbKey); } catch (e) {}
       const parentPath = path.resolve(path.dirname(canonicalPath))
@@ -1617,7 +1667,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     metaOpts.season = normSeason;
     metaOpts.episode = normEpisode;
   }
-  let res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts)
+  res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts)
   try { console.log('DEBUG: externalEnrich metaLookup returned res=', !!res); } catch (e) {}
   // Diagnostic: log a trimmed version of the metaLookup response so we can
   // see whether the provider returned series/episode data before parent fallback.
@@ -1765,6 +1815,27 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
       }
     } catch (e) {
   guess.tmdb = { error: e.message }
+      providerError = e;
+    }
+    providerResult = res;
+  }
+
+  if (attemptedProvider) {
+    if (providerResult && providerResult.name) {
+      guess.providerFailure = null;
+      clearProviderFailure(key);
+    } else {
+      const failureInfo = recordProviderFailure(key, {
+        provider: 'tmdb',
+        reason: providerError ? 'error' : 'no-match',
+        code: providerError && (providerError.code || providerError.statusCode) ? (providerError.code || providerError.statusCode) : null,
+        error: providerError && providerError.message ? providerError.message : null
+      });
+      guess.providerFailure = failureInfo || normalizeProviderFailure({
+        provider: 'tmdb',
+        reason: providerError ? 'error' : 'no-match',
+        lastError: providerError && providerError.message ? providerError.message : null
+      });
     }
   }
 
@@ -1910,6 +1981,10 @@ async function backgroundEnrichFirstN(scanId, enrichCandidates, session, libPath
         const existing = enrichCache[key] || null;
         const prov = existing && existing.provider ? existing.provider : null;
         if (isProviderComplete(prov)) { continue; }
+        if (existing && existing.providerFailure) {
+          try { appendLog(`BACKGROUND_ENRICH_SKIP_FAILURE path=${key}`); } catch (e) {}
+          continue;
+        }
         const data = await externalEnrich(key, tmdbKey, { username });
         if (!data) { continue; }
         try {
@@ -2534,6 +2609,10 @@ app.post('/api/enrich', async (req, res) => {
     if (!force && providerCompleteEarly) {
       return res.json({ enrichment: enrichCache[key] });
     }
+    if (!force && existingEarly && existingEarly.providerFailure) {
+      try { appendLog(`ENRICH_REQUEST_SKIP_FAILURE path=${key}`); } catch (e) {}
+      return res.json({ enrichment: existingEarly });
+    }
     // Resolve an effective provider key early so we can decide whether to short-circuit to parsed-only
   let tmdbKeyEarly = null
     try {
@@ -2733,6 +2812,9 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
             data = Object.assign({}, provEx);
             try { if (existing && existing.parsed && existing.parsed.title) data.parsedName = existing.parsed.title } catch (e) {}
             try { appendLog(`REFRESH_ITEM_SKIP_EXTERNAL path=${key} reason=providerCached`); } catch (e) {}
+          } else if (existing && existing.providerFailure) {
+            data = Object.assign({}, existing);
+            try { appendLog(`REFRESH_ITEM_SKIP_FAILURE path=${key}`); } catch (e) {}
           } else {
             try { appendLog(`REFRESH_ITEM_WILL_LOOKUP path=${key}`); } catch (e) {}
             data = await externalEnrich(key, tmdbKey, { username });
@@ -3080,6 +3162,12 @@ function updateEnrichCache(key, nextObj) {
     const prev = enrichCache[key] || {};
     // merge with prev to keep any existing fields, then allow preserveAppliedFlags to copy applied/hidden
     const merged = Object.assign({}, prev, nextObj || {});
+    if (merged && merged.provider && merged.provider.matched) {
+      delete merged.providerFailure;
+    }
+    if (typeof merged.providerFailure !== 'undefined' && merged.providerFailure === null) {
+      delete merged.providerFailure;
+    }
     const normalized = normalizeEnrichEntry(merged);
     enrichCache[key] = preserveAppliedFlags(prev, normalized);
   try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) { /* best-effort persist */ }
@@ -3110,10 +3198,66 @@ function updateEnrichCacheInMemory(key, nextObj) {
   try {
     const prev = enrichCache[key] || {};
     const merged = Object.assign({}, prev, nextObj || {});
+    if (merged && merged.provider && merged.provider.matched) {
+      delete merged.providerFailure;
+    }
+    if (typeof merged.providerFailure !== 'undefined' && merged.providerFailure === null) {
+      delete merged.providerFailure;
+    }
     const normalized = normalizeEnrichEntry(merged);
     enrichCache[key] = preserveAppliedFlags(prev, normalized);
     return enrichCache[key];
   } catch (e) { return nextObj; }
+}
+
+function recordProviderFailure(key, info = {}) {
+  try {
+    const prev = enrichCache[key] || {};
+    const prevFailure = prev.providerFailure || null;
+    const now = Date.now();
+    const attemptBase = prevFailure && Number.isFinite(prevFailure.attemptCount) ? prevFailure.attemptCount : (prevFailure && prevFailure.attemptCount ? Number(prevFailure.attemptCount) : 0);
+    const attemptCount = (Number.isFinite(attemptBase) ? attemptBase : 0) + 1;
+    const failure = Object.assign({}, prevFailure || {}, info || {});
+    failure.provider = failure.provider || info.provider || (prevFailure && prevFailure.provider) || null;
+    if (info.reason != null) failure.reason = info.reason;
+    if (info.code != null) failure.code = info.code;
+    if (info.error != null) failure.lastError = String(info.error);
+    failure.attemptCount = attemptCount;
+    failure.lastAttemptAt = now;
+    failure.firstAttemptAt = prevFailure && prevFailure.firstAttemptAt ? prevFailure.firstAttemptAt : (info.firstAttemptAt || now);
+    const normalized = normalizeProviderFailure(failure) || { provider: failure.provider || null, reason: failure.reason || null, attemptCount, lastAttemptAt: now, firstAttemptAt: failure.firstAttemptAt };
+    normalized.attemptCount = attemptCount;
+    normalized.lastAttemptAt = now;
+    if (!normalized.firstAttemptAt) normalized.firstAttemptAt = now;
+    updateEnrichCacheInMemory(key, Object.assign({}, prev, { providerFailure: normalized }));
+    schedulePersistEnrichCache(600);
+    return normalized;
+  } catch (e) { return null; }
+}
+
+function markProviderFailureSkip(key) {
+  try {
+    const prev = enrichCache[key] || {};
+    const prevFailure = prev.providerFailure || null;
+    if (!prevFailure) return;
+    const updated = Object.assign({}, prevFailure, {
+      lastSkipAt: Date.now(),
+      skipCount: Number.isFinite(prevFailure.skipCount) ? prevFailure.skipCount + 1 : ((prevFailure.skipCount ? Number(prevFailure.skipCount) : 0) + 1)
+    });
+    const merged = updateEnrichCacheInMemory(key, Object.assign({}, prev, { providerFailure: normalizeProviderFailure(updated) || updated }));
+    schedulePersistEnrichCache(600);
+    return merged;
+  } catch (e) { /* best-effort */ }
+}
+
+function clearProviderFailure(key) {
+  try {
+    const prev = enrichCache[key] || {};
+    if (!prev.providerFailure) return;
+    const merged = updateEnrichCacheInMemory(key, Object.assign({}, prev, { providerFailure: null }));
+    schedulePersistEnrichCache(600);
+    return merged;
+  } catch (e) { /* best-effort */ }
 }
 
 // Helper: clean series title to avoid duplicated episode label or episode title fragments
