@@ -403,13 +403,14 @@ async function metaLookup(title, apiKey, opts = {}) {
       const query = `query ($search: String) { Page(page:1, perPage:8) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } season seasonYear relations { nodes { id title { romaji english native } } } } } }`;
       // If the caller provided a season, try an AniList text search that includes the season (e.g. "Title Season 1")
       const wantedSeason = (opts && typeof opts.season !== 'undefined' && opts.season !== null) ? Number(opts.season) : null
+      const baseQuery = String(q || '').trim()
       const tryQueries = []
       if (wantedSeason !== null) {
         tryQueries.push(String(q).trim() + ` Season ${wantedSeason}`)
         // also try a parenthetical form
         tryQueries.push(String(q).trim() + ` (Season ${wantedSeason})`)
       }
-      tryQueries.push(String(q || ''))
+      tryQueries.push(baseQuery)
 
       // include AniList API key header when available (per-user or server)
       let anilistKey = null
@@ -423,6 +424,31 @@ async function metaLookup(title, apiKey, opts = {}) {
   const opt = { hostname: 'graphql.anilist.co', path: '/', method: 'POST', headers }
           // perform queries in order (season-augmented first when available)
           let items = null
+          const MIN_SEASON_QUERY_OVERLAP = 0.25
+          function bestOverlapAgainstBase(list) {
+            try {
+              if (!Array.isArray(list) || !list.length) return 0
+              let best = 0
+              for (const it of list) {
+                try {
+                  const titles = []
+                  if (it && it.title) titles.push(it.title.english, it.title.romaji, it.title.native)
+                  if (it && it.relations && Array.isArray(it.relations.nodes)) {
+                    for (const rn of it.relations.nodes) {
+                      if (rn && rn.title) titles.push(rn.title.english, rn.title.romaji, rn.title.native)
+                    }
+                  }
+                  for (const t of titles) {
+                    if (!t) continue
+                    const ov = wordOverlap(String(t), baseQuery)
+                    if (ov > best) best = ov
+                    if (best >= MIN_SEASON_QUERY_OVERLAP) return best
+                  }
+                } catch (e) { continue }
+              }
+              return best
+            } catch (e) { return 0 }
+          }
           for (const qtry of tryQueries) {
             try {
               try { appendLog(`META_ANILIST_TRY q=${qtry}`) } catch (e) {}
@@ -433,7 +459,17 @@ async function metaLookup(title, apiKey, opts = {}) {
               let j = null
               try { j = JSON.parse(res.body) } catch (e) { continue }
               const found = j && j.data && j.data.Page && Array.isArray(j.data.Page.media) ? j.data.Page.media : []
-              if (found && found.length) { items = found; break }
+              if (found && found.length) {
+                if (qtry !== baseQuery) {
+                  const ov = bestOverlapAgainstBase(found)
+                  if (ov < MIN_SEASON_QUERY_OVERLAP) {
+                    try { appendLog(`META_ANILIST_TRY_SKIP_LOW_OVERLAP q=${qtry} overlap=${ov.toFixed(2)} base=${baseQuery}`) } catch (e) {}
+                    continue
+                  }
+                }
+                items = found;
+                break
+              }
             } catch (e) { /* try next */ }
           }
           try { appendLog(`META_ANILIST_TRY_RESULT qTried=${tryQueries.join('|')} matched=${items && items.length ? 'yes' : 'no'}`) } catch (e) {}
