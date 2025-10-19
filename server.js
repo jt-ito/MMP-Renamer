@@ -2043,7 +2043,7 @@ async function backgroundEnrichFirstN(scanId, enrichCandidates, session, libPath
         } catch (e) {
           updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { sourceId: 'provider', cachedAt: Date.now() }));
         }
-  try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
+        try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
         try { if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].processed += 1; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch (e) {}
       } catch (e) { appendLog(`BACKGROUND_ENRICH_FAIL path=${it && it.canonicalPath} err=${e && e.message ? e.message : String(e)}`); }
     }
@@ -2853,35 +2853,84 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
       for (const it of s.items) {
         try {
           const key = canonicalize(it.canonicalPath);
-          const existing = enrichCache[key] || null;
-          let data = null;
-          const provEx = existing && existing.provider ? existing.provider : null;
-          if (isProviderComplete(provEx)) {
-            data = Object.assign({}, provEx);
-            try { if (existing && existing.parsed && existing.parsed.title) data.parsedName = existing.parsed.title } catch (e) {}
-            try { appendLog(`REFRESH_ITEM_SKIP_EXTERNAL path=${key} reason=providerCached`); } catch (e) {}
-          } else if (existing && existing.providerFailure) {
-            data = Object.assign({}, existing);
-            try { appendLog(`REFRESH_ITEM_SKIP_FAILURE path=${key}`); } catch (e) {}
-          } else {
-            try { appendLog(`REFRESH_ITEM_WILL_LOOKUP path=${key}`); } catch (e) {}
-            data = await externalEnrich(key, tmdbKey, { username });
+          let lookup = null;
+          let lookupError = null;
+          try {
+            doProcessParsedItem(it, req.session);
+          } catch (parseErr) {
+            try { appendLog(`REFRESH_ITEM_PARSE_FAIL path=${key} err=${parseErr && parseErr.message ? parseErr.message : String(parseErr)}`); } catch (logErr) {}
+          }
+          const entryAfterParse = enrichCache[key] || null;
+          const fallbackProvider = entryAfterParse && entryAfterParse.provider ? Object.assign({}, entryAfterParse.provider) : null;
+          const fallbackParsed = entryAfterParse && entryAfterParse.parsed ? Object.assign({}, entryAfterParse.parsed) : null;
+          try { appendLog(`REFRESH_ITEM_FORCE_LOOKUP path=${key}`); } catch (e) {}
+          try {
+            lookup = await externalEnrich(key, tmdbKey, { username, force: true });
+          } catch (err) {
+            lookupError = err;
+            try { appendLog(`REFRESH_ITEM_LOOKUP_ERR path=${key} err=${err && err.message ? err.message : String(err)}`); } catch (logErr) {}
+          }
+          if (!lookup && fallbackProvider) {
+            const providerClone = Object.assign({}, fallbackProvider);
+            lookup = {
+              title: providerClone.title,
+              year: providerClone.year,
+              season: providerClone.season,
+              episode: providerClone.episode,
+              episodeTitle: providerClone.episodeTitle || '',
+              provider: providerClone,
+              raw: providerClone.raw || null,
+              parsedName: (fallbackParsed && (fallbackParsed.parsedName || fallbackParsed.title)) || providerClone.renderedName || null
+            };
+          }
+          if (!lookup && fallbackParsed) {
+            lookup = {
+              title: fallbackParsed.title || null,
+              season: fallbackParsed.season,
+              episode: fallbackParsed.episode,
+              episodeRange: fallbackParsed.episodeRange,
+              parsedName: fallbackParsed.parsedName || fallbackParsed.title || null
+            };
           }
           try {
-            if (data && data.title) {
-              const providerRendered = renderProviderName(data, key, req.session);
-              const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
-              try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
-              updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
-            } else {
-              // preserve applied/hidden metadata when replacing entry
-              updateEnrichCache(key, Object.assign({}, { ...data, cachedAt: Date.now() }));
+            if (lookup && lookup.title) {
+              if (lookup.provider) {
+                const providerRendered = renderProviderName(lookup, key, req.session);
+                const providerBlock = {
+                  title: lookup.title,
+                  year: lookup.year,
+                  season: lookup.season,
+                  episode: lookup.episode,
+                  episodeTitle: lookup.episodeTitle || '',
+                  raw: (lookup.provider && lookup.provider.raw) || lookup.raw || lookup.provider,
+                  renderedName: providerRendered || (lookup.provider && lookup.provider.renderedName) || '',
+                  matched: lookup.provider && typeof lookup.provider.matched !== 'undefined' ? lookup.provider.matched : !!lookup.title
+                };
+                try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
+                updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+              } else {
+                updateEnrichCache(key, Object.assign({}, { ...lookup, cachedAt: Date.now() }));
+              }
+            } else if (lookup) {
+              updateEnrichCache(key, Object.assign({}, { ...lookup, cachedAt: Date.now() }));
+            } else if (fallbackProvider) {
+              updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: fallbackProvider, sourceId: 'provider', cachedAt: Date.now() }));
             }
           } catch (e) {
-            updateEnrichCache(key, Object.assign({}, { ...data, cachedAt: Date.now() }));
+            if (lookup) {
+              updateEnrichCache(key, Object.assign({}, { ...lookup, cachedAt: Date.now() }));
+            } else if (fallbackProvider) {
+              updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: fallbackProvider, sourceId: 'provider', cachedAt: Date.now() }));
+            }
           }
-          results.push({ path: key, ok: true, parsedName: data.parsedName, title: data.title });
-          appendLog(`REFRESH_ITEM_OK path=${key} parsedName=${data.parsedName}`);
+          const resolvedTitle = (lookup && lookup.title) || (fallbackProvider && fallbackProvider.title) || (fallbackParsed && fallbackParsed.title) || null;
+          const resolvedParsedName = (lookup && lookup.parsedName) || (fallbackParsed && fallbackParsed.parsedName) || null;
+          if (lookup || fallbackProvider || fallbackParsed) {
+            results.push({ path: key, ok: true, parsedName: resolvedParsedName, title: resolvedTitle });
+            try { appendLog(`REFRESH_ITEM_OK path=${key} parsedName=${resolvedParsedName || ''}`); } catch (e) {}
+          } else {
+            results.push({ path: key, ok: false, error: lookupError && lookupError.message ? lookupError.message : 'lookup failed' });
+          }
           // update progress
           try { if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].processed += 1; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch(e){}
         } catch (err) {
@@ -2892,7 +2941,8 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
           try { if (refreshProgress[refreshProgressKey]) { refreshProgress[refreshProgressKey].processed += 1; refreshProgress[refreshProgressKey].lastUpdated = Date.now(); } } catch(e){}
         }
       }
-  try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
+      try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
+      try { if (db) db.setKV('parsedCache', parsedCache); else writeJson(parsedCacheFile, parsedCache); } catch (e) {}
       appendLog(`REFRESH_SCAN_COMPLETE scan=${req.params.scanId} items=${results.length}`);
       // Ensure stored scan artifacts reflect applied/hidden flags updated during refresh
       try {
