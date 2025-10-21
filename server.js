@@ -3,6 +3,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const tvdb = require('./lib/tvdb');
 
 // External API integration removed: TMDb-related helpers and https monkey-patch
 // have been disabled to eliminate external HTTP calls. The metaLookup function
@@ -324,6 +325,8 @@ async function metaLookup(title, apiKey, opts = {}) {
   // Inputs: title (string), apiKey (tmdb key, optional), opts may include season, episode, parentCandidate, parentPath, _parentDirect
   // Output: Promise resolving to { name, raw, episode } or null
   if (!title) return Promise.resolve(null)
+
+  const tvdbCreds = resolveTvdbCredentials(opts && opts.username ? opts.username : null, opts && opts.tvdbOverride ? opts.tvdbOverride : null)
 
   // Minimal per-host pacing to avoid hammering external APIs
   const hostPace = { 'graphql.anilist.co': 250, 'kitsu.io': 250, 'api.themoviedb.org': 300 } // ms
@@ -1227,108 +1230,136 @@ async function metaLookup(title, apiKey, opts = {}) {
       const a = await searchAniList(v)
       try { appendLog(`META_ANILIST_SEARCH q=${v} found=${a ? 'yes' : 'no'}`) } catch (e) {}
       if (!a) continue
-      // Attempt Wikipedia episode lookup first (best-effort). If Wikipedia finds a
-      // localized episode title, prefer it and skip TMDb/Kitsu episode lookups.
-      let ep = null
+      // Attempt per-provider episode lookups in order: TVDB -> Wikipedia -> TMDb -> Kitsu.
+      let ep = null;
+      let tvdbInfo = null;
+      let titleVariants = [];
       try {
-        // build title variants from AniList media (english/romaji/native + related nodes)
-        let titleVariants = []
+        if (a && a.title) {
+          if (a.title.english) titleVariants.push(a.title.english);
+          if (a.title.romaji) titleVariants.push(a.title.romaji);
+          if (a.title.native) titleVariants.push(a.title.native);
+        }
+        if (a && a.relations && Array.isArray(a.relations.nodes)) {
+          for (const rn of a.relations.nodes) {
+            if (rn && rn.title && rn.title.english) titleVariants.push(rn.title.english);
+            if (rn && rn.title && rn.title.romaji) titleVariants.push(rn.title.romaji);
+            if (rn && rn.title && rn.title.native) titleVariants.push(rn.title.native);
+          }
+        }
+      } catch (e) { /* ignore and fall back below */ }
+      const aniListName = (a && a.name) ? a.name : v;
+      const strippedAniListName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : null;
+      titleVariants = titleVariants
+        .concat([aniListName, strippedAniListName, v])
+        .map(s => String(s || '').trim())
+        .filter(Boolean);
+      if (!titleVariants.length) {
+        titleVariants = [String(aniListName || v || '').trim()].filter(Boolean);
+      }
+      const uniqueTitleVariants = [...new Set(titleVariants)];
+
+      if (!ep && tvdbCreds && opts && opts.season != null && opts.episode != null) {
         try {
-          if (a && a.title) {
-            if (a.title.english) titleVariants.push(a.title.english)
-            if (a.title.romaji) titleVariants.push(a.title.romaji)
-            if (a.title.native) titleVariants.push(a.title.native)
+          const tvdbEpisode = await tvdb.fetchEpisode(tvdbCreds, uniqueTitleVariants, opts.season, opts.episode);
+          if (tvdbEpisode && tvdbEpisode.episodeTitle) {
+            tvdbInfo = {
+              seriesId: tvdbEpisode.seriesId,
+              seriesName: tvdbEpisode.seriesName,
+              episodeTitle: tvdbEpisode.episodeTitle,
+              raw: tvdbEpisode.raw
+            };
+            ep = {
+              name: tvdbEpisode.episodeTitle,
+              title: tvdbEpisode.episodeTitle,
+              localized_name: tvdbEpisode.episodeTitle,
+              source: 'tvdb',
+              raw: tvdbEpisode.raw && tvdbEpisode.raw.episode ? tvdbEpisode.raw.episode : tvdbEpisode.raw
+            };
+            try { ep.tvdb = { seriesId: tvdbEpisode.seriesId, seriesName: tvdbEpisode.seriesName }; } catch (e) {}
+            try { appendLog(`META_TVDB_EP_AFTER_ANILIST q=${aniListName} epName=${String(tvdbEpisode.episodeTitle).slice(0,120)}`) } catch (e) {}
+          } else {
+            try { appendLog(`META_TVDB_EP_AFTER_ANILIST_NONE q=${aniListName}`) } catch (e) {}
           }
-          if (a && a.relations && Array.isArray(a.relations.nodes)) {
-            for (const rn of a.relations.nodes) {
-              if (rn && rn.title && rn.title.english) titleVariants.push(rn.title.english)
-              if (rn && rn.title && rn.title.romaji) titleVariants.push(rn.title.romaji)
-              if (rn && rn.title && rn.title.native) titleVariants.push(rn.title.native)
-            }
-          }
-          // fallback to raw name
-          if (!titleVariants.length && a && a.name) titleVariants.push(a.name)
-        } catch (e) { titleVariants = [(a && a.name) ? a.name : v] }
-  // normalize title variants passed to Wikipedia lookup as well
-  const wikiEp = await lookupWikipediaEpisode(titleVariants.map(normalizeSearchQuery), opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey })
-        // Only accept Wikipedia result if parent series matches intended show
-        let intendedSeries = (a && a.name) ? a.name : v
-        let wikiParentMatch = false
+        } catch (e) {
+          try { appendLog(`META_TVDB_EP_AFTER_ANILIST_ERROR q=${aniListName} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+        }
+      }
+
+      if (!ep) {
+        try {
+          const wikiEp = await lookupWikipediaEpisode(uniqueTitleVariants.map(normalizeSearchQuery), opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey });
+          const intendedSeries = aniListName;
+          let wikiParentMatch = false;
           if (wikiEp && (wikiEp.raw && (wikiEp.raw.page || wikiEp.raw.original) || wikiEp.name)) {
-            // stronger matching: use word overlap between page title / lead text and the candidate titles
             try {
-              const pageTitle = (wikiEp.raw && wikiEp.raw.page) ? String(wikiEp.raw.page) : null
-              const leadText = (wikiEp.raw && wikiEp.raw.original) ? String(wikiEp.raw.original) : ''
-              for (const tv of titleVariants) {
+              const pageTitle = (wikiEp.raw && wikiEp.raw.page) ? String(wikiEp.raw.page) : null;
+              const leadText = (wikiEp.raw && wikiEp.raw.original) ? String(wikiEp.raw.original) : '';
+              for (const tv of uniqueTitleVariants) {
                 try {
-                  const ovTitle = pageTitle ? wordOverlap(pageTitle, tv) : 0
-                  const ovLead = leadText ? wordOverlap(leadText, tv) : 0
-                  // accept if reasonable overlap
-                  if (ovTitle >= 0.45 || ovLead >= 0.45) { wikiParentMatch = true; break }
-                } catch (e) { continue }
+                  const ovTitle = pageTitle ? wordOverlap(pageTitle, tv) : 0;
+                  const ovLead = leadText ? wordOverlap(leadText, tv) : 0;
+                  if (ovTitle >= 0.45 || ovLead >= 0.45) { wikiParentMatch = true; break; }
+                } catch (e) { continue; }
               }
-              // fallback to simple substring tests as before
               if (!wikiParentMatch && pageTitle) {
-                const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim()
-                const intendedNorm = norm(intendedSeries)
-                const pageNorm = norm(pageTitle)
-                if (pageNorm && intendedNorm && (pageNorm.indexOf(intendedNorm) !== -1 || intendedNorm.indexOf(pageNorm) !== -1)) wikiParentMatch = true
+                const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
+                const intendedNorm = norm(intendedSeries);
+                const pageNorm = norm(pageTitle);
+                if (pageNorm && intendedNorm && (pageNorm.indexOf(intendedNorm) !== -1 || intendedNorm.indexOf(pageNorm) !== -1)) wikiParentMatch = true;
               }
               if (!wikiParentMatch && leadText) {
-                for (const tv of titleVariants) {
-                  try { if (String(leadText || '').toLowerCase().indexOf(String(tv||'').toLowerCase()) !== -1) { wikiParentMatch = true; break } } catch (e) {}
+                for (const tv of uniqueTitleVariants) {
+                  try { if (String(leadText || '').toLowerCase().indexOf(String(tv||'').toLowerCase()) !== -1) { wikiParentMatch = true; break; } } catch (e) {}
                 }
               }
             } catch (e) { /* best-effort */ }
           }
           if (wikiEp && wikiEp.name && wikiParentMatch) {
-          // If TMDb key present, verify with TMDb and prefer its episode title when available
-          if (apiKey) {
-            try {
-              const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
-              const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-              if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
-                const tmNameCheck = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim()
-                const wikiGood = isMeaningfulTitle(wikiEp.name)
-                // Prefer titles that contain Latin characters (English-like) when available
-                const tmHasLatin = /[A-Za-z]/.test(tmNameCheck)
-                const wikiHasLatin = /[A-Za-z]/.test(String(wikiEp.name || ''))
-                if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck) && tmHasLatin) {
-                  ep = tmEpCheck.episode
-                  try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI q=${a.name || v} tm=${tmNameCheck}`) } catch (e) {}
-                } else if (wikiGood && wikiHasLatin) {
-                  ep = { name: wikiEp.name }
-                  try { appendLog(`META_WIKIPEDIA_PREFERRED_OVER_TM_PLACEHOLDER q=${a.name || v} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
-                } else if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck)) {
-                  // accept TMDb even if non-Latin when no English-like wiki title present
-                  ep = tmEpCheck.episode
-                  try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_NONLATIN q=${a.name || v} tm=${tmNameCheck}`) } catch (e) {}
-                } else if (wikiGood) {
-                  // fallback to wiki result (may be non-Latin)
-                  ep = { name: wikiEp.name }
-                  try { appendLog(`META_WIKIPEDIA_FALLBACK_NONLATIN q=${a.name || v} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
+            if (apiKey) {
+              try {
+                const tmLookupName = strippedAniListName || aniListName || v;
+                const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null);
+                if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
+                  const tmNameCheck = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim();
+                  const wikiGood = isMeaningfulTitle(wikiEp.name);
+                  const tmHasLatin = /[A-Za-z]/.test(tmNameCheck);
+                  const wikiHasLatin = /[A-Za-z]/.test(String(wikiEp.name || ''));
+                  if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck) && tmHasLatin) {
+                    ep = tmEpCheck.episode;
+                    try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI q=${aniListName} tm=${tmNameCheck}`) } catch (e) {}
+                  } else if (wikiGood && wikiHasLatin) {
+                    ep = { name: wikiEp.name };
+                    try { appendLog(`META_WIKIPEDIA_PREFERRED_OVER_TM_PLACEHOLDER q=${aniListName} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
+                  } else if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck)) {
+                    ep = tmEpCheck.episode;
+                    try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_NONLATIN q=${aniListName} tm=${tmNameCheck}`) } catch (e) {}
+                  } else if (wikiGood) {
+                    ep = { name: wikiEp.name };
+                    try { appendLog(`META_WIKIPEDIA_FALLBACK_NONLATIN q=${aniListName} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
+                  }
+                } else {
+                  ep = { name: wikiEp.name };
+                  try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${aniListName} epName=${wikiEp.name}`) } catch (e) {}
                 }
-              } else {
-                ep = { name: wikiEp.name }
-                try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
+              } catch (e) {
+                ep = { name: wikiEp.name };
+                try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${aniListName} epName=${wikiEp.name}`) } catch (ee) {}
               }
-            } catch (e) {
-              ep = { name: wikiEp.name }
-              try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
+            } else {
+              ep = { name: wikiEp.name };
+              try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${aniListName} epName=${wikiEp.name}`) } catch (e) {}
             }
-          } else {
-            ep = { name: wikiEp.name }
-            try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${wikiEp.name}`) } catch (e) {}
+          } else if (wikiEp && wikiEp.name && !wikiParentMatch) {
+            try { appendLog(`META_WIKIPEDIA_PARENT_MISMATCH intended=${intendedSeries} gotPage=${wikiEp.raw && wikiEp.raw.page ? wikiEp.raw.page : '<none>'}`) } catch (e) {}
           }
-        } else if (wikiEp && wikiEp.name && !wikiParentMatch) {
-          try { appendLog(`META_WIKIPEDIA_PARENT_MISMATCH intended=${intendedSeries} gotPage=${wikiEp.raw && wikiEp.raw.page ? wikiEp.raw.page : '<none>'}`) } catch (e) {}
-        }
-      } catch (e) {}
+        } catch (e) {}
+      }
 
       // If Wikipedia didn't provide an episode title, try TMDb (when key available)
       if (!ep && apiKey) {
-        const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v
-        try { appendLog(`META_TMDB_EP_AFTER_ANILIST tmLookup=${tmLookupName} anilist=${a.name || v} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+        const tmLookupName = strippedAniListName || aniListName || v;
+        try { appendLog(`META_TMDB_EP_AFTER_ANILIST tmLookup=${tmLookupName} anilist=${aniListName} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
         const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
         if (tmEp && tmEp.episode) {
           const tmEpTitle = String(tmEp.episode.name || tmEp.episode.title || '').trim()
@@ -1357,13 +1388,20 @@ async function metaLookup(title, apiKey, opts = {}) {
 
       // If still no episode title, try Kitsu as a fallback
       if (!ep) {
-        if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY q=${a.name || v}`) } catch (e) {} }
-        ep = await fetchKitsuEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : v, opts && opts.episode != null ? opts.episode : null)
-        try { appendLog(`META_KITSU_EP q=${a.name || v} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
+        if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY q=${aniListName}`) } catch (e) {} }
+        ep = await fetchKitsuEpisode(strippedAniListName || aniListName || v, opts && opts.episode != null ? opts.episode : null)
+        try { appendLog(`META_KITSU_EP q=${aniListName} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
       }
 
       // capture result and break out of the loop
-      aniListResult = { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
+      const aniListRawPayload = Object.assign({}, a.raw, { id: a.id, source: 'anilist' })
+      if (tvdbInfo) {
+        try { aniListRawPayload.tvdb = { seriesId: tvdbInfo.seriesId, seriesName: tvdbInfo.seriesName } } catch (e) {}
+      }
+      aniListResult = { name: a.name, raw: aniListRawPayload, episode: ep }
+      if (tvdbInfo) {
+        try { aniListResult.tvdb = tvdbInfo } catch (e) {}
+      }
       break
     }
     if (aniListResult) return aniListResult
@@ -1383,106 +1421,170 @@ async function metaLookup(title, apiKey, opts = {}) {
         try { appendLog(`META_ANILIST_PARENT_SEARCH q=${pvars[i]} found=${a ? 'yes' : 'no'}`) } catch (e) {}
         if (!a) continue
 
-        let ep = null
-
-        // First: try Wikipedia for an episode title
+        let ep = null;
+        let tvdbInfoParent = null;
+        let titleVariantsP = [];
         try {
-          // build title variants similar to above
-          let titleVariantsP = []
+          if (a && a.title) {
+            if (a.title.english) titleVariantsP.push(a.title.english);
+            if (a.title.romaji) titleVariantsP.push(a.title.romaji);
+            if (a.title.native) titleVariantsP.push(a.title.native);
+          }
+          if (a && a.relations && Array.isArray(a.relations.nodes)) {
+            for (const rn of a.relations.nodes) {
+              if (rn && rn.title && rn.title.english) titleVariantsP.push(rn.title.english);
+              if (rn && rn.title && rn.title.romaji) titleVariantsP.push(rn.title.romaji);
+              if (rn && rn.title && rn.title.native) titleVariantsP.push(rn.title.native);
+            }
+          }
+        } catch (e) { /* best-effort */ }
+        const parentAniListName = (a && a.name) ? a.name : parentCandidate;
+        const strippedParentName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate;
+        titleVariantsP = titleVariantsP
+          .concat([parentAniListName, strippedParentName, parentCandidate, pvars[i]])
+          .map(s => String(s || '').trim())
+          .filter(Boolean);
+        if (!titleVariantsP.length) {
+          titleVariantsP = [String(parentAniListName || parentCandidate || '').trim()].filter(Boolean);
+        }
+        const uniqueTitleVariantsP = [...new Set(titleVariantsP)];
+
+        if (!ep && tvdbCreds && opts && opts.season != null && opts.episode != null) {
           try {
-            if (a && a.title) {
-              if (a.title.english) titleVariantsP.push(a.title.english)
-              if (a.title.romaji) titleVariantsP.push(a.title.romaji)
-              if (a.title.native) titleVariantsP.push(a.title.native)
-            }
-            if (a && a.relations && Array.isArray(a.relations.nodes)) {
-              for (const rn of a.relations.nodes) {
-                if (rn && rn.title && rn.title.english) titleVariantsP.push(rn.title.english)
-                if (rn && rn.title && rn.title.romaji) titleVariantsP.push(rn.title.romaji)
-                if (rn && rn.title && rn.title.native) titleVariantsP.push(rn.title.native)
-              }
-            }
-            if (!titleVariantsP.length) titleVariantsP.push((a && a.name) ? a.name : parentCandidate)
-          } catch (e) { titleVariantsP = [(a && a.name) ? a.name : parentCandidate] }
-          const wikiEp = await lookupWikipediaEpisode(titleVariantsP, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey })
-          // Only accept Wikipedia result if parent series matches intended show
-          let intendedSeries = (a && a.name) ? a.name : parentCandidate
-          let wikiParentMatch = false
-          if (wikiEp && wikiEp.raw && wikiEp.raw.page) {
-            const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g,'').trim()
-            const intendedNorm = norm(intendedSeries)
-            const pageNorm = norm(wikiEp.raw.page)
-            if (pageNorm.includes(intendedNorm) || intendedNorm.includes(pageNorm)) wikiParentMatch = true
-          }
-          if (wikiEp && wikiEp.name && wikiParentMatch) {
-            if (apiKey) {
-              try {
-                const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
-                const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-                if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
-                  const tmParentName = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim()
-                    const tmHasLatin = /[A-Za-z]/.test(tmParentName)
-                    const wikiHasLatin = /[A-Za-z]/.test(String(wikiEp.name || ''))
-                    if (isMeaningfulTitle(tmParentName) && !isPlaceholderTitle(tmParentName) && tmHasLatin) {
-                      ep = tmEpCheck.episode
-                      try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_PARENT q=${a.name || parentCandidate} tm=${tmParentName}`) } catch (e) {}
-                    } else if (wikiHasLatin && isMeaningfulTitle(wikiEp.name)) {
-                      ep = { name: wikiEp.name }
-                      try { appendLog(`META_WIKIPEDIA_PREFERRED_PARENT_LATIN q=${a.name || parentCandidate} wiki=${wikiEp.name} tm=${tmParentName}`) } catch (e) {}
-                    } else if (isMeaningfulTitle(tmParentName) && !isPlaceholderTitle(tmParentName)) {
-                      ep = tmEpCheck.episode
-                      try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_PARENT_NONLATIN q=${a.name || parentCandidate} tm=${tmParentName}`) } catch (e) {}
-                    } else {
-                      ep = { name: wikiEp.name }
-                      try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
-                    }
-                } else {
-                  ep = { name: wikiEp.name }
-                  try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
-                }
-              } catch (e) {
-                ep = { name: wikiEp.name }
-                try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
-              }
+            const tvdbEpisode = await tvdb.fetchEpisode(tvdbCreds, uniqueTitleVariantsP, opts.season, opts.episode);
+            if (tvdbEpisode && tvdbEpisode.episodeTitle) {
+              tvdbInfoParent = {
+                seriesId: tvdbEpisode.seriesId,
+                seriesName: tvdbEpisode.seriesName,
+                episodeTitle: tvdbEpisode.episodeTitle,
+                raw: tvdbEpisode.raw
+              };
+              ep = {
+                name: tvdbEpisode.episodeTitle,
+                title: tvdbEpisode.episodeTitle,
+                localized_name: tvdbEpisode.episodeTitle,
+                source: 'tvdb',
+                raw: tvdbEpisode.raw && tvdbEpisode.raw.episode ? tvdbEpisode.raw.episode : tvdbEpisode.raw
+              };
+              try { ep.tvdb = { seriesId: tvdbEpisode.seriesId, seriesName: tvdbEpisode.seriesName }; } catch (e) {}
+              try { appendLog(`META_TVDB_EP_AFTER_PARENT q=${parentAniListName} epName=${String(tvdbEpisode.episodeTitle).slice(0,120)}`) } catch (e) {}
             } else {
-              ep = { name: wikiEp.name }
-              try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${wikiEp.name}`) } catch (e) {}
+              try { appendLog(`META_TVDB_EP_AFTER_PARENT_NONE q=${parentAniListName}`) } catch (e) {}
             }
-          } else if (wikiEp && wikiEp.name && !wikiParentMatch) {
-            try { appendLog(`META_WIKIPEDIA_PARENT_MISMATCH intended=${intendedSeries} gotPage=${wikiEp.raw && wikiEp.raw.page ? wikiEp.raw.page : '<none>'}`) } catch (e) {}
+          } catch (e) {
+            try { appendLog(`META_TVDB_EP_AFTER_PARENT_ERROR q=${parentAniListName} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
           }
-        } catch (e) {}
-
-        // Second: try TMDb (if key) then Kitsu
-        try {
-          if (!ep) {
-            if (apiKey) {
-              const tmLookupName = (a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate
-              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT tmLookup=${tmLookupName} anilist=${a.name || parentCandidate} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
-              const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-              if (tmEp && tmEp.episode) {
-                ep = tmEp.episode
-                try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_OK q=${a.name || parentCandidate} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
-              } else {
-                try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_NONE q=${a.name || parentCandidate}`) } catch (e) {}
-              }
-            }
-
-            if (!ep) {
-              if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY_PARENT q=${a.name || parentCandidate}`) } catch (e) {} }
-              ep = await fetchKitsuEpisode((a && a.name) ? stripAniListSeasonSuffix(a.name, a.raw || a) : parentCandidate, opts && opts.episode != null ? opts.episode : null)
-              try { appendLog(`META_KITSU_EP_PARENT q=${a.name || parentCandidate} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
-            }
-          }
-        } catch (e) {
-          ep = null
-          try { appendLog(`META_EP_AFTER_ANILIST_PARENT_ERROR q=${a.name || parentCandidate} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
         }
 
-        // TMDb is only attempted once above when an API key is present; Kitsu remains the
-        // fallback provider for anime when TMDb did not provide episode information.
+        if (!ep) {
+          try {
+            const wikiEp = await lookupWikipediaEpisode(uniqueTitleVariantsP.map(normalizeSearchQuery), opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey });
+            const intendedSeries = parentAniListName;
+            let wikiParentMatch = false;
+            if (wikiEp && wikiEp.raw && wikiEp.raw.page) {
+              const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g,'').trim();
+              const intendedNorm = norm(intendedSeries);
+              const pageNorm = norm(wikiEp.raw.page);
+              if (pageNorm.includes(intendedNorm) || intendedNorm.includes(pageNorm)) wikiParentMatch = true;
+            }
+            if (wikiEp && wikiEp.name && wikiParentMatch) {
+              if (apiKey) {
+                try {
+                  const tmLookupName = strippedParentName || parentAniListName || parentCandidate;
+                  const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null);
+                  if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
+                    const tmParentName = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim();
+                    const tmHasLatin = /[A-Za-z]/.test(tmParentName);
+                    const wikiHasLatin = /[A-Za-z]/.test(String(wikiEp.name || ''));
+                    if (isMeaningfulTitle(tmParentName) && !isPlaceholderTitle(tmParentName) && tmHasLatin) {
+                      ep = tmEpCheck.episode;
+                      try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_PARENT q=${parentAniListName} tm=${tmParentName}`) } catch (e) {}
+                    } else if (wikiHasLatin && isMeaningfulTitle(wikiEp.name)) {
+                      ep = { name: wikiEp.name };
+                      try { appendLog(`META_WIKIPEDIA_PREFERRED_PARENT_LATIN q=${parentAniListName} wiki=${wikiEp.name} tm=${tmParentName}`) } catch (e) {}
+                    } else if (isMeaningfulTitle(tmParentName) && !isPlaceholderTitle(tmParentName)) {
+                      ep = tmEpCheck.episode;
+                      try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_PARENT_NONLATIN q=${parentAniListName} tm=${tmParentName}`) } catch (e) {}
+                    } else {
+                      ep = { name: wikiEp.name };
+                      try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${parentAniListName} epName=${wikiEp.name}`) } catch (e) {}
+                    }
+                  } else {
+                    ep = { name: wikiEp.name };
+                    try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${parentAniListName} epName=${wikiEp.name}`) } catch (e) {}
+                  }
+                } catch (e) {
+                  ep = { name: wikiEp.name };
+                  try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${parentAniListName} epName=${wikiEp.name}`) } catch (ee) {}
+                }
+              } else {
+                ep = { name: wikiEp.name };
+                try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${parentAniListName} epName=${wikiEp.name}`) } catch (e) {}
+              }
+            } else if (wikiEp && wikiEp.name && !wikiParentMatch) {
+              try { appendLog(`META_WIKIPEDIA_PARENT_MISMATCH intended=${intendedSeries} gotPage=${wikiEp.raw && wikiEp.raw.page ? wikiEp.raw.page : '<none>'}`) } catch (e) {}
+            }
+          } catch (e) {}
+        }
 
-        return { name: a.name, raw: Object.assign({}, a.raw, { id: a.id, source: 'anilist' }), episode: ep }
+        if (!ep && apiKey) {
+          const tmLookupName = strippedParentName || parentAniListName || parentCandidate;
+          try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT tmLookup=${tmLookupName} anilist=${parentAniListName} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+          try {
+            const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null);
+            if (tmEp && tmEp.episode) {
+              ep = tmEp.episode;
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_OK q=${parentAniListName} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
+            } else {
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_NONE q=${parentAniListName}`) } catch (e) {}
+            }
+          } catch (e) {
+            try { appendLog(`META_EP_AFTER_ANILIST_PARENT_ERROR q=${parentAniListName} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+          }
+        }
+
+        if (!ep) {
+          if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY_PARENT q=${parentAniListName}`) } catch (e) {} }
+          ep = await fetchKitsuEpisode(strippedParentName || parentAniListName || parentCandidate, opts && opts.episode != null ? opts.episode : null)
+          try { appendLog(`META_KITSU_EP_PARENT q=${parentAniListName} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
+        }
+
+        const parentRaw = Object.assign({}, a.raw, { id: a.id, source: 'anilist' })
+        if (tvdbInfoParent) {
+          try { parentRaw.tvdb = { seriesId: tvdbInfoParent.seriesId, seriesName: tvdbInfoParent.seriesName } } catch (e) {}
+        }
+        const parentRes = { name: a.name, raw: parentRaw, episode: ep }
+        if (tvdbInfoParent) {
+          try { parentRes.tvdb = tvdbInfoParent } catch (e) {}
+        }
+        return parentRes
+      }
+    }
+
+    // When AniList lookups fail entirely, attempt a direct TVDB lookup before falling back to TMDb.
+    if (tvdbCreds && opts && opts.season != null && opts.episode != null) {
+      try {
+        const fallbackCandidates = [...new Set(variants.concat(parentCandidate ? [parentCandidate] : []).map(s => String(s || '').trim()).filter(Boolean))]
+        if (fallbackCandidates.length) {
+          const tvdbFallback = await tvdb.fetchEpisode(tvdbCreds, fallbackCandidates, opts.season, opts.episode)
+          if (tvdbFallback && tvdbFallback.episodeTitle) {
+            const providerRaw = { source: 'tvdb', id: tvdbFallback.seriesId, seriesName: tvdbFallback.seriesName, raw: tvdbFallback.raw }
+            const episodeObj = {
+              name: tvdbFallback.episodeTitle,
+              title: tvdbFallback.episodeTitle,
+              localized_name: tvdbFallback.episodeTitle,
+              source: 'tvdb',
+              raw: tvdbFallback.raw && tvdbFallback.raw.episode ? tvdbFallback.raw.episode : tvdbFallback.raw
+            }
+            const tvdbRes = { name: tvdbFallback.seriesName || fallbackCandidates[0], raw: providerRaw, episode: episodeObj, tvdb: tvdbFallback }
+            try { appendLog(`META_TVDB_FALLBACK q=${fallbackCandidates[0]} epName=${String(tvdbFallback.episodeTitle).slice(0,120)}`) } catch (e) {}
+            return tvdbRes
+          } else {
+            try { appendLog(`META_TVDB_FALLBACK_NONE candidates=${fallbackCandidates.slice(0,3).join('|')}`) } catch (e) {}
+          }
+        }
+      } catch (e) {
+        try { appendLog(`META_TVDB_FALLBACK_ERROR err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
       }
     }
 
@@ -1649,6 +1751,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   try { console.log('DEBUG: externalEnrich parsed guess=', JSON.stringify(guess)); } catch (e) {}
 
   const tmdbKey = providedKey || (users && users.admin && users.admin.settings && users.admin.settings.tmdb_api_key) || (serverSettings && serverSettings.tmdb_api_key)
+  const tvdbCredentials = resolveTvdbCredentials(opts && opts.username ? opts.username : null, opts && opts.tvdbOverride ? opts.tvdbOverride : null)
   // determine username (if provided) so we can honor per-user default provider and track fallback counts
   const username = opts && opts.username ? opts.username : null
   // determine preferred provider: per-user -> server -> default to 'tmdb'
@@ -1709,6 +1812,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // keep the parsed episode/season locally so the UI and hardlink names still
   // reflect the filename-derived numbers.
   const metaOpts = { year: parsed.year, preferredProvider, parsedEpisodeTitle: episodeTitle, parentCandidate: parentCandidate, parentPath, force: (opts && opts.force) ? true : false };
+  if (opts && opts.tvdbOverride) metaOpts.tvdbOverride = opts.tvdbOverride;
   // include requesting username so metaLookup may use per-user keys
   if (opts && opts.username) metaOpts.username = opts.username
   if (!isSpecialCandidate) {
@@ -1868,6 +1972,45 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     providerResult = res;
   }
 
+    if (tvdbCredentials && normSeason != null && normEpisode != null) {
+      try {
+        let tvdbHit = null
+        if (providerResult && providerResult.tvdb && providerResult.tvdb.episodeTitle) {
+          tvdbHit = providerResult.tvdb
+          try { appendLog(`META_TVDB_OVERRIDE_REUSE path=${canonicalPath} ep=${String(tvdbHit.episodeTitle).slice(0,200)}`) } catch (e) {}
+        } else {
+          const tvdbTitles = []
+          if (providerResult && providerResult.name) tvdbTitles.push(providerResult.name)
+          if (guess && guess.title) tvdbTitles.push(guess.title)
+          if (seriesName) tvdbTitles.push(seriesName)
+          if (parentCandidate) tvdbTitles.push(parentCandidate)
+          if (seriesLookupTitle) tvdbTitles.push(seriesLookupTitle)
+          const uniqueTitles = [...new Set(tvdbTitles.filter(Boolean))]
+          tvdbHit = await tvdb.fetchEpisode(tvdbCredentials, uniqueTitles, normSeason, normEpisode)
+        }
+        if (tvdbHit && tvdbHit.episodeTitle) {
+          guess.episodeTitle = tvdbHit.episodeTitle
+          guess.provider = {
+            matched: true,
+            provider: 'tvdb',
+            id: tvdbHit.seriesId,
+            title: tvdbHit.seriesName || guess.title,
+            season: normSeason,
+            episode: normEpisode,
+            episodeTitle: tvdbHit.episodeTitle,
+            raw: tvdbHit.raw
+          }
+          guess.tvdb = { matched: true, id: tvdbHit.seriesId, raw: tvdbHit.raw }
+          if (guess.tmdb && guess.tmdb.matched) guess.tmdb.matched = false
+          guess.providerFailure = null
+          clearProviderFailure(key)
+          try { appendLog(`META_TVDB_OVERRIDE path=${canonicalPath} ep=${String(tvdbHit.episodeTitle).slice(0,200)}`) } catch (e) {}
+        }
+      } catch (e) {
+        try { appendLog(`META_TVDB_OVERRIDE_FAIL path=${canonicalPath} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+      }
+    }
+
   if (attemptedProvider) {
     if (providerResult && providerResult.name) {
       guess.providerFailure = null;
@@ -1963,6 +2106,36 @@ function renderProviderName(data, key, session) {
 }
 
 // Centralized parsed item processing used by scans: parse filename, update parsedCache & enrichCache
+function resolveTvdbCredentials(username, override) {
+  try {
+    if (override && override.apiKey && override.username && override.userKey) {
+      return {
+        apiKey: String(override.apiKey).trim(),
+        username: String(override.username).trim(),
+        userKey: String(override.userKey).trim()
+      }
+    }
+    if (username && users[username] && users[username].settings) {
+      const settings = users[username].settings
+      if (settings.tvdb_api_key && settings.tvdb_username && settings.tvdb_user_key) {
+        return {
+          apiKey: String(settings.tvdb_api_key).trim(),
+          username: String(settings.tvdb_username).trim(),
+          userKey: String(settings.tvdb_user_key).trim()
+        }
+      }
+    }
+    if (serverSettings && serverSettings.tvdb_api_key && serverSettings.tvdb_username && serverSettings.tvdb_user_key) {
+      return {
+        apiKey: String(serverSettings.tvdb_api_key).trim(),
+        username: String(serverSettings.tvdb_username).trim(),
+        userKey: String(serverSettings.tvdb_user_key).trim()
+      }
+    }
+  } catch (e) { /* ignore */ }
+  return null
+}
+
 function doProcessParsedItem(it, session) {
   try {
     const parseFilename = require('./lib/filename-parser');
@@ -2609,7 +2782,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_output_path', 'rename_template', 'default_meta_provider'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_output_path', 'rename_template', 'default_meta_provider', 'tvdb_api_key', 'tvdb_username', 'tvdb_user_key'];
       for (const k of allowed) if (body[k] !== undefined) serverSettings[k] = body[k];
       writeJson(settingsFile, serverSettings);
       appendLog(`SETTINGS_SAVED_GLOBAL by=${username} keys=${Object.keys(body).join(',')}`);
@@ -2620,7 +2793,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'tvdb_api_key', 'tvdb_username', 'tvdb_user_key'];
     for (const k of allowed) { if (body[k] !== undefined) users[username].settings[k] = body[k]; }
     writeJson(usersFile, users);
     appendLog(`SETTINGS_SAVED_USER user=${username} keys=${Object.keys(body).join(',')}`);
@@ -2642,7 +2815,7 @@ app.post('/api/scan/force', requireAdmin, (req, res) => {
 app.get('/api/path/exists', (req, res) => { const p = req.query.path || ''; try { const rp = path.resolve(p); const exists = fs.existsSync(rp); const stat = exists ? fs.statSync(rp) : null; res.json({ exists, isDirectory: stat ? stat.isDirectory() : false, resolved: rp }); } catch (err) { res.json({ exists: false, isDirectory: false, error: err.message }); } });
 
 app.post('/api/enrich', async (req, res) => {
-  const { path: p, tmdb_api_key: tmdb_override, force } = req.body;
+  const { path: p, tmdb_api_key: tmdb_override, force, tvdb_api_key: tvdb_override_key, tvdb_username: tvdb_override_username, tvdb_user_key: tvdb_override_user_key } = req.body;
   const key = canonicalize(p || '');
   appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'}`);
   try {
@@ -2693,7 +2866,10 @@ app.post('/api/enrich', async (req, res) => {
       else if (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.tmdb_api_key) tmdbKey = users[req.session.username].settings.tmdb_api_key;
       else if (serverSettings && serverSettings.tmdb_api_key) tmdbKey = serverSettings.tmdb_api_key;
     } catch (e) { tmdbKey = null }
-    const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username });
+    const tvdbOverride = (tvdb_override_key && tvdb_override_username && tvdb_override_user_key)
+      ? { apiKey: tvdb_override_key, username: tvdb_override_username, userKey: tvdb_override_user_key }
+      : null;
+    const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username, tvdbOverride });
     // Use centralized renderer and updater so rendering logic is consistent
     try {
       if (data && data.title) {

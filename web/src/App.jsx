@@ -621,10 +621,16 @@ export default function App() {
   // fetch server-side settings so client and server agree on configured output path
   useEffect(() => {
     axios.get(API('/settings')).then(r => {
-      const s = r.data || {}
-      // hydrate local storage-backed state if empty (keep backward-compatible tvdb_api_key storage)
-  try { if (!localStorage.getItem('tvdb_api_key') && s.tvdb_api_key) localStorage.setItem('tvdb_api_key', s.tvdb_api_key) } catch {}
-      try { if (!localStorage.getItem('rename_template') && s.userSettings && s.userSettings.rename_template) localStorage.setItem('rename_template', s.userSettings.rename_template) } catch {}
+      const payload = r.data || {}
+      const userSettings = payload.userSettings || {}
+      const serverSettings = payload.serverSettings || {}
+      const tmdbSource = userSettings.tmdb_api_key ? userSettings : serverSettings
+      try { if (!localStorage.getItem('tvdb_api_key') && tmdbSource.tmdb_api_key) localStorage.setItem('tvdb_api_key', tmdbSource.tmdb_api_key) } catch {}
+      const tvdbSource = (userSettings.tvdb_api_key && userSettings.tvdb_username && userSettings.tvdb_user_key) ? userSettings : serverSettings
+      try { if (!localStorage.getItem('tvdb_credentials_api_key') && tvdbSource.tvdb_api_key) localStorage.setItem('tvdb_credentials_api_key', tvdbSource.tvdb_api_key) } catch {}
+      try { if (!localStorage.getItem('tvdb_username') && tvdbSource.tvdb_username) localStorage.setItem('tvdb_username', tvdbSource.tvdb_username) } catch {}
+      try { if (!localStorage.getItem('tvdb_user_key') && tvdbSource.tvdb_user_key) localStorage.setItem('tvdb_user_key', tvdbSource.tvdb_user_key) } catch {}
+      try { if (!localStorage.getItem('rename_template') && userSettings.rename_template) localStorage.setItem('rename_template', userSettings.rename_template) } catch {}
     }).catch(()=>{})
   }, [])
 
