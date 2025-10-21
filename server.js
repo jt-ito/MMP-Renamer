@@ -2174,33 +2174,34 @@ function renderProviderName(data, key, session) {
 
 // Centralized parsed item processing used by scans: parse filename, update parsedCache & enrichCache
 function resolveTvdbCredentials(username, override) {
+  const hasValue = (value) => value !== undefined && value !== null && String(value).trim().length > 0;
+  const normalize = (value) => String(value || '').trim();
+
+  const extract = (source) => {
+    if (!source) return null;
+    const apiKey = source.tvdb_v4_api_key ?? source.tvdbV4ApiKey ?? source.v4ApiKey;
+    if (!hasValue(apiKey)) return null;
+    const userPinRaw = source.tvdb_v4_user_pin ?? source.tvdbV4UserPin ?? source.v4UserPin ?? null;
+    return {
+      mode: 'v4',
+      apiKey: normalize(apiKey),
+      userPin: hasValue(userPinRaw) ? normalize(userPinRaw) : null
+    };
+  };
+
   try {
-    if (override && override.apiKey && override.username && override.userKey) {
-      return {
-        apiKey: String(override.apiKey).trim(),
-        username: String(override.username).trim(),
-        userKey: String(override.userKey).trim()
-      }
-    }
+    const fromOverride = extract(override);
+    if (fromOverride) return fromOverride;
+
     if (username && users[username] && users[username].settings) {
-      const settings = users[username].settings
-      if (settings.tvdb_api_key && settings.tvdb_username && settings.tvdb_user_key) {
-        return {
-          apiKey: String(settings.tvdb_api_key).trim(),
-          username: String(settings.tvdb_username).trim(),
-          userKey: String(settings.tvdb_user_key).trim()
-        }
-      }
+      const fromUser = extract(users[username].settings);
+      if (fromUser) return fromUser;
     }
-    if (serverSettings && serverSettings.tvdb_api_key && serverSettings.tvdb_username && serverSettings.tvdb_user_key) {
-      return {
-        apiKey: String(serverSettings.tvdb_api_key).trim(),
-        username: String(serverSettings.tvdb_username).trim(),
-        userKey: String(serverSettings.tvdb_user_key).trim()
-      }
-    }
+
+    const fromServer = extract(serverSettings);
+    if (fromServer) return fromServer;
   } catch (e) { /* ignore */ }
-  return null
+  return null;
 }
 
 function doProcessParsedItem(it, session) {
@@ -2344,14 +2345,54 @@ app.get('/api/meta/status', (req, res) => {
     const serverMask = serverKey ? (serverKey.slice(0,6) + '...' + serverKey.slice(-4)) : null
     let userKey = null
     let userAnilistKey = null
-  try { const u = req.session && req.session.username && users[req.session.username]; if (u && u.settings && u.settings.tmdb_api_key) userKey = String(u.settings.tmdb_api_key) } catch (e) {}
-  try { const u = req.session && req.session.username && users[req.session.username]; if (u && u.settings && u.settings.anilist_api_key) userAnilistKey = String(u.settings.anilist_api_key) } catch (e) {}
+    let userTvdbV4 = false
+    try {
+      const u = req.session && req.session.username && users[req.session.username]
+      if (u && u.settings && u.settings.tmdb_api_key) userKey = String(u.settings.tmdb_api_key)
+      if (u && u.settings && u.settings.anilist_api_key) userAnilistKey = String(u.settings.anilist_api_key)
+      if (u && u.settings) {
+        userTvdbV4 = !!u.settings.tvdb_v4_api_key
+      }
+    } catch (e) {}
     const userMask = userKey ? (userKey.slice(0,6) + '...' + userKey.slice(-4)) : null
     const userAnilistMask = userAnilistKey ? (userAnilistKey.slice(0,6) + '...' + userAnilistKey.slice(-4)) : null
+    const serverTvdbV4 = !!(serverSettings && serverSettings.tvdb_v4_api_key)
+    const serverTvdbV4Mask = serverSettings && serverSettings.tvdb_v4_api_key ? (String(serverSettings.tvdb_v4_api_key).slice(0,6) + '...' + String(serverSettings.tvdb_v4_api_key).slice(-4)) : null
+    let userTvdbV4MaskVal = null
+    if (userTvdbV4) {
+      try {
+        const u = req.session && req.session.username && users[req.session.username]
+        if (u && u.settings && u.settings.tvdb_v4_api_key) {
+          const raw = String(u.settings.tvdb_v4_api_key)
+          userTvdbV4MaskVal = raw.slice(0,6) + '...' + raw.slice(-4)
+        }
+      } catch (e) { userTvdbV4MaskVal = null }
+    }
   // recent META_LOOKUP logs (TMDb attempts and lookup requests)
   let recent = ''
-  try { recent = fs.readFileSync(logsFile, 'utf8').split('\n').filter(l => l.indexOf('META_LOOKUP_REQUEST') !== -1 || l.indexOf('META_TMDB_SEARCH') !== -1 || l.indexOf('META_TMDB_ATTEMPT') !== -1 || l.indexOf('META_ANILIST_SEARCH') !== -1).slice(-200).join('\n') } catch (e) { recent = '' }
-    res.json({ serverKeyPresent: !!serverKey, userKeyPresent: !!userKey, serverKeyMask: serverMask, userKeyMask: userMask, serverAnilistPresent: !!serverAnilistKey, userAnilistPresent: !!userAnilistKey, serverAnilistMask: serverAnilistKey ? (serverAnilistKey.slice(0,6) + '...' + serverAnilistKey.slice(-4)) : null, userAnilistMask: userAnilistMask, logs: recent })
+    const relevantTokens = ['META_LOOKUP_REQUEST', 'META_TMDB_SEARCH', 'META_TMDB_ATTEMPT', 'META_ANILIST_SEARCH', 'TVDB_']
+    try {
+      recent = fs.readFileSync(logsFile, 'utf8').split('\n').filter(l => {
+        if (!l) return false
+        for (const token of relevantTokens) if (l.indexOf(token) !== -1) return true
+        return false
+      }).slice(-200).join('\n')
+    } catch (e) { recent = '' }
+    res.json({
+      serverKeyPresent: !!serverKey,
+      userKeyPresent: !!userKey,
+      serverKeyMask: serverMask,
+      userKeyMask: userMask,
+      serverAnilistPresent: !!serverAnilistKey,
+      userAnilistPresent: !!userAnilistKey,
+      serverAnilistMask: serverAnilistKey ? (serverAnilistKey.slice(0,6) + '...' + serverAnilistKey.slice(-4)) : null,
+      userAnilistMask,
+      serverTvdbV4Present: serverTvdbV4,
+  userTvdbV4Present: userTvdbV4,
+  serverTvdbV4Mask,
+  userTvdbV4Mask: userTvdbV4MaskVal,
+      logs: recent
+    })
   } catch (e) { res.json({ error: e.message }) }
 })
 
@@ -2849,7 +2890,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_output_path', 'rename_template', 'default_meta_provider', 'tvdb_api_key', 'tvdb_username', 'tvdb_user_key'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_output_path', 'rename_template', 'default_meta_provider', 'tvdb_v4_api_key', 'tvdb_v4_user_pin'];
       for (const k of allowed) if (body[k] !== undefined) serverSettings[k] = body[k];
       writeJson(settingsFile, serverSettings);
       appendLog(`SETTINGS_SAVED_GLOBAL by=${username} keys=${Object.keys(body).join(',')}`);
@@ -2860,7 +2901,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'tvdb_api_key', 'tvdb_username', 'tvdb_user_key'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'tvdb_v4_api_key', 'tvdb_v4_user_pin'];
     for (const k of allowed) { if (body[k] !== undefined) users[username].settings[k] = body[k]; }
     writeJson(usersFile, users);
     appendLog(`SETTINGS_SAVED_USER user=${username} keys=${Object.keys(body).join(',')}`);
@@ -2882,7 +2923,7 @@ app.post('/api/scan/force', requireAdmin, (req, res) => {
 app.get('/api/path/exists', (req, res) => { const p = req.query.path || ''; try { const rp = path.resolve(p); const exists = fs.existsSync(rp); const stat = exists ? fs.statSync(rp) : null; res.json({ exists, isDirectory: stat ? stat.isDirectory() : false, resolved: rp }); } catch (err) { res.json({ exists: false, isDirectory: false, error: err.message }); } });
 
 app.post('/api/enrich', async (req, res) => {
-  const { path: p, tmdb_api_key: tmdb_override, force, tvdb_api_key: tvdb_override_key, tvdb_username: tvdb_override_username, tvdb_user_key: tvdb_override_user_key } = req.body;
+  const { path: p, tmdb_api_key: tmdb_override, force, tvdb_v4_api_key: tvdb_override_v4_api_key, tvdb_v4_user_pin: tvdb_override_v4_user_pin } = req.body;
   const key = canonicalize(p || '');
   appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'}`);
   try {
@@ -2933,8 +2974,8 @@ app.post('/api/enrich', async (req, res) => {
       else if (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.tmdb_api_key) tmdbKey = users[req.session.username].settings.tmdb_api_key;
       else if (serverSettings && serverSettings.tmdb_api_key) tmdbKey = serverSettings.tmdb_api_key;
     } catch (e) { tmdbKey = null }
-    const tvdbOverride = (tvdb_override_key && tvdb_override_username && tvdb_override_user_key)
-      ? { apiKey: tvdb_override_key, username: tvdb_override_username, userKey: tvdb_override_user_key }
+    const tvdbOverride = (tvdb_override_v4_api_key || tvdb_override_v4_user_pin)
+      ? { v4ApiKey: tvdb_override_v4_api_key || '', v4UserPin: tvdb_override_v4_user_pin || null }
       : null;
     const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username, tvdbOverride });
     // Use centralized renderer and updater so rendering logic is consistent

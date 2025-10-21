@@ -37,15 +37,14 @@ export default function Settings({ pushToast }){
   // keys: tmdb for TMDb (keep backward compatibility with tvdb_api_key)
   const [tmdbKey, setTmdbKey] = useState('')
   const [anilistKey, setAnilistKey] = useState('')
-  const [tvdbApiKey, setTvdbApiKey] = useState('')
-  const [tvdbUsername, setTvdbUsername] = useState('')
-  const [tvdbUserKey, setTvdbUserKey] = useState('')
+  const [tvdbV4ApiKey, setTvdbV4ApiKey] = useState('')
+  const [tvdbV4UserPin, setTvdbV4UserPin] = useState('')
   const [defaultProvider, setDefaultProvider] = useState('tmdb')
   const [renameTemplate, setRenameTemplate] = useState('{title} - {epLabel} - {episodeTitle}')
   const [showTmdbKey, setShowTmdbKey] = useState(false)
   const [showAnilistKey, setShowAnilistKey] = useState(false)
-  const [showTvdbApiKey, setShowTvdbApiKey] = useState(false)
-  const [showTvdbUserKey, setShowTvdbUserKey] = useState(false)
+  const [showTvdbV4ApiKey, setShowTvdbV4ApiKey] = useState(false)
+  const [showTvdbV4UserPin, setShowTvdbV4UserPin] = useState(false)
   const [inputPath, setInputPath] = useState('')
   const [outputPath, setOutputPath] = useState('')
   const [dirty, setDirty] = useState(false)
@@ -58,9 +57,8 @@ export default function Settings({ pushToast }){
         if (user) {
           setTmdbKey(user.tmdb_api_key || user.tvdb_api_key || '')
           setAnilistKey(user.anilist_api_key || '')
-          setTvdbApiKey(user.tvdb_api_key || '')
-          setTvdbUsername(user.tvdb_username || '')
-          setTvdbUserKey(user.tvdb_user_key || '')
+          setTvdbV4ApiKey(user.tvdb_v4_api_key || '')
+          setTvdbV4UserPin(user.tvdb_v4_user_pin || '')
           setDefaultProvider(user.default_meta_provider || 'tmdb')
           setRenameTemplate(user.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}')
           setInputPath(user.scan_input_path || '')
@@ -72,17 +70,15 @@ export default function Settings({ pushToast }){
         const server = (r.data && r.data.serverSettings) ? r.data.serverSettings : {}
         const v = server.tmdb_api_key || localStorage.getItem('tmdb_api_key') || localStorage.getItem('tvdb_api_key') || ''
         const a = server.anilist_api_key || localStorage.getItem('anilist_api_key') || ''
-        const tvKey = server.tvdb_api_key || localStorage.getItem('tvdb_credentials_api_key') || localStorage.getItem('tvdb_api_key') || ''
-        const tvUser = server.tvdb_username || localStorage.getItem('tvdb_username') || ''
-        const tvUserKey = server.tvdb_user_key || localStorage.getItem('tvdb_user_key') || ''
+        const tvV4Key = server.tvdb_v4_api_key || localStorage.getItem('tvdb_v4_api_key') || ''
+        const tvV4Pin = server.tvdb_v4_user_pin || localStorage.getItem('tvdb_v4_user_pin') || ''
         const inp = localStorage.getItem('scan_input_path') || ''
         const out = localStorage.getItem('scan_output_path') || ''
         const dp = localStorage.getItem('default_meta_provider') || 'tmdb'
         setTmdbKey(v)
         setAnilistKey(a)
-        setTvdbApiKey(tvKey)
-        setTvdbUsername(tvUser)
-        setTvdbUserKey(tvUserKey)
+        setTvdbV4ApiKey(tvV4Key)
+        setTvdbV4UserPin(tvV4Pin)
         setInputPath(inp)
         setOutputPath(out)
         setDefaultProvider(dp)
@@ -91,17 +87,15 @@ export default function Settings({ pushToast }){
       try {
         const v = localStorage.getItem('tmdb_api_key') || localStorage.getItem('tvdb_api_key') || ''
         const a = localStorage.getItem('anilist_api_key') || ''
-        const tvKey = localStorage.getItem('tvdb_credentials_api_key') || localStorage.getItem('tvdb_api_key') || ''
-        const tvUser = localStorage.getItem('tvdb_username') || ''
-        const tvUserKey = localStorage.getItem('tvdb_user_key') || ''
+        const tvV4Key = localStorage.getItem('tvdb_v4_api_key') || ''
+        const tvV4Pin = localStorage.getItem('tvdb_v4_user_pin') || ''
         const inp = localStorage.getItem('scan_input_path') || ''
         const out = localStorage.getItem('scan_output_path') || ''
         const dp = localStorage.getItem('default_meta_provider') || 'tmdb'
         setTmdbKey(v)
         setAnilistKey(a)
-        setTvdbApiKey(tvKey)
-        setTvdbUsername(tvUser)
-        setTvdbUserKey(tvUserKey)
+        setTvdbV4ApiKey(tvV4Key)
+        setTvdbV4UserPin(tvV4Pin)
         setInputPath(inp)
         setOutputPath(out)
         setDefaultProvider(dp)
@@ -128,11 +122,10 @@ export default function Settings({ pushToast }){
   function save(){
     try {
       // save locally as fallback (tmdb)
-    try { localStorage.setItem('tmdb_api_key', tmdbKey); localStorage.setItem('tvdb_api_key', tmdbKey) } catch (e) {}
-    try { localStorage.setItem('anilist_api_key', anilistKey) } catch (e) {}
-    try { localStorage.setItem('tvdb_credentials_api_key', tvdbApiKey) } catch (e) {}
-    try { localStorage.setItem('tvdb_username', tvdbUsername) } catch (e) {}
-    try { localStorage.setItem('tvdb_user_key', tvdbUserKey) } catch (e) {}
+      try { localStorage.setItem('tmdb_api_key', tmdbKey); localStorage.setItem('tvdb_api_key', tmdbKey) } catch (e) {}
+      try { localStorage.setItem('anilist_api_key', anilistKey) } catch (e) {}
+      try { localStorage.setItem('tvdb_v4_api_key', tvdbV4ApiKey) } catch (e) {}
+      try { localStorage.setItem('tvdb_v4_user_pin', tvdbV4UserPin) } catch (e) {}
       try { localStorage.setItem('default_meta_provider', defaultProvider) } catch (e) {}
       localStorage.setItem('rename_template', renameTemplate)
       localStorage.setItem('scan_input_path', inputPath)
@@ -141,9 +134,8 @@ export default function Settings({ pushToast }){
       axios.post(API('/settings'), {
         tmdb_api_key: tmdbKey,
         anilist_api_key: anilistKey,
-        tvdb_api_key: tvdbApiKey,
-        tvdb_username: tvdbUsername,
-        tvdb_user_key: tvdbUserKey,
+        tvdb_v4_api_key: tvdbV4ApiKey,
+        tvdb_v4_user_pin: tvdbV4UserPin,
         default_meta_provider: defaultProvider,
         scan_input_path: inputPath,
         scan_output_path: outputPath,
@@ -158,24 +150,22 @@ export default function Settings({ pushToast }){
     try {
       setTmdbKey('')
       setAnilistKey('')
-      setTvdbApiKey('')
-      setTvdbUsername('')
-      setTvdbUserKey('')
-  setDefaultProvider('tmdb')
-  setRenameTemplate('{title} - {epLabel} - {episodeTitle}')
+      setTvdbV4ApiKey('')
+      setTvdbV4UserPin('')
+      setDefaultProvider('tmdb')
+      setRenameTemplate('{title} - {epLabel} - {episodeTitle}')
       setInputPath('')
       setOutputPath('')
       localStorage.removeItem('tmdb_api_key')
-      localStorage.removeItem('tvdb_api_key')
       localStorage.removeItem('anilist_api_key')
-      localStorage.removeItem('tvdb_credentials_api_key')
-      localStorage.removeItem('tvdb_username')
-      localStorage.removeItem('tvdb_user_key')
+      localStorage.removeItem('tvdb_api_key')
+      localStorage.removeItem('tvdb_v4_api_key')
+      localStorage.removeItem('tvdb_v4_user_pin')
       localStorage.removeItem('default_meta_provider')
       localStorage.removeItem('scan_input_path')
       localStorage.removeItem('scan_output_path')
-  localStorage.setItem('rename_template', '{title} - {epLabel} - {episodeTitle}')
-  axios.post(API('/settings'), { tmdb_api_key: '', anilist_api_key: '', default_meta_provider: 'tmdb', tvdb_api_key: '', tvdb_username: '', tvdb_user_key: '', scan_input_path: '', scan_output_path: '', rename_template: '{title} - {epLabel} - {episodeTitle}' }).catch(()=>{})
+      localStorage.setItem('rename_template', '{title} - {epLabel} - {episodeTitle}')
+      axios.post(API('/settings'), { tmdb_api_key: '', anilist_api_key: '', default_meta_provider: 'tmdb', tvdb_v4_api_key: '', tvdb_v4_user_pin: '', scan_input_path: '', scan_output_path: '', rename_template: '{title} - {epLabel} - {episodeTitle}' }).catch(()=>{})
       setDirty(false)
       pushToast && pushToast('Settings', 'Cleared')
     } catch (e) { pushToast && pushToast('Error', 'Failed to clear') }
@@ -212,43 +202,28 @@ export default function Settings({ pushToast }){
         </div>
 
         <div style={{marginTop:12}}>
-          <label style={{fontSize:13, color:'var(--muted)'}}>TVDB Credentials</label>
+          <label style={{fontSize:13, color:'var(--muted)'}}>TVDB v4 Credentials</label>
           <div style={{display:'flex', gap:8, marginTop:6}}>
             <input
-              type={showTvdbApiKey ? 'text' : 'password'}
-              value={tvdbApiKey}
-              onChange={e=>{ setTvdbApiKey(e.target.value); setDirty(true) }}
-              placeholder="TVDB API key"
+              type={showTvdbV4ApiKey ? 'text' : 'password'}
+              value={tvdbV4ApiKey}
+              onChange={e=>{ setTvdbV4ApiKey(e.target.value); setDirty(true) }}
+              placeholder="Project API key"
               style={{flex:1, padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
             />
-            <button className="btn-ghost" onClick={() => setShowTvdbApiKey(s => !s)}>{showTvdbApiKey ? 'Hide' : 'Show'}</button>
+            <button className="btn-ghost" onClick={() => setShowTvdbV4ApiKey(s => !s)}>{showTvdbV4ApiKey ? 'Hide' : 'Show'}</button>
           </div>
-          <div style={{display:'flex', flexDirection:'column', gap:10, marginTop:10}}>
-            <div>
-              <label style={{fontSize:13, color:'var(--muted)'}}>TVDB Username</label>
-              <input
-                type="text"
-                value={tvdbUsername}
-                onChange={e=>{ setTvdbUsername(e.target.value); setDirty(true) }}
-                placeholder="TVDB account username"
-                style={{width:'100%', marginTop:6, padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
-              />
-            </div>
-            <div>
-              <label style={{fontSize:13, color:'var(--muted)'}}>TVDB User Key</label>
-              <div style={{display:'flex', gap:8, marginTop:6}}>
-                <input
-                  type={showTvdbUserKey ? 'text' : 'password'}
-                  value={tvdbUserKey}
-                  onChange={e=>{ setTvdbUserKey(e.target.value); setDirty(true) }}
-                  placeholder="TVDB user key"
-                  style={{flex:1, padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
-                />
-                <button className="btn-ghost" onClick={() => setShowTvdbUserKey(s => !s)}>{showTvdbUserKey ? 'Hide' : 'Show'}</button>
-              </div>
-            </div>
+          <div style={{display:'flex', gap:8, marginTop:10}}>
+            <input
+              type={showTvdbV4UserPin ? 'text' : 'password'}
+              value={tvdbV4UserPin}
+              onChange={e=>{ setTvdbV4UserPin(e.target.value); setDirty(true) }}
+              placeholder="User PIN (optional)"
+              style={{flex:1, padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
+            />
+            <button className="btn-ghost" onClick={() => setShowTvdbV4UserPin(s => !s)}>{showTvdbV4UserPin ? 'Hide' : 'Show'}</button>
           </div>
-          <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>TVDB requires all three values (API key, username, user key) to authenticate. Supplying them lets the server refresh tokens automatically whenever a lookup needs TVDB data.</div>
+          <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>Use theTVDB project API key and optional user PIN from your v4 account dashboard. Tokens automatically refresh once these values are set.</div>
         </div>
 
         <div style={{marginTop:12}}>
