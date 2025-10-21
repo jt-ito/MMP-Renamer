@@ -2035,6 +2035,27 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
           guess.providerFailure = null
           clearProviderFailure(key)
           try { appendLog(`META_TVDB_OVERRIDE path=${canonicalPath} ep=${String(tvdbHit.episodeTitle).slice(0,200)}`) } catch (e) {}
+          try {
+            const safe = (val) => {
+              return String(val == null ? '' : val)
+                .replace(/[\r\n]+/g, ' ')
+                .replace(/[^\x20-\x7E]/g, '?')
+                .slice(0, 200);
+            }
+            const safeJson = (obj) => {
+              try {
+                if (!obj) return ''
+                return safe(JSON.stringify(obj))
+              } catch (e) { return '' }
+            }
+            const seriesInfo = tvdbHit && tvdbHit.raw ? safeJson(tvdbHit.raw.series) : ''
+            const episodeInfo = tvdbHit && tvdbHit.raw ? safeJson(tvdbHit.raw.episode) : ''
+            appendLog(
+              `META_TVDB_OVERRIDE_DETAIL path=${canonicalPath} seriesId=${tvdbHit.seriesId || '<none>'} seriesName=${safe(tvdbHit.seriesName || '')} episodeTitle=${safe(tvdbHit.episodeTitle || '')} season=${normSeason != null ? normSeason : '<none>'} episode=${normEpisode != null ? normEpisode : '<none>'} rawSeries=${seriesInfo} rawEpisode=${episodeInfo}`
+            )
+          } catch (logErr) {
+            try { console.log('DEBUG: META_TVDB_OVERRIDE_DETAIL failed', logErr && logErr.message ? logErr.message : logErr) } catch (ee) {}
+          }
         }
       } catch (e) {
         try { appendLog(`META_TVDB_OVERRIDE_FAIL path=${canonicalPath} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
