@@ -1262,7 +1262,11 @@ async function metaLookup(title, apiKey, opts = {}) {
 
       if (!ep && tvdbCreds && opts && opts.season != null && opts.episode != null) {
         try {
-          const tvdbEpisode = await tvdb.fetchEpisode(tvdbCreds, uniqueTitleVariants, opts.season, opts.episode);
+          const tvdbEpisode = await tvdb.fetchEpisode(tvdbCreds, uniqueTitleVariants, opts.season, opts.episode, {
+            log: (line) => {
+              try { appendLog(line) } catch (e) {}
+            }
+          });
           if (tvdbEpisode && tvdbEpisode.episodeTitle) {
             tvdbInfo = {
               seriesId: tvdbEpisode.seriesId,
@@ -1460,7 +1464,11 @@ async function metaLookup(title, apiKey, opts = {}) {
 
         if (!ep && tvdbCreds && opts && opts.season != null && opts.episode != null) {
           try {
-            const tvdbEpisode = await tvdb.fetchEpisode(tvdbCreds, uniqueTitleVariantsP, opts.season, opts.episode);
+            const tvdbEpisode = await tvdb.fetchEpisode(tvdbCreds, uniqueTitleVariantsP, opts.season, opts.episode, {
+              log: (line) => {
+                try { appendLog(line) } catch (e) {}
+              }
+            });
             if (tvdbEpisode && tvdbEpisode.episodeTitle) {
               tvdbInfoParent = {
                 seriesId: tvdbEpisode.seriesId,
@@ -1596,7 +1604,11 @@ async function metaLookup(title, apiKey, opts = {}) {
       try {
         const fallbackCandidates = [...new Set(variants.concat(parentCandidate ? [parentCandidate] : []).map(s => String(s || '').trim()).filter(Boolean))]
         if (fallbackCandidates.length) {
-          const tvdbFallback = await tvdb.fetchEpisode(tvdbCreds, fallbackCandidates, opts.season, opts.episode)
+          const tvdbFallback = await tvdb.fetchEpisode(tvdbCreds, fallbackCandidates, opts.season, opts.episode, {
+            log: (line) => {
+              try { appendLog(line) } catch (e) {}
+            }
+          })
           if (tvdbFallback && tvdbFallback.episodeTitle) {
             const providerRaw = { source: 'tvdb', id: tvdbFallback.seriesId, seriesName: tvdbFallback.seriesName, raw: tvdbFallback.raw }
             const episodeObj = {
@@ -2016,7 +2028,11 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
           if (parentCandidate) tvdbTitles.push(parentCandidate)
           if (seriesLookupTitle) tvdbTitles.push(seriesLookupTitle)
           const uniqueTitles = [...new Set(tvdbTitles.filter(Boolean))]
-          tvdbHit = await tvdb.fetchEpisode(tvdbCredentials, uniqueTitles, normSeason, normEpisode)
+          tvdbHit = await tvdb.fetchEpisode(tvdbCredentials, uniqueTitles, normSeason, normEpisode, {
+            log: (line) => {
+              try { appendLog(line) } catch (e) {}
+            }
+          })
         }
         if (tvdbHit && tvdbHit.episodeTitle) {
           guess.episodeTitle = tvdbHit.episodeTitle
