@@ -1258,6 +1258,7 @@ async function metaLookup(title, apiKey, opts = {}) {
         titleVariants = [String(aniListName || v || '').trim()].filter(Boolean);
       }
       const uniqueTitleVariants = [...new Set(titleVariants)];
+      let tmdbEpCheck = null;
 
       if (!ep && tvdbCreds && opts && opts.season != null && opts.episode != null) {
         try {
@@ -1283,6 +1284,39 @@ async function metaLookup(title, apiKey, opts = {}) {
           }
         } catch (e) {
           try { appendLog(`META_TVDB_EP_AFTER_ANILIST_ERROR q=${aniListName} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+        }
+      }
+
+      if (!ep && apiKey) {
+        const tmLookupName = strippedAniListName || aniListName || v;
+        try { appendLog(`META_TMDB_EP_AFTER_ANILIST tmLookup=${tmLookupName} anilist=${aniListName} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+        try {
+          tmdbEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null);
+        } catch (e) {
+          tmdbEpCheck = null;
+          try { appendLog(`META_TMDB_EP_AFTER_ANILIST_ERROR q=${aniListName} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+        }
+        if (tmdbEpCheck && tmdbEpCheck.episode) {
+          const tmEpTitle = String(tmdbEpCheck.episode.name || tmdbEpCheck.episode.title || '').trim();
+          try {
+            const tmHasLatin = /[A-Za-z]/.test(tmEpTitle);
+            if (isMeaningfulTitle(tmEpTitle) && !isPlaceholderTitle(tmEpTitle) && tmHasLatin) {
+              ep = tmdbEpCheck.episode;
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${aniListName} epName=${tmEpTitle}`) } catch (e) {}
+            } else if (isMeaningfulTitle(tmEpTitle) && !isPlaceholderTitle(tmEpTitle)) {
+              ep = tmdbEpCheck.episode;
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK_NONLATIN q=${aniListName} epName=${tmEpTitle}`) } catch (e) {}
+            } else {
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_IGNORED_PLACEHOLDER q=${aniListName} tm=${tmEpTitle}`) } catch (e) {}
+            }
+          } catch (e) {
+            ep = tmdbEpCheck.episode;
+            try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${aniListName} epName=${tmEpTitle}`) } catch (ee) {}
+          }
+        } else if (tmdbEpCheck) {
+          try { appendLog(`META_TMDB_EP_AFTER_ANILIST_NONE q=${aniListName}`) } catch (e) {}
+        } else {
+          try { appendLog(`META_TMDB_EP_AFTER_ANILIST_NONE q=${aniListName}`) } catch (e) {}
         }
       }
 
@@ -1318,8 +1352,12 @@ async function metaLookup(title, apiKey, opts = {}) {
           if (wikiEp && wikiEp.name && wikiParentMatch) {
             if (apiKey) {
               try {
-                const tmLookupName = strippedAniListName || aniListName || v;
-                const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null);
+                let tmEpCheck = tmdbEpCheck;
+                if (!tmEpCheck) {
+                  const tmLookupName = strippedAniListName || aniListName || v;
+                  tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null);
+                  tmdbEpCheck = tmEpCheck;
+                }
                 if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
                   const tmNameCheck = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim();
                   const wikiGood = isMeaningfulTitle(wikiEp.name);
@@ -1354,36 +1392,6 @@ async function metaLookup(title, apiKey, opts = {}) {
             try { appendLog(`META_WIKIPEDIA_PARENT_MISMATCH intended=${intendedSeries} gotPage=${wikiEp.raw && wikiEp.raw.page ? wikiEp.raw.page : '<none>'}`) } catch (e) {}
           }
         } catch (e) {}
-      }
-
-      // If Wikipedia didn't provide an episode title, try TMDb (when key available)
-      if (!ep && apiKey) {
-        const tmLookupName = strippedAniListName || aniListName || v;
-        try { appendLog(`META_TMDB_EP_AFTER_ANILIST tmLookup=${tmLookupName} anilist=${aniListName} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
-        const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-        if (tmEp && tmEp.episode) {
-          const tmEpTitle = String(tmEp.episode.name || tmEp.episode.title || '').trim()
-          try {
-                    // Prefer Latin-looking TMDb titles
-                    const tmHasLatin = /[A-Za-z]/.test(tmEpTitle)
-                    if (isMeaningfulTitle(tmEpTitle) && !isPlaceholderTitle(tmEpTitle) && tmHasLatin) {
-                      ep = tmEp.episode
-                      try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEpTitle}`) } catch (e) {}
-                    } else if (isMeaningfulTitle(tmEpTitle) && !isPlaceholderTitle(tmEpTitle)) {
-                      // accept non-Latin TMDb title if no better option
-                      ep = tmEp.episode
-                      try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK_NONLATIN q=${a.name || v} epName=${tmEpTitle}`) } catch (e) {}
-                    } else {
-                      try { appendLog(`META_TMDB_EP_AFTER_ANILIST_IGNORED_PLACEHOLDER q=${a.name || v} tm=${tmEpTitle}`) } catch (e) {}
-                      // leave ep null so Kitsu fallback runs
-                    }
-          } catch (e) {
-            ep = tmEp.episode
-            try { appendLog(`META_TMDB_EP_AFTER_ANILIST_OK q=${a.name || v} epName=${tmEpTitle}`) } catch (e) {}
-          }
-        } else {
-          try { appendLog(`META_TMDB_EP_AFTER_ANILIST_NONE q=${a.name || v}`) } catch (e) {}
-        }
       }
 
       // If still no episode title, try Kitsu as a fallback
@@ -1448,6 +1456,7 @@ async function metaLookup(title, apiKey, opts = {}) {
           titleVariantsP = [String(parentAniListName || parentCandidate || '').trim()].filter(Boolean);
         }
         const uniqueTitleVariantsP = [...new Set(titleVariantsP)];
+        let tmdbEpCheckParent = null;
 
         if (!ep && tvdbCreds && opts && opts.season != null && opts.episode != null) {
           try {
@@ -1476,6 +1485,39 @@ async function metaLookup(title, apiKey, opts = {}) {
           }
         }
 
+        if (!ep && apiKey) {
+          const tmLookupName = strippedParentName || parentAniListName || parentCandidate;
+          try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT tmLookup=${tmLookupName} anilist=${parentAniListName} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
+          try {
+            tmdbEpCheckParent = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null);
+          } catch (e) {
+            tmdbEpCheckParent = null;
+            try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_ERROR q=${parentAniListName} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+          }
+          if (tmdbEpCheckParent && tmdbEpCheckParent.episode) {
+            const tmEpTitleParent = String(tmdbEpCheckParent.episode.name || tmdbEpCheckParent.episode.title || '').trim();
+            try {
+              const tmHasLatin = /[A-Za-z]/.test(tmEpTitleParent);
+              if (isMeaningfulTitle(tmEpTitleParent) && !isPlaceholderTitle(tmEpTitleParent) && tmHasLatin) {
+                ep = tmdbEpCheckParent.episode;
+                try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_OK q=${parentAniListName} epName=${tmEpTitleParent}`) } catch (e) {}
+              } else if (isMeaningfulTitle(tmEpTitleParent) && !isPlaceholderTitle(tmEpTitleParent)) {
+                ep = tmdbEpCheckParent.episode;
+                try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_OK_NONLATIN q=${parentAniListName} epName=${tmEpTitleParent}`) } catch (e) {}
+              } else {
+                try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_IGNORED_PLACEHOLDER q=${parentAniListName} tm=${tmEpTitleParent}`) } catch (e) {}
+              }
+            } catch (e) {
+              ep = tmdbEpCheckParent.episode;
+              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_OK q=${parentAniListName} epName=${tmEpTitleParent}`) } catch (ee) {}
+            }
+          } else if (tmdbEpCheckParent) {
+            try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_NONE q=${parentAniListName}`) } catch (e) {}
+          } else {
+            try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_NONE q=${parentAniListName}`) } catch (e) {}
+          }
+        }
+
         if (!ep) {
           try {
             const wikiEp = await lookupWikipediaEpisode(uniqueTitleVariantsP.map(normalizeSearchQuery), opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey });
@@ -1490,8 +1532,12 @@ async function metaLookup(title, apiKey, opts = {}) {
             if (wikiEp && wikiEp.name && wikiParentMatch) {
               if (apiKey) {
                 try {
-                  const tmLookupName = strippedParentName || parentAniListName || parentCandidate;
-                  const tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null);
+                  let tmEpCheck = tmdbEpCheckParent;
+                  if (!tmEpCheck) {
+                    const tmLookupName = strippedParentName || parentAniListName || parentCandidate;
+                    tmEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null);
+                    tmdbEpCheckParent = tmEpCheck;
+                  }
                   if (tmEpCheck && tmEpCheck.episode && (tmEpCheck.episode.name || tmEpCheck.episode.title)) {
                     const tmParentName = String(tmEpCheck.episode.name || tmEpCheck.episode.title).trim();
                     const tmHasLatin = /[A-Za-z]/.test(tmParentName);
@@ -1525,22 +1571,6 @@ async function metaLookup(title, apiKey, opts = {}) {
               try { appendLog(`META_WIKIPEDIA_PARENT_MISMATCH intended=${intendedSeries} gotPage=${wikiEp.raw && wikiEp.raw.page ? wikiEp.raw.page : '<none>'}`) } catch (e) {}
             }
           } catch (e) {}
-        }
-
-        if (!ep && apiKey) {
-          const tmLookupName = strippedParentName || parentAniListName || parentCandidate;
-          try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT tmLookup=${tmLookupName} anilist=${parentAniListName} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
-          try {
-            const tmEp = await searchTmdbAndEpisode(tmLookupName, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null);
-            if (tmEp && tmEp.episode) {
-              ep = tmEp.episode;
-              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_OK q=${parentAniListName} epName=${tmEp.episode && (tmEp.episode.name||tmEp.episode.title) ? (tmEp.episode.name||tmEp.episode.title) : '<none>'}`) } catch (e) {}
-            } else {
-              try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT_NONE q=${parentAniListName}`) } catch (e) {}
-            }
-          } catch (e) {
-            try { appendLog(`META_EP_AFTER_ANILIST_PARENT_ERROR q=${parentAniListName} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
-          }
         }
 
         if (!ep) {
