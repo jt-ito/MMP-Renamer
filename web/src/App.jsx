@@ -786,7 +786,14 @@ export default function App() {
   if (force) safeSetLoadingEnrich(l => ({ ...l, [key]: true }))
 
       // If not forcing and we already have a cache entry, return it
-      if (!force && enrichCache && enrichCache[key]) return enrichCache[key]
+      if (!force && enrichCache && enrichCache[key]) {
+        const cached = enrichCache[key]
+        if (cached && (cached.hidden || cached.applied)) {
+          setItems(prev => prev.filter(it => it.canonicalPath !== key))
+          setAllItems(prev => prev.filter(it => it.canonicalPath !== key))
+        }
+        return cached
+      }
 
       // First try to GET cached enrichment from server
       try {
@@ -800,6 +807,10 @@ export default function App() {
         if ((r.data.cached || r.data.enrichment) && !force) {
           const norm = normalizeEnrichResponse(r.data.enrichment || r.data)
           setEnrichCache(prev => ({ ...prev, [key]: norm }))
+          if (norm && (norm.hidden || norm.applied)) {
+            setItems(prev => prev.filter(it => it.canonicalPath !== key))
+            setAllItems(prev => prev.filter(it => it.canonicalPath !== key))
+          }
           return norm
         }
       }
@@ -817,8 +828,9 @@ export default function App() {
       // if the applied operation marked this item hidden, remove it from visible items
       try {
         const _norm2 = (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
-        if (_norm2 && _norm2.hidden) {
+        if (_norm2 && (_norm2.hidden || _norm2.applied)) {
           setItems(prev => prev.filter(it => it.canonicalPath !== key))
+          setAllItems(prev => prev.filter(it => it.canonicalPath !== key))
         }
       } catch (e) {}
 

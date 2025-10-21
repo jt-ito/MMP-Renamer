@@ -1782,6 +1782,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
 
   const tmdbKey = providedKey || (users && users.admin && users.admin.settings && users.admin.settings.tmdb_api_key) || (serverSettings && serverSettings.tmdb_api_key)
   const tvdbCredentials = resolveTvdbCredentials(opts && opts.username ? opts.username : null, opts && opts.tvdbOverride ? opts.tvdbOverride : null)
+  let seriesLookupTitle = seriesName
   // determine username (if provided) so we can honor per-user default provider and track fallback counts
   const username = opts && opts.username ? opts.username : null
   // determine preferred provider: per-user -> server -> default to 'tmdb'
@@ -1796,7 +1797,6 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     attemptedProvider = true;
     let res = null;
     try {
-  try { console.log('DEBUG: externalEnrich will attempt metaLookup seriesLookupTitle=', seriesLookupTitle, 'tmdbKeyPresent=', !!tmdbKey); } catch (e) {}
       const parentPath = path.resolve(path.dirname(canonicalPath))
       // Ensure we search the series title first. If the parsed `seriesName` still contains
       // episode tokens (e.g. 'S01E11.5 ...' or leading 'S01P01'), strip those episode-like
@@ -1823,7 +1823,6 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // so TMDb can match the show by its usual title.
   const epStrForSpecial = String(normEpisode != null ? normEpisode : '')
   const isSpecialCandidate = (Number(normSeason) === 0) || (epStrForSpecial.indexOf('.') !== -1)
-  let seriesLookupTitle
   if (isSpecialCandidate) {
     // For specials, prefer the parent folder (series) title so we locate the show first,
     // then lookup the special within that series. Only fall back to stripping episode
@@ -1837,6 +1836,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   } else {
     seriesLookupTitle = seriesName
   }
+  try { console.log('DEBUG: externalEnrich will attempt metaLookup seriesLookupTitle=', seriesLookupTitle, 'tmdbKeyPresent=', !!tmdbKey); } catch (e) {}
   // For specials, do not pass season/episode to the provider lookup so we can
   // perform name-based matching against TMDb's season-0 specials list. However
   // keep the parsed episode/season locally so the UI and hardlink names still
