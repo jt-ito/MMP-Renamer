@@ -354,6 +354,92 @@ async function metaLookup(title, apiKey, opts = {}) {
     } catch (e){ return 0 }
   }
 
+  const MIN_ANILIST_MATCH_SCORE = 0.2
+
+  function simpleNormalizeForMatch(s) {
+    try { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '') } catch (e) { return String(s || '') }
+  }
+
+  function uniqueStrings(list) {
+    const seen = new Set()
+    const out = []
+    for (const raw of Array.isArray(list) ? list : []) {
+      const str = (raw == null) ? '' : String(raw)
+      const trimmed = str.trim()
+      if (!trimmed) continue
+      if (seen.has(trimmed)) continue
+      seen.add(trimmed)
+      out.push(trimmed)
+    }
+    return out
+  }
+
+  function gatherAniListCandidateNames(res) {
+    const names = []
+    if (!res) return names
+    try {
+      if (res.name) names.push(res.name)
+      if (res.title) {
+        if (res.title.english) names.push(res.title.english)
+        if (res.title.romaji) names.push(res.title.romaji)
+        if (res.title.native) names.push(res.title.native)
+      }
+      if (res.raw && res.raw.title) {
+        const rt = res.raw.title
+        if (rt.english) names.push(rt.english)
+        if (rt.romaji) names.push(rt.romaji)
+        if (rt.native) names.push(rt.native)
+      }
+      const base = res.name || (res.title && (res.title.english || res.title.romaji || res.title.native))
+      const stripped = base ? stripAniListSeasonSuffix(base, res.raw || res) : null
+      if (stripped && (!base || stripped !== base)) names.push(stripped)
+    } catch (e) { /* best-effort */ }
+    return uniqueStrings(names)
+  }
+
+  const expectedSeriesNames = uniqueStrings([
+    title,
+    opts && opts.parentCandidate ? opts.parentCandidate : null
+  ])
+
+  function evaluateAniListCandidate(res, expectationList, queryVariant, contextLabel) {
+    const candidates = gatherAniListCandidateNames(res)
+    const expectations = uniqueStrings([
+      ...(Array.isArray(expectationList) ? expectationList : []),
+      ...(expectedSeriesNames || []),
+      queryVariant
+    ])
+    if (!candidates.length || !expectations.length) {
+      return { ok: true, bestScore: 1, bestName: candidates[0] || null, bestExpected: expectations[0] || null }
+    }
+    let bestScore = 0
+    let bestName = null
+    let bestExpected = null
+    for (const cand of candidates) {
+      for (const exp of expectations) {
+        let score = wordOverlap(cand, exp)
+        const simpleCand = simpleNormalizeForMatch(cand)
+        const simpleExp = simpleNormalizeForMatch(exp)
+        if (simpleCand && simpleExp) {
+          if (simpleCand === simpleExp) score = Math.max(score, 1)
+          else if (simpleCand.length >= 4 && simpleExp.length >= 4 && (simpleCand.includes(simpleExp) || simpleExp.includes(simpleCand))) {
+            score = Math.max(score, 0.55)
+          }
+        }
+        if (score > bestScore) {
+          bestScore = score
+          bestName = cand
+          bestExpected = exp
+        }
+      }
+    }
+    if (bestScore < MIN_ANILIST_MATCH_SCORE) {
+      try { appendLog(`META_ANILIST_MISMATCH context=${contextLabel} query=${queryVariant || '<none>'} candidate=${bestName ? bestName.slice(0,120) : '<none>'} expected=${bestExpected ? bestExpected.slice(0,120) : '<none>'} score=${bestScore.toFixed(2)}`) } catch (e) {}
+      return { ok: false, bestScore, bestName, bestExpected }
+    }
+    return { ok: true, bestScore, bestName, bestExpected }
+  }
+
   // Strip common episode tokens and trailing episode titles from candidate search strings
   function normalizeSearchQuery(s) {
     try {
@@ -1230,6 +1316,8 @@ async function metaLookup(title, apiKey, opts = {}) {
       const a = await searchAniList(v)
       try { appendLog(`META_ANILIST_SEARCH q=${v} found=${a ? 'yes' : 'no'}`) } catch (e) {}
       if (!a) continue
+  const aniMatch = evaluateAniListCandidate(a, null, v, 'filename')
+  if (!aniMatch.ok) continue
       // Attempt per-provider episode lookups in order: TVDB -> Wikipedia -> TMDb -> Kitsu.
       let ep = null;
       let tvdbInfo = null;
@@ -1432,6 +1520,8 @@ async function metaLookup(title, apiKey, opts = {}) {
         const a = await searchAniList(pvars[i])
         try { appendLog(`META_ANILIST_PARENT_SEARCH q=${pvars[i]} found=${a ? 'yes' : 'no'}`) } catch (e) {}
         if (!a) continue
+  const parentMatch = evaluateAniListCandidate(a, [parentCandidate].filter(Boolean), pvars[i], 'parent')
+  if (!parentMatch.ok) continue
 
         let ep = null;
         let tvdbInfoParent = null;
@@ -1718,6 +1808,16 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     return false
   }
 
+  function isSeasonFolderToken(s) {
+    if (!s) return false
+    const norm = String(s).replace(/[\._\-]+/g, ' ').trim().toLowerCase()
+    if (!norm) return false
+    if (/^(season|seasons|series)\s*\d{1,2}$/.test(norm)) return true
+    if (/^(season|series)\s*\d{1,2}\b/.test(norm) && norm.split(/\s+/).length <= 3) return true
+    if (/^s0*\d{1,2}$/.test(norm)) return true
+    return false
+  }
+
   // If parsed title looks like an episode (e.g., filename only contains SxxEyy - Title), prefer a parent-folder as series title
   // Compute a parent-folder candidate but do NOT prefer it yet — we'll try filename first, then parent if TMDb fails.
   let parentCandidate = null
@@ -1746,6 +1846,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         // (e.g., 'S01' or '1x02'), accept the numeric series name. Otherwise skip episode-like or noisy candidates.
         const rawSeg = String(seg || '')
         const hasSeasonMarker = /\bS\d{1,2}([EPp]\d{1,3})?\b|\b\d{1,2}x\d{1,3}\b/i.test(rawSeg)
+        if (isSeasonFolderToken(cand)) continue
         if (!(/^[0-9]+$/.test(String(cand).trim()) && hasSeasonMarker)) {
           if (isEpisodeLike(cand) || isNoiseLike(cand)) continue
         }
