@@ -1818,6 +1818,25 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     return false
   }
 
+  function normalizeCapitalization(str) {
+    try {
+      if (!str) return str
+      const original = String(str)
+      const letters = original.replace(/[^A-Za-z]/g, '')
+      if (!letters) return original
+      if (letters !== letters.toUpperCase()) return original
+      const shortUpper = new Set()
+      original.replace(/\b[A-Z]{2,3}\b/g, (token) => { try { shortUpper.add(String(token || '').toLowerCase()) } catch (e) {} return token })
+      let result = original.toLowerCase()
+      result = result.replace(/\b([a-z])/g, (match, c) => c.toUpperCase())
+      result = result.replace(/([A-Za-z])'([A-Z])/g, (match, left, right) => left + "'" + right.toLowerCase())
+      if (shortUpper.size) {
+        result = result.replace(/\b([A-Za-z]{2,3})\b/g, (match) => shortUpper.has(match.toLowerCase()) ? match.toUpperCase() : match)
+      }
+      return result
+    } catch (e) { return str }
+  }
+
   // If parsed title looks like an episode (e.g., filename only contains SxxEyy - Title), prefer a parent-folder as series title
   // Compute a parent-folder candidate but do NOT prefer it yet — we'll try filename first, then parent if TMDb fails.
   let parentCandidate = null
@@ -1857,6 +1876,12 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // Do not override seriesName from arbitrary parent path segments (e.g., '/mnt').
   // The parentCandidate variable above is sufficient; leave seriesName as parsed from filename.
   } catch (e) { /* ignore parent derivation errors */ }
+
+  const parsedTitleLooksEpisodeLike = !seriesName || isEpisodeLike(seriesName) || /^episode\b/i.test(String(seriesName)) || /^part\b/i.test(String(seriesName))
+  if (parentCandidate && parsedTitleLooksEpisodeLike) {
+    try { appendLog(`META_PARENT_ELEVATED parsedTitle=${String(seriesName).slice(0,120)} parent=${parentCandidate} path=${String(canonicalPath).slice(0,200)}`) } catch (e) {}
+    seriesName = parentCandidate
+  }
 
     // Strip version-suffix tokens like 'v2', 'v3' that often follow episode markers (but preserve decimal episodes like 11.5)
     function stripVersionSuffix(s) {
@@ -1998,7 +2023,8 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         try {
           const raw = res.raw || {}
           // Title (series/movie)
-          guess.title = String(res.name || raw.name || raw.title || guess.title).trim()
+          const mappedTitle = String(res.name || raw.name || raw.title || guess.title).trim()
+          guess.title = normalizeCapitalization(mappedTitle).trim()
 
           // Episode-level data (when available)
           if (res.episode) {
@@ -2023,11 +2049,14 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
                   try { appendLog(`PROVIDER_EP_PLACEHOLDER path=${String(canonicalPath).slice(0,200)} epRaw=${epTrim}`) } catch (e) {}
                   // leave guess.episodeTitle undefined so callers treat it as missing
                 } else {
-                  guess.episodeTitle = epTrim
+                  guess.episodeTitle = normalizeCapitalization(epTrim).trim()
                 }
               }
             } catch (e) {
-              try { guess.episodeTitle = String(ep && (ep.localized_name || ep.name || ep.title) || '').trim() } catch (ee) { /* ignore */ }
+              try {
+                const fallbackEp = String(ep && (ep.localized_name || ep.name || ep.title) || '').trim()
+                guess.episodeTitle = normalizeCapitalization(fallbackEp).trim()
+              } catch (ee) { /* ignore */ }
             }
           }
 
