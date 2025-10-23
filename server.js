@@ -2286,6 +2286,8 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     title: guess.title || base,
     seriesTitle: guess.seriesTitle || guess.title || base,
     seriesTitleExact: guess.seriesTitleExact || guess.originalSeriesTitle || null,
+    seriesTitleEnglish: guess.seriesTitleEnglish || null,
+    seriesTitleRomaji: guess.seriesTitleRomaji || null,
     originalSeriesTitle: guess.originalSeriesTitle || guess.seriesTitleExact || null,
     parentCandidate: guess.parentCandidate || parentCandidate || null,
     seriesLookupTitle: guess.seriesLookupTitle || seriesLookupTitle || null,
@@ -3655,6 +3657,20 @@ app.post('/api/rename/preview', (req, res) => {
   const englishSeriesTitle = extractEnglishSeriesTitle(meta);
   const renderBaseTitle = englishSeriesTitle || resolvedSeriesTitle || rawTitle;
   const title = cleanTitleForRender(renderBaseTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
+  if (englishSeriesTitle) {
+    try {
+      const currentEnglish = meta && meta.seriesTitleEnglish ? String(meta.seriesTitleEnglish).trim() : null;
+      if (!currentEnglish || currentEnglish !== englishSeriesTitle) {
+        updateEnrichCacheInMemory(fromPath, Object.assign({}, meta, {
+          seriesTitleEnglish: englishSeriesTitle,
+          seriesTitle: englishSeriesTitle,
+          seriesTitleExact: englishSeriesTitle,
+        }));
+        schedulePersistEnrichCache(400);
+      }
+    } catch (e) { /* best-effort cache update */ }
+  }
+  const folderBaseTitle = renderBaseTitle || title;
 
   // Render template with preferência to enrichment-provided tokens.
   // If the provider returned a renderedName (TMDb), prefer that exact rendered string for preview.
@@ -3687,7 +3703,7 @@ app.post('/api/rename/preview', (req, res) => {
       if (effectiveOutput) {
     // folder: <output>/<Show Title>/Season NN for series, keep <Show Title (Year)> for movies
   const isSeriesFolder = (meta && (meta.season != null || meta.episode != null || meta.episodeRange));
-  const seriesFolderName = String((englishSeriesTitle || resolvedSeriesTitle || title || '')).trim();
+  const seriesFolderName = String(folderBaseTitle || title || '').trim();
   const titleFolder = isSeriesFolder ? sanitize(seriesFolderName) : (year ? `${sanitize(title)} (${year})` : sanitize(title));
       const seasonFolder = (meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
       const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
@@ -3835,6 +3851,17 @@ function extractEnglishSeriesTitle(meta) {
           if (key && key.toLowerCase().indexOf('english') !== -1) push(block[key]);
         }
       }
+      if (meta.provider && meta.provider.renderedName) {
+        let rendered = String(meta.provider.renderedName || '').replace(/\.[^/.]+$/, '');
+        const dashSplit = rendered.split(/\s+-\s+S\d{1,2}/i);
+        if (dashSplit.length > 1) rendered = dashSplit[0];
+        rendered = rendered.replace(/\s+\(Season\s+\d{1,2}\)$/i, '').trim();
+        if (rendered) push(rendered);
+      }
+      if (meta.title && typeof meta.title === 'string') {
+        push(meta.title);
+      }
+      if (meta.extraGuess && meta.extraGuess.titleEnglish) push(meta.extraGuess.titleEnglish);
     }
     return out.length ? out[0] : null;
   } catch (e) {
