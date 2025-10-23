@@ -2022,16 +2022,29 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         try {
           const raw = res.raw || {}
           // Title (series/movie)
-          const providerTitleRaw = String(res.name || raw.name || raw.title || '').trim()
-          if (providerTitleRaw) {
-            guess.originalSeriesTitle = providerTitleRaw
-            guess.seriesTitleExact = providerTitleRaw
-            addSeriesCandidate('provider.original', providerTitleRaw, { prepend: true })
+          // Prefer AniList-provided English title, then romaji, then fallback to provider name fields
+          let providerTitleRaw = String(res.name || raw.name || raw.title || '').trim()
+          let anilistEnglish = null
+          let anilistRomaji = null
+          try {
+            if (res && res.title) {
+              if (res.title.english) anilistEnglish = String(res.title.english).trim()
+              if (res.title.romaji) anilistRomaji = String(res.title.romaji).trim()
+            }
+            if (!anilistEnglish && res && res.raw && res.raw.title && res.raw.title.english) anilistEnglish = String(res.raw.title.english).trim()
+            if (!anilistRomaji && res && res.raw && res.raw.title && res.raw.title.romaji) anilistRomaji = String(res.raw.title.romaji).trim()
+          } catch (e) { /* best-effort */ }
+          const providerPreferred = (anilistEnglish && anilistEnglish.length) ? anilistEnglish : ((anilistRomaji && anilistRomaji.length) ? anilistRomaji : providerTitleRaw)
+          if (providerPreferred) {
+            guess.originalSeriesTitle = providerPreferred
+            guess.seriesTitleExact = providerPreferred
+            // store English/romaji separately for later preference logic
+            if (anilistEnglish) guess.seriesTitleEnglish = anilistEnglish
+            if (anilistRomaji) guess.seriesTitleRomaji = anilistRomaji
+            addSeriesCandidate('provider.original', providerPreferred, { prepend: true })
           }
-          const mappedTitle = providerTitleRaw || String(raw.displayName || guess.title || seriesName || base).trim()
-          if (mappedTitle) {
-            guess.title = mappedTitle
-          }
+          const mappedTitle = providerPreferred || String(raw.displayName || guess.title || seriesName || base).trim()
+          if (mappedTitle) guess.title = mappedTitle
 
           // Episode-level data (when available)
           if (res.episode) {
@@ -2069,7 +2082,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
 
           // Provider block - set provider name based on raw.source (tmdb or kitsu)
           const providerName = (raw && raw.source) ? String(raw.source).toLowerCase() : 'tmdb'
-          guess.provider = { matched: true, provider: providerName, id: raw.id || null, title: providerTitleRaw || mappedTitle || null, raw: raw }
+          guess.provider = { matched: true, provider: providerName, id: raw.id || null, title: (guess.seriesTitleExact || providerTitleRaw || mappedTitle) || null, raw: raw }
 
           // Back-compat: populate tmdb object only when provider is TMDb
           if (providerName === 'tmdb') {
@@ -2237,11 +2250,16 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
 
   {
     const candidateValues = seriesTitleCandidates.map(c => c.value)
-    const resolvedSeries = pickSeriesTitleFromCandidates(candidateValues, guess.episodeTitle || episodeTitle)
-    if (resolvedSeries) {
-      guess.seriesTitle = String(resolvedSeries).trim()
+    // Prefer AniList English title when available to avoid mixed romaji/english folders
+    if (guess.seriesTitleEnglish) {
+      guess.seriesTitle = String(guess.seriesTitleEnglish).trim()
+    } else if (guess.seriesTitleExact) {
+      // if exact exists but no explicit English field, use it
+      guess.seriesTitle = String(guess.seriesTitleExact).trim()
     } else {
-      guess.seriesTitle = normalizeCapitalization(seriesName).trim()
+      const resolvedSeries = pickSeriesTitleFromCandidates(candidateValues, guess.episodeTitle || episodeTitle)
+      if (resolvedSeries) guess.seriesTitle = String(resolvedSeries).trim()
+      else guess.seriesTitle = normalizeCapitalization(seriesName).trim()
     }
   }
   if (!guess.seriesTitleExact && guess.seriesTitle) {
