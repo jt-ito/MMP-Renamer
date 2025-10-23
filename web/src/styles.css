@@ -300,3 +300,15 @@ button:active { transform: translateY(1px) }
 /* Metadata phase indicator */
 .phase-label { font-size: 13px; color: var(--muted); margin-left: 12px }
 
+/* Loading overlay while scans hydrate */
+.loading-screen { display:flex; align-items:center; justify-content:center; min-height:420px; padding:24px; }
+.loading-card { background: var(--bg-700); border-radius: 18px; padding:32px; width:min(520px, 100%); border:1px solid var(--bg-600); box-shadow:0 26px 60px rgba(0,0,0,0.55); text-align:center; display:flex; flex-direction:column; gap:18px; }
+.loading-spinner { display:flex; justify-content:center; }
+.loading-spinner .spinner { width:32px; height:32px; }
+.loading-card h2 { margin:0; font-size:1.35rem; color: var(--accent); }
+.loading-card p { margin:0; color: var(--muted); font-size:0.95rem; }
+.loading-details { display:flex; flex-direction:column; gap:6px; font-size:0.95rem; color: var(--accent); }
+.loading-details span:last-child { font-size:0.85rem; color: var(--muted); }
+.loading-progress-bar { width:100%; height:12px; margin-top:4px; }
+.loading-footnote { font-size:0.85rem; color: var(--muted); margin-top:8px; }
+

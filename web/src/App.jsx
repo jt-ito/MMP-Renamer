@@ -73,6 +73,7 @@ export default function App() {
   // that aren't present in the current scan results
   const [currentScanPaths, setCurrentScanPaths] = useState(new Set())
   const [scanning, setScanning] = useState(false)
+  const [scanReady, setScanReady] = useState(true)
   const [activeScanKind, setActiveScanKind] = useState(null)
   const [confirmFullScanOpen, setConfirmFullScanOpen] = useState(false)
   const [scanLoaded, setScanLoaded] = useState(0)
@@ -97,6 +98,7 @@ export default function App() {
   const pendingHideTimeoutsRef = useRef({})
   // last seen hide event timestamp (ms)
   const lastHideEventTsRef = useRef( Number(localStorage.getItem('lastHideEventTs') || '0') || 0 )
+  const isMountedRef = useRef(true)
 
   // Debug flag: enable verbose debug logs by setting window.__RENAMER_DEBUG__ = true
   const DEBUG = (typeof window !== 'undefined' && !!window.__RENAMER_DEBUG__) || false
@@ -633,6 +635,64 @@ export default function App() {
     }).catch(()=>{})
   }, [])
 
+  async function hydrateScanItems(scanIdToHydrate, totalCount = 0, initialItems = []) {
+    if (!scanIdToHydrate) return []
+    const aggregated = []
+    const seen = new Set()
+    const effectiveTotal = Number.isFinite(Number(totalCount)) ? Number(totalCount) : 0
+    const pageSize = 500
+
+    const append = (list = []) => {
+      for (const entry of list) {
+        if (!entry || !entry.canonicalPath) continue
+        if (seen.has(entry.canonicalPath)) continue
+        seen.add(entry.canonicalPath)
+        aggregated.push(entry)
+      }
+    }
+
+    append(Array.isArray(initialItems) ? initialItems : [])
+
+    if (isMountedRef.current) {
+      try { setScanLoaded(aggregated.length) } catch (e) {}
+      try {
+        if (effectiveTotal > 0) setScanProgress(Math.max(0, Math.min(100, Math.round((aggregated.length / Math.max(1, effectiveTotal)) * 100))))
+      } catch (e) {}
+    }
+
+    let offset = aggregated.length
+    let guard = 0
+    while (isMountedRef.current) {
+      if (effectiveTotal > 0 && aggregated.length >= effectiveTotal) break
+      const resp = await axios.get(API(`/scan/${scanIdToHydrate}/items`), { params: { offset, limit: pageSize } })
+      const page = (resp && resp.data && Array.isArray(resp.data.items)) ? resp.data.items : []
+      if (!page.length) break
+      append(page)
+      offset += page.length
+      guard += 1
+      if (isMountedRef.current) {
+        try { setScanLoaded(aggregated.length) } catch (e) {}
+        try {
+          if (effectiveTotal > 0) {
+            setScanProgress(Math.max(0, Math.min(100, Math.round((aggregated.length / Math.max(1, effectiveTotal)) * 100))))
+          } else if (aggregated.length) {
+            const approxTotal = Math.max(aggregated.length, offset)
+            setScanProgress(Math.max(0, Math.min(100, Math.round((aggregated.length / Math.max(1, approxTotal)) * 100))))
+          }
+        } catch (e) {}
+      }
+      if (page.length < pageSize) break
+      if (guard > 400) break
+    }
+
+    if (isMountedRef.current) {
+      try { setScanLoaded(aggregated.length) } catch (e) {}
+      try { setScanProgress(100) } catch (e) {}
+    }
+
+    return aggregated
+  }
+
   async function triggerScan(lib, options = {}) {
     const mode = options && options.mode === 'full' ? 'full' : 'incremental'
     // prefer user-configured input path (localStorage fallback), otherwise ask server
@@ -653,6 +713,7 @@ export default function App() {
 
     setActiveScanKind(mode)
     setScanning(true)
+    setScanReady(false)
     setScanLoaded(0)
     setScanProgress(0)
     setMetaPhase(false)
@@ -670,12 +731,14 @@ export default function App() {
       try { setLastLibraryId(libId) } catch (e) {}
 
       // fetch scan metadata
-      const meta = await axios.get(API(`/scan/${result.scanId}`))
-      setScanMeta(meta.data)
-      setTotal(meta.data.totalCount)
+      const meta = await axios.get(API(`/scan/${result.scanId}`)).catch(() => ({ data: { totalCount: 0, libraryId: libId, generatedAt: Date.now() } }))
+      const scanMetaPayload = meta && meta.data ? meta.data : { totalCount: 0, libraryId: libId, generatedAt: Date.now() }
+      setScanMeta(scanMetaPayload)
+      const reportedTotal = Number(scanMetaPayload.totalCount || 0)
+      setTotal(reportedTotal)
 
       // hydrate first page of items either from incremental response sample or via fetch
-      const firstPageSize = Math.min(meta.data.totalCount || 0, Math.max(batchSize, 50))
+      const firstPageSize = reportedTotal > 0 ? Math.min(reportedTotal, Math.max(batchSize, 50)) : Math.max(batchSize, 50)
       let first = []
       if (mode === 'incremental' && Array.isArray(result.items) && result.items.length) {
         first = result.items.slice(0, firstPageSize > 0 ? firstPageSize : result.items.length)
@@ -685,23 +748,48 @@ export default function App() {
         first = (firstPage && firstPage.data && Array.isArray(firstPage.data.items)) ? firstPage.data.items : []
       }
 
-  const hydratedFirst = Array.isArray(first) ? first : []
-  setAllItems(hydratedFirst)
-  setItems(hydratedFirst)
-  setCurrentScanPaths(new Set(hydratedFirst.map(i => i.canonicalPath)))
-  setScanLoaded(hydratedFirst.length)
-  setScanProgress(hydratedFirst.length && meta.data.totalCount ? Math.round((hydratedFirst.length / Math.max(1, meta.data.totalCount)) * 100) : 0)
+      const hydratedFirst = Array.isArray(first) ? first : []
 
-  pushToast && pushToast('Scan', mode === 'full' ? 'Full scan is running — we’ll stream results as it completes.' : 'Incremental scan is running — we’ll surface new or changed files shortly.')
+      pushToast && pushToast('Scan', mode === 'full' ? 'Full scan started — we’ll surface results once everything is ready.' : 'Incremental scan started — results will appear once all items are ready.')
+
+      phaseStartRef.current.scanStart = Date.now()
+      const aggregated = await hydrateScanItems(result.scanId, reportedTotal || hydratedFirst.length, hydratedFirst)
+      if (phaseStartRef.current.scanStart) {
+        const elapsed = Math.max(0, Date.now() - phaseStartRef.current.scanStart)
+        const history = Array.isArray(timingHistoryRef.current.scanDurations) ? timingHistoryRef.current.scanDurations.slice() : []
+        history.push(elapsed)
+        timingHistoryRef.current.scanDurations = history.slice(-8)
+        saveTimingHistory()
+        phaseStartRef.current.scanStart = null
+      }
+      if (!isMountedRef.current) return result.scanId
+
+      const canonicalSet = new Set(aggregated.map(it => it && it.canonicalPath).filter(Boolean))
+      setCurrentScanPaths(canonicalSet)
+
+      const visibleBaseline = aggregated.filter(it => {
+        if (!it || !it.canonicalPath) return false
+        const enriched = enrichCache && enrichCache[it.canonicalPath]
+        return !(enriched && (enriched.hidden === true || enriched.applied === true))
+      })
+
+      setAllItems(visibleBaseline)
+      setItems(visibleBaseline)
+      setScanLoaded(aggregated.length)
+      const denom = reportedTotal || aggregated.length
+      setScanProgress(denom ? Math.min(100, Math.round((aggregated.length / Math.max(1, denom)) * 100)) : 100)
+      setScanReady(true)
+
+      pushToast && pushToast('Scan', mode === 'full' ? 'Full scan complete — all items are ready.' : 'Incremental scan complete — latest items are ready.')
 
       // Start background server-side refresh but don't await it here — let the
       // server process new items incrementally. Also bulk-enrich the visible
       // first page so metadata appears quickly in the UI.
-      void (async () => { try { await refreshScan(result.scanId, true) } catch (e) {} })()
+      void (async () => { try { await refreshScan(result.scanId, true, { trackProgress: true }) } catch (e) {} })()
       try {
-  const paths = hydratedFirst.map(it => it.canonicalPath).filter(Boolean)
-        if (paths.length) {
-          const resp = await axios.post(API('/enrich/bulk'), { paths })
+        const primePaths = visibleBaseline.slice(0, Math.max(20, Math.min(60, visibleBaseline.length))).map(it => it.canonicalPath).filter(Boolean)
+        if (primePaths.length) {
+          const resp = await axios.post(API('/enrich/bulk'), { paths: primePaths })
           const itemsOut = resp && resp.data && Array.isArray(resp.data.items) ? resp.data.items : []
           for (const entry of itemsOut) {
             try {
@@ -733,13 +821,16 @@ export default function App() {
 
       return result.scanId
     } catch (err) {
+      setScanReady(true)
+      try { setScanProgress(0) } catch (e) {}
+      phaseStartRef.current.scanStart = null
       pushToast && pushToast('Scan', mode === 'full' ? 'Full scan failed to start' : 'Incremental scan failed to start')
       throw err
     } finally {
-      setMetaPhase(false)
-      setScanning(false)
-      setActiveScanKind(null)
-      setScanProgress(100)
+      if (isMountedRef.current) {
+        setScanning(false)
+        setActiveScanKind(null)
+      }
     }
   }
 
@@ -1325,19 +1416,31 @@ export default function App() {
     }
   }
 
-  async function refreshScan(scanId, silent = false) {
+  async function refreshScan(scanId, silent = false, options = {}) {
     if (!scanId) throw new Error('no scan id')
+    const trackProgress = options && options.trackProgress !== false
+    let metaCompleted = false
+    if (trackProgress) {
+      try { setMetaPhase(true) } catch (e) {}
+      try { setMetaProgress(0) } catch (e) {}
+      phaseStartRef.current.metaStart = Date.now()
+    }
     try {
       const r = await axios.post(API(`/scan/${scanId}/refresh`), { tmdb_api_key: providerKey || undefined })
       // If server started background work, poll for progress
       if (r.status === 202 && r.data && r.data.background) {
+        const updateMetaProgress = (prog) => {
+          if (!trackProgress) return
+          const pct = Math.round((prog.processed / Math.max(1, prog.total)) * 100)
+          try { setMetaProgress(pct) } catch (e) {}
+        }
         if (!silent) {
           const toastId = pushToast && pushToast('Refresh','Refresh started on server', { sticky: true, spinner: true })
           try {
             await pollRefreshProgress(scanId, (prog) => {
               // update toast with percent
               const pct = Math.round((prog.processed / Math.max(1, prog.total)) * 100)
-              try { setMetaProgress(pct) } catch(e){}
+              updateMetaProgress(prog)
               if (pushToast) pushToast('Refresh', `Refreshing metadata: ${pct}% (${prog.processed}/${prog.total})`, { id: toastId, sticky: true, spinner: true })
             })
             if (pushToast) pushToast('Refresh','Server-side refresh complete')
@@ -1346,7 +1449,19 @@ export default function App() {
           }
         } else {
           // silent background refresh: still wait for completion but do not show toasts or update meta UI
-          try { await pollRefreshProgress(scanId) } catch (e) { /* swallow */ }
+          try { await pollRefreshProgress(scanId, trackProgress ? updateMetaProgress : undefined) } catch (e) { /* swallow */ }
+        }
+        if (trackProgress) {
+          try { setMetaProgress(100) } catch (e) {}
+          if (phaseStartRef.current.metaStart) {
+            const elapsed = Math.max(0, Date.now() - phaseStartRef.current.metaStart)
+            const history = Array.isArray(timingHistoryRef.current.metaDurations) ? timingHistoryRef.current.metaDurations.slice() : []
+            history.push(elapsed)
+            timingHistoryRef.current.metaDurations = history.slice(-8)
+            saveTimingHistory()
+            phaseStartRef.current.metaStart = null
+          }
+          metaCompleted = true
         }
         // after background run completes, fetch latest enrich entries for items
         try {
@@ -1370,9 +1485,18 @@ export default function App() {
           } catch (e) {}
         }
       }
+      metaCompleted = true
       return r.data
-     } catch (err) { throw err }
-   }
+    } catch (err) {
+      throw err
+    } finally {
+      if (trackProgress) {
+        try { setMetaProgress(metaCompleted ? 100 : 0) } catch (e) {}
+        try { setMetaPhase(false) } catch (e) {}
+        if (phaseStartRef.current.metaStart) phaseStartRef.current.metaStart = null
+      }
+    }
+  }
 
   // Poll the server progress endpoint until completion or failure
   async function pollRefreshProgress(scanId, onProgress) {
@@ -1403,6 +1527,8 @@ export default function App() {
   useEffect(() => { const onHash = () => setRoute(window.location.hash || '#/'); window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash) }, [])
 
   useEffect(() => { try { document.documentElement.classList.toggle('light', theme === 'light') } catch(e){} }, [theme])
+
+  useEffect(() => () => { isMountedRef.current = false }, [])
 
   useEffect(() => {
     if (!confirmFullScanOpen) return
@@ -1649,6 +1775,8 @@ export default function App() {
   const selectedPathsList = React.useMemo(() => Object.keys(selected || {}).filter(Boolean), [selected])
   const selectedCount = selectedPathsList.length
   const selectedHasLoading = selectedPathsList.some(p => loadingEnrich && loadingEnrich[p])
+  const searchDisabled = !scanReady
+  const progressWeights = computeWeights()
   return (
   <div className={"app" + (selectMode && selectedCount ? ' select-mode-shrink' : '')}>
       {confirmFullScanOpen ? (
@@ -1660,7 +1788,6 @@ export default function App() {
           onClick={() => { if (!scanning) setConfirmFullScanOpen(false) }}
         >
           <div className="modal-card" onClick={ev => ev.stopPropagation()}>
-            <h2 id="full-scan-title">Run a full scan?</h2>
             <p>This walk re-indexes every file and can take a while. You can keep working while it runs.</p>
             <div className="modal-actions">
               <button
@@ -1695,9 +1822,10 @@ export default function App() {
         placeholder="Search files (server-side)"
         value={searchQuery}
         onChange={e => setSearchQuery(e.target.value)}
+        disabled={searchDisabled}
       />
-      <button className='btn-ghost btn-search' onClick={() => doSearch(searchQuery)} disabled={searching}>{searching ? <Spinner/> : 'Search'}</button>
-      <button className='btn-ghost btn-clear' onClick={() => doSearch('')} title='Clear search'>Clear</button>
+      <button className='btn-ghost btn-search' onClick={() => doSearch(searchQuery)} disabled={searchDisabled || searching}>{searching ? <Spinner/> : 'Search'}</button>
+      <button className='btn-ghost btn-clear' onClick={() => doSearch('')} title='Clear search' disabled={searchDisabled}>Clear</button>
     </div>
   ) : null}
         {/* Global bulk-enrich indicator (shown when many enrich operations are running) */}
@@ -1924,44 +2052,36 @@ export default function App() {
           ) : (
           <>
             <section className="list">
-              {scanMeta ? (
-                (scanning) ? (
-                  <div style={{display:'flex',flexDirection:'column'}}>
-                    {/* combinedProgress maps scanProgress to 0-50% and metaProgress to 50-100% */}
-                    {(() => {
-                      // Configurable split for header progress: scan occupies SCAN_WEIGHT of the range
-                      // and metadata occupies META_WEIGHT. We map overall progress to 0-100.
-                      const { scanWeight, metaWeight } = computeWeights()
-                      const scanPct = Math.min(100, Math.max(0, Number(scanProgress) || 0))
-                      const metaPct = Math.min(100, Math.max(0, Number(metaProgress) || 0))
-                      const combined = metaPhase ? Math.round((scanWeight * 100) + (metaPct * metaWeight)) : Math.round(scanPct * scanWeight)
-                      return (
-                        <div>Found {total} items. Scanning: {scanLoaded}/{total} ({combined}%)</div>
-                      )
-                    })()}
-                    <div style={{height:12, width:'100%'}}>
-                      <div className="progress-bar">
-                        <div className="fill" style={{ width: (metaPhase ? ((computeWeights().scanWeight * 100) + (metaProgress * computeWeights().metaWeight)) : (scanProgress * computeWeights().scanWeight)) + '%' }} />
-                        <div className="shimmer" />
-                      </div>
-                    </div>
-                    {metaPhase ? <div style={{fontSize:13, color:'var(--muted)'}}>Scan complete — moving onto metadata refresh</div> : null}
-                  </div>
-                ) : (
-                  <div>Found {total} items. Showing {items.length} loaded items.</div>
-                )
+              {!scanReady ? (
+                <LoadingScreen
+                  mode={activeScanKind || 'incremental'}
+                  total={total}
+                  loaded={scanLoaded}
+                  scanProgress={scanProgress}
+                  metaPhase={metaPhase}
+                  metaProgress={metaProgress}
+                  weights={progressWeights}
+                />
               ) : (
-                <div>No scan yet</div>
-              )}
+                <>
+                  {scanMeta ? (
+                    <div>
+                      Found {total} items. Showing {items.length} loaded items.
+                      {metaPhase ? <span className="phase-label">Metadata refresh {metaProgress}%</span> : null}
+                    </div>
+                  ) : (
+                    <div>No scan yet</div>
+                  )}
 
-              {/* only show the list after the full scan collection finished */}
-              {!scanning && scanMeta ? (
-          <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
-            previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
-            selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
-            providerKey={providerKey} hideOne={hideOnePath}
-            searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching} />
-              ) : null}
+                  {scanMeta ? (
+            <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
+              previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
+              selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
+              providerKey={providerKey} hideOne={hideOnePath}
+              searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching} />
+                  ) : null}
+                </>
+              )}
             </section>
             <aside className="side">
               <LogsPanel logs={logs} refresh={fetchLogs} pushToast={pushToast} />
@@ -1971,6 +2091,39 @@ export default function App() {
       </main>
 
       <ToastContainer toasts={toasts} remove={(id)=>setToasts(t=>t.filter(x=>x.id!==id))} />
+    </div>
+  )
+}
+
+function LoadingScreen({ mode = 'incremental', total = 0, loaded = 0, scanProgress = 0, metaPhase = false, metaProgress = 0, weights = { scanWeight: 0.3, metaWeight: 0.7 } }) {
+  const scanWeight = Number.isFinite(weights?.scanWeight) ? weights.scanWeight : 0.3
+  const metaWeight = Number.isFinite(weights?.metaWeight) ? weights.metaWeight : 0.7
+  const scanPct = Math.min(100, Math.max(0, Number(scanProgress) || 0))
+  const metaPct = Math.min(100, Math.max(0, Number(metaProgress) || 0))
+  const combined = metaPhase ? Math.round((scanWeight * 100) + (metaPct * metaWeight)) : Math.round(scanPct * scanWeight)
+
+  const friendlyMode = mode === 'full' ? 'Full scan' : 'Incremental scan'
+  const totalLabel = total > 0 ? total.toLocaleString() : (total === 0 ? '0' : 'calculating…')
+  const loadedLabel = loaded > 0 ? loaded.toLocaleString() : (loaded === 0 ? '0' : String(loaded))
+
+  return (
+    <div className="loading-screen">
+      <div className="loading-card" role="status" aria-live="polite">
+        <div className="loading-spinner">
+          <svg className="icon spinner" viewBox="0 0 50 50" width="32" height="32"><circle cx="25" cy="25" r="20" stroke="currentColor" strokeWidth="4" strokeOpacity="0.18" fill="none"/><path d="M45 25a20 20 0 0 1-20 20" stroke="currentColor" strokeWidth="4" strokeLinecap="round" fill="none"><animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25" dur="1s" repeatCount="indefinite"/></path></svg>
+        </div>
+        <h2>{friendlyMode} in progress</h2>
+        <p>We’re preparing your library — search will resume once every item is indexed.</p>
+        <div className="loading-details">
+          <span>Scan {scanPct}% · {loadedLabel} of {totalLabel} files indexed</span>
+          {metaPhase ? <span>Metadata refresh {metaPct}%</span> : <span>Metadata refresh queued</span>}
+        </div>
+        <div className="progress-bar loading-progress-bar">
+          <div className="fill" style={{ width: `${combined}%` }} />
+          <div className="shimmer" />
+        </div>
+        <div className="loading-footnote">Hang tight — this won’t take long.</div>
+      </div>
     </div>
   )
 }
