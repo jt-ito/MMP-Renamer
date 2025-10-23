@@ -238,10 +238,15 @@ function normalizeEnrichEntry(entry) {
     out.parsed = entry.parsed || (entry.parsedName || entry.title ? { title: entry.title || null, parsedName: entry.parsedName || null, season: entry.season != null ? entry.season : null, episode: entry.episode != null ? entry.episode : null } : null);
     out.provider = entry.provider || null;
     out.title = out.title || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
-  out.seriesTitle = entry.seriesTitle || (entry.extraGuess && entry.extraGuess.seriesTitle) || out.seriesTitle || out.title || null;
-  out.seriesTitleExact = entry.seriesTitleExact || (entry.extraGuess && (entry.extraGuess.seriesTitleExact || entry.extraGuess.originalSeriesTitle)) || out.seriesTitleExact || null;
-  out.seriesTitleEnglish = entry.seriesTitleEnglish || (entry.extraGuess && entry.extraGuess.seriesTitleEnglish) || (entry.provider && entry.provider.seriesTitleEnglish) || out.seriesTitleEnglish || null;
-  out.seriesTitleRomaji = entry.seriesTitleRomaji || (entry.extraGuess && entry.extraGuess.seriesTitleRomaji) || (entry.provider && entry.provider.seriesTitleRomaji) || out.seriesTitleRomaji || null;
+    out.seriesTitle = entry.seriesTitle || (entry.extraGuess && entry.extraGuess.seriesTitle) || out.seriesTitle || out.title || null;
+    out.seriesTitleExact = entry.seriesTitleExact || (entry.extraGuess && (entry.extraGuess.seriesTitleExact || entry.extraGuess.originalSeriesTitle)) || out.seriesTitleExact || null;
+    out.seriesTitleEnglish = entry.seriesTitleEnglish || (entry.extraGuess && entry.extraGuess.seriesTitleEnglish) || (entry.provider && entry.provider.seriesTitleEnglish) || out.seriesTitleEnglish || null;
+    out.seriesTitleRomaji = entry.seriesTitleRomaji || (entry.extraGuess && entry.extraGuess.seriesTitleRomaji) || (entry.provider && entry.provider.seriesTitleRomaji) || out.seriesTitleRomaji || null;
+    if (typeof out.isMovie === 'undefined' || out.isMovie === null) {
+      if (typeof entry.isMovie === 'boolean') out.isMovie = entry.isMovie;
+      else if (entry.extraGuess && typeof entry.extraGuess.isMovie === 'boolean') out.isMovie = entry.extraGuess.isMovie;
+      else out.isMovie = null;
+    }
     out.originalSeriesTitle = entry.originalSeriesTitle || (entry.extraGuess && entry.extraGuess.originalSeriesTitle) || out.originalSeriesTitle || null;
     if (!out.title && out.seriesTitle) out.title = out.seriesTitle;
     out.seriesLookupTitle = entry.seriesLookupTitle || (entry.extraGuess && entry.extraGuess.seriesLookupTitle) || out.seriesLookupTitle || null;
@@ -778,7 +783,9 @@ async function metaLookup(title, apiKey, opts = {}) {
 
   const rawName = (pick && pick.title) ? (pick.title.english || pick.title.romaji || pick.title.native) : (pick && (pick.romaji || pick.english || pick.native) ? (pick.english || pick.romaji || pick.native) : null)
   const name = stripAniListSeasonSuffix(rawName, pick)
-  return { provider: 'anilist', id: pick.id, name: name, raw: pick }
+  const format = pick && pick.format ? String(pick.format).toUpperCase() : null
+  const isMovie = format === 'MOVIE'
+  return { provider: 'anilist', id: pick.id, name: name, raw: pick, format, isMovie }
     } catch (e) { return null }
   }
 
@@ -2023,6 +2030,24 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         // Map TMDb response into our guess structure explicitly
         try {
           const raw = res.raw || {}
+          const providerLabel = ((res && res.provider) ? String(res.provider) : (raw && raw.source ? String(raw.source) : '')).toLowerCase()
+          let isMovie = false
+          if (res && typeof res.isMovie === 'boolean') {
+            isMovie = res.isMovie
+          }
+          if (!isMovie && providerLabel === 'anilist') {
+            const fmt = raw && raw.format ? String(raw.format).toUpperCase() : (res && res.format ? String(res.format).toUpperCase() : null)
+            if (fmt === 'MOVIE' || fmt === 'MOVIE_SHORT') isMovie = true
+          }
+          if (!isMovie && providerLabel === 'tmdb') {
+            const mediaType = raw && raw.media_type ? String(raw.media_type).toLowerCase() : (raw && raw.type ? String(raw.type).toLowerCase() : '')
+            if (mediaType === 'movie') isMovie = true
+            else if (!mediaType) {
+              // Heuristic: TMDb movie search responses typically expose title/original_title but no name field
+              const hasSeriesFields = typeof raw.number_of_episodes !== 'undefined' || typeof raw.number_of_seasons !== 'undefined'
+              if (!hasSeriesFields && raw && raw.title && !raw.name) isMovie = true
+            }
+          }
           // Title (series/movie)
           // Prefer AniList-provided English title, then romaji, then fallback to provider name fields
           let providerTitleRaw = String(res.name || raw.name || raw.title || '').trim()
@@ -2047,6 +2072,11 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
           }
           const mappedTitle = providerPreferred || String(raw.displayName || guess.title || seriesName || base).trim()
           if (mappedTitle) guess.title = mappedTitle
+          if (isMovie) {
+            guess.isMovie = true
+            guess.season = null
+            guess.episode = null
+          }
 
           // Episode-level data (when available)
           if (res.episode) {
@@ -2299,6 +2329,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     episodeTitle: guess.episodeTitle,
     tmdb: guess.tmdb || null,
     provider: guess.provider || null,
+  isMovie: (typeof guess.isMovie === 'boolean') ? guess.isMovie : null,
     language: 'en',
     timestamp: Date.now(),
     extraGuess: guess
@@ -3657,15 +3688,25 @@ app.post('/api/rename/preview', (req, res) => {
   const englishSeriesTitle = extractEnglishSeriesTitle(meta);
   const renderBaseTitle = englishSeriesTitle || resolvedSeriesTitle || rawTitle;
   const title = cleanTitleForRender(renderBaseTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
-  if (englishSeriesTitle) {
+  const derivedMovieFlag = deriveIsMovieFlag(meta);
+  const cachedIsMovie = (meta && typeof meta.isMovie === 'boolean') ? meta.isMovie : null;
+  const needsMovieUpdate = (typeof derivedMovieFlag === 'boolean' && derivedMovieFlag !== cachedIsMovie);
+  if (englishSeriesTitle || needsMovieUpdate) {
     try {
-      const currentEnglish = meta && meta.seriesTitleEnglish ? String(meta.seriesTitleEnglish).trim() : null;
-      if (!currentEnglish || currentEnglish !== englishSeriesTitle) {
-        updateEnrichCacheInMemory(fromPath, Object.assign({}, meta, {
-          seriesTitleEnglish: englishSeriesTitle,
-          seriesTitle: englishSeriesTitle,
-          seriesTitleExact: englishSeriesTitle,
-        }));
+      const updates = {};
+      if (englishSeriesTitle) {
+        const currentEnglish = meta && meta.seriesTitleEnglish ? String(meta.seriesTitleEnglish).trim() : null;
+        if (!currentEnglish || currentEnglish !== englishSeriesTitle) {
+          updates.seriesTitleEnglish = englishSeriesTitle;
+          updates.seriesTitle = englishSeriesTitle;
+          updates.seriesTitleExact = englishSeriesTitle;
+        }
+      }
+      if (needsMovieUpdate) {
+        updates.isMovie = derivedMovieFlag;
+      }
+      if (Object.keys(updates).length) {
+        updateEnrichCacheInMemory(fromPath, Object.assign({}, meta, updates));
         schedulePersistEnrichCache(400);
       }
     } catch (e) { /* best-effort cache update */ }
@@ -3702,9 +3743,17 @@ app.post('/api/rename/preview', (req, res) => {
     let toPath;
       if (effectiveOutput) {
     // folder: <output>/<Show Title>/Season NN for series, keep <Show Title (Year)> for movies
-  const isSeriesFolder = (meta && (meta.season != null || meta.episode != null || meta.episodeRange));
+  const isMovie = (typeof derivedMovieFlag === 'boolean') ? derivedMovieFlag : (cachedIsMovie === true);
+  const isSeriesFolder = !isMovie && (meta && (meta.season != null || meta.episode != null || meta.episodeRange));
   const seriesFolderName = String(folderBaseTitle || title || '').trim();
-  const titleFolder = isSeriesFolder ? sanitize(seriesFolderName) : (year ? `${sanitize(title)} (${year})` : sanitize(title));
+  let titleFolder;
+  if (isSeriesFolder) {
+    titleFolder = sanitize(seriesFolderName);
+  } else if (isMovie) {
+    titleFolder = year ? `${sanitize(folderBaseTitle)} (${year})` : sanitize(folderBaseTitle);
+  } else {
+    titleFolder = sanitize(folderBaseTitle);
+  }
       const seasonFolder = (meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
       const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
       // filename should directly be the rendered template (nameWithoutExt) + ext
@@ -4096,6 +4145,35 @@ function cleanTitleForRender(t, epLabel, epTitle) {
 
 // Optional: log when provider returned season/episode but no episodeTitle (helps debug TMDb)
 function logMissingEpisodeTitleIfNeeded(key, providerBlock) {
+
+function deriveIsMovieFlag(meta) {
+  try {
+    if (!meta) return null;
+    if (typeof meta.isMovie === 'boolean') return meta.isMovie;
+    const guess = meta.extraGuess || {};
+    if (typeof guess.isMovie === 'boolean') return guess.isMovie;
+    const providerBlock = (guess && guess.provider) ? guess.provider : (meta.provider || {});
+    const providerLabel = providerBlock && providerBlock.provider ? String(providerBlock.provider).toLowerCase() : '';
+    const raw = providerBlock && providerBlock.raw ? providerBlock.raw : null;
+    if (raw && raw.format) {
+      const fmt = String(raw.format).toUpperCase();
+      if (fmt === 'MOVIE' || fmt === 'MOVIE_SHORT') return true;
+    }
+    if (raw && raw.media_type) {
+      if (String(raw.media_type).toLowerCase() === 'movie') return true;
+    }
+    if (raw && raw.type) {
+      if (String(raw.type).toLowerCase() === 'movie') return true;
+    }
+    if (providerLabel === 'tmdb' && raw) {
+      const hasSeriesFields = typeof raw.number_of_episodes !== 'undefined' || typeof raw.number_of_seasons !== 'undefined';
+      if (!hasSeriesFields && raw.title && !raw.name) return true;
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
   try {
     if (!providerBlock) return;
     const hasEp = (providerBlock.episode != null);
