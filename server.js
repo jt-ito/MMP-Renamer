@@ -238,6 +238,13 @@ function normalizeEnrichEntry(entry) {
     out.parsed = entry.parsed || (entry.parsedName || entry.title ? { title: entry.title || null, parsedName: entry.parsedName || null, season: entry.season != null ? entry.season : null, episode: entry.episode != null ? entry.episode : null } : null);
     out.provider = entry.provider || null;
     out.title = out.title || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
+    out.seriesTitle = entry.seriesTitle || (entry.extraGuess && entry.extraGuess.seriesTitle) || out.seriesTitle || out.title || null;
+    if (!out.title && out.seriesTitle) out.title = out.seriesTitle;
+    out.seriesLookupTitle = entry.seriesLookupTitle || (entry.extraGuess && entry.extraGuess.seriesLookupTitle) || out.seriesLookupTitle || null;
+    if (typeof out.parentCandidate === 'undefined') {
+      const parentGuess = entry.parentCandidate || (entry.extraGuess && entry.extraGuess.parentCandidate) || null;
+      if (parentGuess) out.parentCandidate = parentGuess;
+    }
     out.parsedName = out.parsedName || (out.parsed && out.parsed.parsedName) || null;
     out.season = (typeof out.season !== 'undefined' && out.season !== null) ? out.season : (out.parsed && typeof out.parsed.season !== 'undefined' ? out.parsed.season : null);
     out.episode = (typeof out.episode !== 'undefined' && out.episode !== null) ? out.episode : (out.parsed && typeof out.parsed.episode !== 'undefined' ? out.parsed.episode : null);
@@ -1784,39 +1791,21 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   let seriesName = parsed.title || parsed.parsedName || base
   let episodeTitle = parsed.episodeTitle || ''
 
-    // helper: detect if a candidate looks like an episode token rather than a series title
-    function isEpisodeLike(s) {
-      if (!s) return false
-      const ss = String(s)
-      // common patterns: S01, S01E01, 1x02, E01, solitary numeric tokens when near season markers
-      if (/\bS\d{1,2}([EPp]\d{1,3})?\b/i.test(ss)) return true
-      if (/\b\d{1,2}x\d{1,3}\b/i.test(ss)) return true
-      if (/\bE\.?\d{1,3}\b/i.test(ss)) return true
-      // if the string contains words like 'episode' or is mostly numeric
-      if (/episode/i.test(ss)) return true
-      if (/^\d{1,3}$/.test(ss)) return true
-      return false
-    }
-
-  // helper: detect resolution/year/noise tokens in a candidate title
-  function isNoiseLike(s) {
-    if (!s) return false
-    const t = String(s).toLowerCase()
-    const noise = ['1080p','720p','2160p','4k','x264','x265','bluray','bdrip','webrip','web-dl','hdtv','dvdr','bdr','10bit','8bit','bit','bits']
-    if (/(19|20)\d{2}/.test(t)) return true
-    for (const n of noise) if (t.indexOf(n) !== -1) return true
-    return false
+  const seriesTitleCandidates = []
+  const seriesCandidateSeen = new Set()
+  const addSeriesCandidate = (label, value) => {
+    try {
+      if (!value) return
+      const trimmed = String(value).trim()
+      if (!trimmed) return
+      const keyCand = trimmed.toLowerCase()
+      if (seriesCandidateSeen.has(keyCand)) return
+      seriesCandidateSeen.add(keyCand)
+      seriesTitleCandidates.push({ label, value: trimmed })
+    } catch (e) { /* ignore candidate errors */ }
   }
 
-  function isSeasonFolderToken(s) {
-    if (!s) return false
-    const norm = String(s).replace(/[\._\-]+/g, ' ').trim().toLowerCase()
-    if (!norm) return false
-    if (/^(season|seasons|series)\s*\d{1,2}$/.test(norm)) return true
-    if (/^(season|series)\s*\d{1,2}\b/.test(norm) && norm.split(/\s+/).length <= 3) return true
-    if (/^s0*\d{1,2}$/.test(norm)) return true
-    return false
-  }
+  addSeriesCandidate('parsed.title', seriesName)
 
   function normalizeCapitalization(str) {
     try {
@@ -1867,7 +1856,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         const hasSeasonMarker = /\bS\d{1,2}([EPp]\d{1,3})?\b|\b\d{1,2}x\d{1,3}\b/i.test(rawSeg)
         if (isSeasonFolderToken(cand)) continue
         if (!(/^[0-9]+$/.test(String(cand).trim()) && hasSeasonMarker)) {
-          if (isEpisodeLike(cand) || isNoiseLike(cand)) continue
+          if (isEpisodeTokenCandidate(cand) || isNoiseLike(cand)) continue
         }
         parentCandidate = cand
         break
@@ -1877,10 +1866,13 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // The parentCandidate variable above is sufficient; leave seriesName as parsed from filename.
   } catch (e) { /* ignore parent derivation errors */ }
 
-  const parsedTitleLooksEpisodeLike = !seriesName || isEpisodeLike(seriesName) || /^episode\b/i.test(String(seriesName)) || /^part\b/i.test(String(seriesName))
+  if (parentCandidate) addSeriesCandidate('parentCandidate', parentCandidate)
+
+  const parsedTitleLooksEpisodeLike = !seriesName || isEpisodeTokenCandidate(seriesName) || /^episode\b/i.test(String(seriesName)) || /^part\b/i.test(String(seriesName))
   if (parentCandidate && parsedTitleLooksEpisodeLike) {
     try { appendLog(`META_PARENT_ELEVATED parsedTitle=${String(seriesName).slice(0,120)} parent=${parentCandidate} path=${String(canonicalPath).slice(0,200)}`) } catch (e) {}
     seriesName = parentCandidate
+    addSeriesCandidate('parent.elevated', seriesName)
   }
 
     // Strip version-suffix tokens like 'v2', 'v3' that often follow episode markers (but preserve decimal episodes like 11.5)
@@ -1901,6 +1893,8 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     seriesName = stripVersionSuffix(seriesName)
     episodeTitle = stripVersionSuffix(episodeTitle)
 
+  addSeriesCandidate('series.stripped', seriesName)
+
   function pad(n){ return String(n).padStart(2,'0') }
   let epLabel = ''
   if (parsed.episodeRange) {
@@ -1915,7 +1909,8 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   if (epLabel) formattedParsedName += ' - ' + epLabel
   formattedParsedName = formattedParsedName.trim()
 
-  const guess = { title: seriesName, parsedName: formattedParsedName, season: normSeason, episode: normEpisode, episodeTitle };
+  const guess = { title: normalizeCapitalization(seriesName), parsedName: formattedParsedName, season: normSeason, episode: normEpisode, episodeTitle, parentCandidate: parentCandidate || null, seriesLookupTitle: null, seriesTitle: null };
+  addSeriesCandidate('initial.guess', guess.title)
   try { console.log('DEBUG: externalEnrich parsed guess=', JSON.stringify(guess)); } catch (e) {}
 
   const tmdbKey = providedKey || (users && users.admin && users.admin.settings && users.admin.settings.tmdb_api_key) || (serverSettings && serverSettings.tmdb_api_key)
@@ -1974,6 +1969,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   } else {
     seriesLookupTitle = seriesName
   }
+  addSeriesCandidate('series.lookup', seriesLookupTitle)
   try { console.log('DEBUG: externalEnrich will attempt metaLookup seriesLookupTitle=', seriesLookupTitle, 'tmdbKeyPresent=', !!tmdbKey); } catch (e) {}
   // For specials, do not pass season/episode to the provider lookup so we can
   // perform name-based matching against TMDb's season-0 specials list. However
@@ -2025,6 +2021,9 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
           // Title (series/movie)
           const mappedTitle = String(res.name || raw.name || raw.title || guess.title).trim()
           guess.title = normalizeCapitalization(mappedTitle).trim()
+          addSeriesCandidate('provider.mapped', guess.title)
+          if (raw && raw.name) addSeriesCandidate('provider.rawName', raw.name)
+          if (raw && raw.title) addSeriesCandidate('provider.rawTitle', raw.title)
 
           // Episode-level data (when available)
           if (res.episode) {
@@ -2176,6 +2175,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
             episodeTitle: tvdbHit.episodeTitle,
             raw: tvdbHit.raw
           }
+          if (tvdbHit.seriesName) addSeriesCandidate('tvdb.seriesName', tvdbHit.seriesName)
           guess.tvdb = { matched: true, id: tvdbHit.seriesId, raw: tvdbHit.raw }
           if (guess.tmdb && guess.tmdb.matched) guess.tmdb.matched = false
           guess.providerFailure = null
@@ -2227,16 +2227,37 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     }
   }
 
+  {
+    const candidateValues = seriesTitleCandidates.map(c => c.value)
+    const resolvedSeries = pickSeriesTitleFromCandidates(candidateValues, guess.episodeTitle || episodeTitle)
+    if (resolvedSeries) {
+      guess.seriesTitle = normalizeCapitalization(resolvedSeries).trim()
+    } else {
+      guess.seriesTitle = normalizeCapitalization(seriesName).trim()
+    }
+  }
+  if (guess.seriesTitle) {
+    guess.title = guess.seriesTitle
+  } else if (!guess.title) {
+    guess.title = normalizeCapitalization(seriesName).trim()
+  } else if (looksLikeEpisodeTitleCandidate(guess.title, guess.episodeTitle || episodeTitle)) {
+    guess.title = normalizeCapitalization(seriesName).trim()
+  }
+  if (!guess.seriesLookupTitle) guess.seriesLookupTitle = seriesLookupTitle || null
+
   return {
     sourceId: 'mock:1',
     title: guess.title || base,
-  year: guess.year || null,
+    seriesTitle: guess.seriesTitle || guess.title || base,
+    parentCandidate: guess.parentCandidate || parentCandidate || null,
+  seriesLookupTitle: guess.seriesLookupTitle || seriesLookupTitle || null,
+    year: guess.year || null,
     parsedName: guess.parsedName,
     episodeRange: parsed.episodeRange,
     season: guess.season,
     episode: guess.episode,
     episodeTitle: guess.episodeTitle,
-  tmdb: guess.tmdb || null,
+    tmdb: guess.tmdb || null,
     provider: guess.provider || null,
     language: 'en',
     timestamp: Date.now(),
@@ -3592,7 +3613,8 @@ app.post('/api/rename/preview', (req, res) => {
 
   // Build title token from provider/parsed tokens and clean it for render.
   const episodeTitleTokenFromMeta = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : ''
-  const title = cleanTitleForRender(rawTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
+  const resolvedSeriesTitle = resolveSeriesTitle(meta, rawTitle, fromPath, episodeTitleTokenFromMeta);
+  const title = cleanTitleForRender(resolvedSeriesTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
 
   // Render template with preferência to enrichment-provided tokens.
   // If the provider returned a renderedName (TMDb), prefer that exact rendered string for preview.
@@ -3624,8 +3646,8 @@ app.post('/api/rename/preview', (req, res) => {
     let toPath;
       if (effectiveOutput) {
     // folder: <output>/<Show Title>/Season NN for series, keep <Show Title (Year)> for movies
-    const isSeriesFolder = (meta && (meta.season != null || meta.episode != null || meta.episodeRange));
-    const titleFolder = isSeriesFolder ? sanitize(stripTrailingYear(title)) : (year ? `${sanitize(title)} (${year})` : sanitize(title));
+  const isSeriesFolder = (meta && (meta.season != null || meta.episode != null || meta.episodeRange));
+  const titleFolder = isSeriesFolder ? sanitize(stripTrailingYear(title)) : (year ? `${sanitize(title)} (${year})` : sanitize(title));
       const seasonFolder = (meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
       const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
       // filename should directly be the rendered template (nameWithoutExt) + ext
@@ -3651,6 +3673,145 @@ function stripTrailingYear(s) {
   try {
     return String(s || '').replace(/\s*\(\s*\d{4}\s*\)\s*$/, '').trim();
   } catch (e) { return String(s || '').trim(); }
+}
+
+function isEpisodeTokenCandidate(value) {
+  if (!value) return false;
+  const str = String(value);
+  if (/\bS\d{1,2}([EPp]\d{1,3})?\b/i.test(str)) return true;
+  if (/\b\d{1,2}x\d{1,3}\b/i.test(str)) return true;
+  if (/\bE\.?\d{1,3}\b/i.test(str)) return true;
+  if (/episode/i.test(str)) return true;
+  if (/^\d{1,3}$/.test(str.trim())) return true;
+  return false;
+}
+
+function isNoiseLike(value) {
+  if (!value) return false;
+  const t = String(value).toLowerCase();
+  const noise = ['1080p', '720p', '2160p', '4k', 'x264', 'x265', 'bluray', 'bdrip', 'webrip', 'web-dl', 'hdtv', 'dvdr', 'bdr', '10bit', '8bit', 'bit', 'bits'];
+  if (/(19|20)\d{2}/.test(t)) return true;
+  for (const n of noise) {
+    if (t.indexOf(n) !== -1) return true;
+  }
+  return false;
+}
+
+function isSeasonFolderToken(value) {
+  if (!value) return false;
+  const norm = String(value).replace(/[\._\-]+/g, ' ').trim().toLowerCase();
+  if (!norm) return false;
+  if (/^(season|seasons|series)\s*\d{1,2}$/.test(norm)) return true;
+  if (/^(season|series)\s*\d{1,2}\b/.test(norm) && norm.split(/\s+/).length <= 3) return true;
+  if (/^s0*\d{1,2}$/.test(norm)) return true;
+  return false;
+}
+
+function looksLikeEpisodeTitleCandidate(title, episodeTitle) {
+  const candidate = String(title || '').trim();
+  if (!candidate) return false;
+  if (isEpisodeTokenCandidate(candidate)) return true;
+  if (/\bS\d{1,2}[EPp]?\d{1,3}\b/i.test(candidate)) return true;
+  if (/\b\d{1,2}x\d{1,3}\b/i.test(candidate)) return true;
+  if (/^episode\s*\d+/i.test(candidate)) return true;
+  if (/^part\s*\d+/i.test(candidate)) return true;
+  if (candidate.length <= 2 && /\d/.test(candidate)) return true;
+  if (episodeTitle) {
+    const epNorm = String(episodeTitle).replace(/[^a-z0-9]/ig, '').toLowerCase();
+    if (epNorm) {
+      const candNorm = candidate.replace(/[^a-z0-9]/ig, '').toLowerCase();
+      if (candNorm && candNorm === epNorm) return true;
+    }
+    const epTrim = String(episodeTitle).trim();
+    if (epTrim) {
+      try {
+        const suffixRe = new RegExp(`(?:[\-–—:\s]+)?${escapeRegExp(epTrim)}$`, 'i');
+        if (suffixRe.test(candidate)) return true;
+      } catch (e) { /* ignore regex issues */ }
+    }
+  }
+  return false;
+}
+
+function pickSeriesTitleFromCandidates(candidates, episodeTitle) {
+  if (!Array.isArray(candidates)) return '';
+  const seen = new Set();
+  for (const cand of candidates) {
+    const value = String(cand || '').trim();
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+  if (isSeasonFolderToken(value)) continue;
+  if (looksLikeEpisodeTitleCandidate(value, episodeTitle)) continue;
+    return value;
+  }
+  for (const cand of candidates) {
+    const value = String(cand || '').trim();
+    if (value) return value;
+  }
+  return '';
+}
+
+function resolveSeriesTitle(meta, fallbackTitle, fromPath, episodeTitleOverride) {
+  try {
+    const episodeTitle = String(episodeTitleOverride || (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) || '').trim();
+    const candidates = [];
+    const seen = new Set();
+    const push = (value) => {
+      if (!value) return;
+      const trimmed = String(value).trim();
+      if (!trimmed) return;
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      candidates.push(trimmed);
+    };
+    if (meta) {
+      push(meta.seriesTitle);
+      push(meta.title);
+      push(meta.parentCandidate);
+      push(meta.seriesLookupTitle);
+      if (meta.parsed && meta.parsed.title) push(meta.parsed.title);
+      if (meta.extraGuess) {
+        push(meta.extraGuess.seriesTitle);
+        push(meta.extraGuess.title);
+        push(meta.extraGuess.parentCandidate);
+        push(meta.extraGuess.seriesLookupTitle);
+        push(meta.extraGuess.parsedName);
+      }
+      if (meta.provider) {
+        push(meta.provider.title);
+        push(meta.provider.seriesTitle);
+        push(meta.provider.name);
+      }
+      if (meta.raw) {
+        push(meta.raw.title);
+        push(meta.raw.name);
+      }
+    }
+    push(fallbackTitle);
+    if (fromPath) {
+      try {
+        const parentDir = path.dirname(fromPath);
+        const parentBase = parentDir ? path.basename(parentDir) : '';
+        if (parentBase) {
+          try {
+            const parseFilename = require('./lib/filename-parser');
+            const parsedParent = parseFilename(parentBase);
+            if (parsedParent && parsedParent.title) push(parsedParent.title);
+          } catch (e) { /* ignore parse errors */ }
+          push(parentBase.replace(/[\._]/g, ' '));
+        }
+      } catch (e) { /* ignore */ }
+    }
+    const chosen = pickSeriesTitleFromCandidates(candidates, episodeTitle);
+    if (chosen) return chosen;
+    if (candidates.length) return candidates[0];
+    return String(fallbackTitle || '').trim();
+  } catch (e) {
+    return String(fallbackTitle || '').trim();
+  }
 }
 
 // Preserve applied/hidden and related metadata when overwriting enrichCache entries
@@ -3964,7 +4125,8 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const tmdbIdToken2 = (enrichment && enrichment.tmdb && enrichment.tmdb.raw && (enrichment.tmdb.raw.id || enrichment.tmdb.raw.seriesId)) ? String(enrichment.tmdb.raw.id || enrichment.tmdb.raw.seriesId) : ''
               const rawTitle2 = (enrichment && (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title))) ? (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title)) : path.basename(from, ext2)
               // reuse cleaning logic from preview to avoid duplicated episode labels/titles in rendered filenames
-              const titleToken2 = cleanTitleForRender(rawTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
+              const resolvedSeriesTitle2 = resolveSeriesTitle(enrichment, rawTitle2, from, episodeTitleToken2);
+              const titleToken2 = cleanTitleForRender(resolvedSeriesTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
               const yearToken2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : ''
               const nameWithoutExtRaw2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
                 .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
