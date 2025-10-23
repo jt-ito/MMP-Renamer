@@ -239,6 +239,8 @@ function normalizeEnrichEntry(entry) {
     out.provider = entry.provider || null;
     out.title = out.title || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
     out.seriesTitle = entry.seriesTitle || (entry.extraGuess && entry.extraGuess.seriesTitle) || out.seriesTitle || out.title || null;
+    out.seriesTitleExact = entry.seriesTitleExact || (entry.extraGuess && (entry.extraGuess.seriesTitleExact || entry.extraGuess.originalSeriesTitle)) || out.seriesTitleExact || null;
+    out.originalSeriesTitle = entry.originalSeriesTitle || (entry.extraGuess && entry.extraGuess.originalSeriesTitle) || out.originalSeriesTitle || null;
     if (!out.title && out.seriesTitle) out.title = out.seriesTitle;
     out.seriesLookupTitle = entry.seriesLookupTitle || (entry.extraGuess && entry.extraGuess.seriesLookupTitle) || out.seriesLookupTitle || null;
     if (typeof out.parentCandidate === 'undefined') {
@@ -1793,7 +1795,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
 
   const seriesTitleCandidates = []
   const seriesCandidateSeen = new Set()
-  const addSeriesCandidate = (label, value) => {
+  const addSeriesCandidate = (label, value, opts = {}) => {
     try {
       if (!value) return
       const trimmed = String(value).trim()
@@ -1801,7 +1803,8 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
       const keyCand = trimmed.toLowerCase()
       if (seriesCandidateSeen.has(keyCand)) return
       seriesCandidateSeen.add(keyCand)
-      seriesTitleCandidates.push({ label, value: trimmed })
+      if (opts && opts.prepend) seriesTitleCandidates.unshift({ label, value: trimmed })
+      else seriesTitleCandidates.push({ label, value: trimmed })
     } catch (e) { /* ignore candidate errors */ }
   }
 
@@ -2019,11 +2022,16 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         try {
           const raw = res.raw || {}
           // Title (series/movie)
-          const mappedTitle = String(res.name || raw.name || raw.title || guess.title).trim()
-          guess.title = normalizeCapitalization(mappedTitle).trim()
-          addSeriesCandidate('provider.mapped', guess.title)
-          if (raw && raw.name) addSeriesCandidate('provider.rawName', raw.name)
-          if (raw && raw.title) addSeriesCandidate('provider.rawTitle', raw.title)
+          const providerTitleRaw = String(res.name || raw.name || raw.title || '').trim()
+          if (providerTitleRaw) {
+            guess.originalSeriesTitle = providerTitleRaw
+            guess.seriesTitleExact = providerTitleRaw
+            addSeriesCandidate('provider.original', providerTitleRaw, { prepend: true })
+          }
+          const mappedTitle = providerTitleRaw || String(raw.displayName || guess.title || seriesName || base).trim()
+          if (mappedTitle) {
+            guess.title = mappedTitle
+          }
 
           // Episode-level data (when available)
           if (res.episode) {
@@ -2061,7 +2069,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
 
           // Provider block - set provider name based on raw.source (tmdb or kitsu)
           const providerName = (raw && raw.source) ? String(raw.source).toLowerCase() : 'tmdb'
-          guess.provider = { matched: true, provider: providerName, id: raw.id || null, raw: raw }
+          guess.provider = { matched: true, provider: providerName, id: raw.id || null, title: providerTitleRaw || mappedTitle || null, raw: raw }
 
           // Back-compat: populate tmdb object only when provider is TMDb
           if (providerName === 'tmdb') {
@@ -2231,12 +2239,20 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     const candidateValues = seriesTitleCandidates.map(c => c.value)
     const resolvedSeries = pickSeriesTitleFromCandidates(candidateValues, guess.episodeTitle || episodeTitle)
     if (resolvedSeries) {
-      guess.seriesTitle = normalizeCapitalization(resolvedSeries).trim()
+      guess.seriesTitle = String(resolvedSeries).trim()
     } else {
       guess.seriesTitle = normalizeCapitalization(seriesName).trim()
     }
   }
-  if (guess.seriesTitle) {
+  if (!guess.seriesTitleExact && guess.seriesTitle) {
+    guess.seriesTitleExact = String(guess.seriesTitle).trim();
+  }
+  if (!guess.originalSeriesTitle && guess.seriesTitleExact) {
+    guess.originalSeriesTitle = guess.seriesTitleExact;
+  }
+  if (guess.seriesTitleExact) {
+    guess.title = String(guess.seriesTitleExact).trim()
+  } else if (guess.seriesTitle) {
     guess.title = guess.seriesTitle
   } else if (!guess.title) {
     guess.title = normalizeCapitalization(seriesName).trim()
@@ -2249,8 +2265,10 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     sourceId: 'mock:1',
     title: guess.title || base,
     seriesTitle: guess.seriesTitle || guess.title || base,
+    seriesTitleExact: guess.seriesTitleExact || guess.originalSeriesTitle || null,
+    originalSeriesTitle: guess.originalSeriesTitle || guess.seriesTitleExact || null,
     parentCandidate: guess.parentCandidate || parentCandidate || null,
-  seriesLookupTitle: guess.seriesLookupTitle || seriesLookupTitle || null,
+    seriesLookupTitle: guess.seriesLookupTitle || seriesLookupTitle || null,
     year: guess.year || null,
     parsedName: guess.parsedName,
     episodeRange: parsed.episodeRange,
@@ -3613,8 +3631,8 @@ app.post('/api/rename/preview', (req, res) => {
 
   // Build title token from provider/parsed tokens and clean it for render.
   const episodeTitleTokenFromMeta = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : ''
-  const resolvedSeriesTitle = resolveSeriesTitle(meta, rawTitle, fromPath, episodeTitleTokenFromMeta);
-  const title = cleanTitleForRender(resolvedSeriesTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
+  const resolvedSeriesTitle = resolveSeriesTitle(meta, rawTitle, fromPath, episodeTitleTokenFromMeta, { preferExact: true });
+  const title = cleanTitleForRender(resolvedSeriesTitle || rawTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
 
   // Render template with preferência to enrichment-provided tokens.
   // If the provider returned a renderedName (TMDb), prefer that exact rendered string for preview.
@@ -3647,7 +3665,8 @@ app.post('/api/rename/preview', (req, res) => {
       if (effectiveOutput) {
     // folder: <output>/<Show Title>/Season NN for series, keep <Show Title (Year)> for movies
   const isSeriesFolder = (meta && (meta.season != null || meta.episode != null || meta.episodeRange));
-  const titleFolder = isSeriesFolder ? sanitize(stripTrailingYear(title)) : (year ? `${sanitize(title)} (${year})` : sanitize(title));
+  const seriesFolderName = String((resolvedSeriesTitle || title || '')).trim();
+  const titleFolder = isSeriesFolder ? sanitize(seriesFolderName) : (year ? `${sanitize(title)} (${year})` : sanitize(title));
       const seasonFolder = (meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
       const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
       // filename should directly be the rendered template (nameWithoutExt) + ext
@@ -3753,7 +3772,7 @@ function pickSeriesTitleFromCandidates(candidates, episodeTitle) {
   return '';
 }
 
-function resolveSeriesTitle(meta, fallbackTitle, fromPath, episodeTitleOverride) {
+function resolveSeriesTitle(meta, fallbackTitle, fromPath, episodeTitleOverride, options = {}) {
   try {
     const episodeTitle = String(episodeTitleOverride || (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) || '').trim();
     const candidates = [];
@@ -3767,13 +3786,31 @@ function resolveSeriesTitle(meta, fallbackTitle, fromPath, episodeTitleOverride)
       seen.add(key);
       candidates.push(trimmed);
     };
+    const preferExact = options && options.preferExact;
+    if (preferExact && meta) {
+      const exacts = [];
+      const pushExact = (value) => {
+        const trimmed = String(value || '').trim();
+        if (trimmed) exacts.push(trimmed);
+      };
+      pushExact(meta.seriesTitleExact);
+      pushExact(meta.originalSeriesTitle);
+      if (meta.extraGuess) {
+        pushExact(meta.extraGuess.seriesTitleExact);
+        pushExact(meta.extraGuess.originalSeriesTitle);
+      }
+      if (exacts.length) return exacts[0];
+    }
     if (meta) {
+      push(meta.seriesTitleExact);
       push(meta.seriesTitle);
       push(meta.title);
       push(meta.parentCandidate);
       push(meta.seriesLookupTitle);
+      push(meta.originalSeriesTitle);
       if (meta.parsed && meta.parsed.title) push(meta.parsed.title);
       if (meta.extraGuess) {
+        push(meta.extraGuess.seriesTitleExact);
         push(meta.extraGuess.seriesTitle);
         push(meta.extraGuess.title);
         push(meta.extraGuess.parentCandidate);
@@ -4125,8 +4162,8 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const tmdbIdToken2 = (enrichment && enrichment.tmdb && enrichment.tmdb.raw && (enrichment.tmdb.raw.id || enrichment.tmdb.raw.seriesId)) ? String(enrichment.tmdb.raw.id || enrichment.tmdb.raw.seriesId) : ''
               const rawTitle2 = (enrichment && (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title))) ? (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title)) : path.basename(from, ext2)
               // reuse cleaning logic from preview to avoid duplicated episode labels/titles in rendered filenames
-              const resolvedSeriesTitle2 = resolveSeriesTitle(enrichment, rawTitle2, from, episodeTitleToken2);
-              const titleToken2 = cleanTitleForRender(resolvedSeriesTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
+              const resolvedSeriesTitle2 = resolveSeriesTitle(enrichment, rawTitle2, from, episodeTitleToken2, { preferExact: true });
+              const titleToken2 = cleanTitleForRender(resolvedSeriesTitle2 || rawTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
               const yearToken2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : ''
               const nameWithoutExtRaw2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
                 .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
