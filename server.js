@@ -238,8 +238,10 @@ function normalizeEnrichEntry(entry) {
     out.parsed = entry.parsed || (entry.parsedName || entry.title ? { title: entry.title || null, parsedName: entry.parsedName || null, season: entry.season != null ? entry.season : null, episode: entry.episode != null ? entry.episode : null } : null);
     out.provider = entry.provider || null;
     out.title = out.title || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
-    out.seriesTitle = entry.seriesTitle || (entry.extraGuess && entry.extraGuess.seriesTitle) || out.seriesTitle || out.title || null;
-    out.seriesTitleExact = entry.seriesTitleExact || (entry.extraGuess && (entry.extraGuess.seriesTitleExact || entry.extraGuess.originalSeriesTitle)) || out.seriesTitleExact || null;
+  out.seriesTitle = entry.seriesTitle || (entry.extraGuess && entry.extraGuess.seriesTitle) || out.seriesTitle || out.title || null;
+  out.seriesTitleExact = entry.seriesTitleExact || (entry.extraGuess && (entry.extraGuess.seriesTitleExact || entry.extraGuess.originalSeriesTitle)) || out.seriesTitleExact || null;
+  out.seriesTitleEnglish = entry.seriesTitleEnglish || (entry.extraGuess && entry.extraGuess.seriesTitleEnglish) || (entry.provider && entry.provider.seriesTitleEnglish) || out.seriesTitleEnglish || null;
+  out.seriesTitleRomaji = entry.seriesTitleRomaji || (entry.extraGuess && entry.extraGuess.seriesTitleRomaji) || (entry.provider && entry.provider.seriesTitleRomaji) || out.seriesTitleRomaji || null;
     out.originalSeriesTitle = entry.originalSeriesTitle || (entry.extraGuess && entry.extraGuess.originalSeriesTitle) || out.originalSeriesTitle || null;
     if (!out.title && out.seriesTitle) out.title = out.seriesTitle;
     out.seriesLookupTitle = entry.seriesLookupTitle || (entry.extraGuess && entry.extraGuess.seriesLookupTitle) || out.seriesLookupTitle || null;
@@ -3650,7 +3652,9 @@ app.post('/api/rename/preview', (req, res) => {
   // Build title token from provider/parsed tokens and clean it for render.
   const episodeTitleTokenFromMeta = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : ''
   const resolvedSeriesTitle = resolveSeriesTitle(meta, rawTitle, fromPath, episodeTitleTokenFromMeta, { preferExact: true });
-  const title = cleanTitleForRender(resolvedSeriesTitle || rawTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
+  const englishSeriesTitle = extractEnglishSeriesTitle(meta);
+  const renderBaseTitle = englishSeriesTitle || resolvedSeriesTitle || rawTitle;
+  const title = cleanTitleForRender(renderBaseTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
 
   // Render template with preferência to enrichment-provided tokens.
   // If the provider returned a renderedName (TMDb), prefer that exact rendered string for preview.
@@ -3683,7 +3687,7 @@ app.post('/api/rename/preview', (req, res) => {
       if (effectiveOutput) {
     // folder: <output>/<Show Title>/Season NN for series, keep <Show Title (Year)> for movies
   const isSeriesFolder = (meta && (meta.season != null || meta.episode != null || meta.episodeRange));
-  const seriesFolderName = String((resolvedSeriesTitle || title || '')).trim();
+  const seriesFolderName = String((englishSeriesTitle || resolvedSeriesTitle || title || '')).trim();
   const titleFolder = isSeriesFolder ? sanitize(seriesFolderName) : (year ? `${sanitize(title)} (${year})` : sanitize(title));
       const seasonFolder = (meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
       const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
@@ -4236,7 +4240,9 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const rawTitle2 = (enrichment && (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title))) ? (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title)) : path.basename(from, ext2)
               // reuse cleaning logic from preview to avoid duplicated episode labels/titles in rendered filenames
               const resolvedSeriesTitle2 = resolveSeriesTitle(enrichment, rawTitle2, from, episodeTitleToken2, { preferExact: true });
-              const titleToken2 = cleanTitleForRender(resolvedSeriesTitle2 || rawTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
+              const englishSeriesTitle2 = extractEnglishSeriesTitle(enrichment);
+              const renderBaseTitle2 = englishSeriesTitle2 || resolvedSeriesTitle2 || rawTitle2;
+              const titleToken2 = cleanTitleForRender(renderBaseTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
               const yearToken2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : ''
               const nameWithoutExtRaw2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
                 .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
