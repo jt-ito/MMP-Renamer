@@ -3720,9 +3720,10 @@ app.post('/api/rename/preview', (req, res) => {
     // strip any extension the provider might include and use the provider-rendered name verbatim
     nameWithoutExtRaw = String(meta.provider.renderedName).replace(/\.[^/.]+$/, '');
   } else {
+    const baseBasename = path.basename(fromPath, path.extname(fromPath));
     nameWithoutExtRaw = baseNameTemplate
       .replace('{title}', sanitize(title))
-      .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
+      .replace('{basename}', sanitize(baseBasename))
       .replace('{year}', year || '')
       .replace('{epLabel}', sanitize(epLabel))
       .replace('{episodeTitle}', sanitize(episodeTitleToken))
@@ -4349,8 +4350,9 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const renderBaseTitle2 = englishSeriesTitle2 || resolvedSeriesTitle2 || rawTitle2;
               const titleToken2 = cleanTitleForRender(renderBaseTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
               const yearToken2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : ''
+              const baseBasename2 = path.basename(from, path.extname(from));
               const nameWithoutExtRaw2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
-                .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
+                .replace('{basename}', sanitize(baseBasename2))
                 .replace('{year}', yearToken2)
                 .replace('{epLabel}', sanitize(epLabel2))
                 .replace('{episodeTitle}', sanitize(episodeTitleToken2))
