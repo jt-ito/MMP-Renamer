@@ -193,6 +193,16 @@ try {
     if (require.main === module) process.exit(1);
 }
 
+if (!db) {
+  try { enrichCache = JSON.parse(fs.readFileSync(enrichStoreFile, 'utf8') || '{}'); } catch (e) { enrichCache = {}; }
+  try { parsedCache = JSON.parse(fs.readFileSync(parsedCacheFile, 'utf8') || '{}'); } catch (e) { parsedCache = {}; }
+  try { renderedIndex = JSON.parse(fs.readFileSync(renderedIndexFile, 'utf8') || '{}'); } catch (e) { renderedIndex = {}; }
+  try { scans = JSON.parse(fs.readFileSync(scanStoreFile, 'utf8') || '{}'); } catch (e) { scans = {}; }
+  if (!Array.isArray(hideEvents)) hideEvents = [];
+}
+
+try { healCachedEnglishAndMovieFlags(); } catch (e) { try { appendLog(`ENRICH_CACHE_HEAL_INIT_FAIL err=${e && e.message ? e.message : String(e)}`); } catch (ee) {} }
+
 // Initialize DB for scans if available
 // (DB was initialized above; this later duplicate block removed)
 
@@ -238,15 +248,14 @@ function normalizeEnrichEntry(entry) {
     out.parsed = entry.parsed || (entry.parsedName || entry.title ? { title: entry.title || null, parsedName: entry.parsedName || null, season: entry.season != null ? entry.season : null, episode: entry.episode != null ? entry.episode : null } : null);
     out.provider = entry.provider || null;
     out.title = out.title || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
-    out.seriesTitle = entry.seriesTitle || (entry.extraGuess && entry.extraGuess.seriesTitle) || out.seriesTitle || out.title || null;
-    out.seriesTitleExact = entry.seriesTitleExact || (entry.extraGuess && (entry.extraGuess.seriesTitleExact || entry.extraGuess.originalSeriesTitle)) || out.seriesTitleExact || null;
-    out.seriesTitleEnglish = entry.seriesTitleEnglish || (entry.extraGuess && entry.extraGuess.seriesTitleEnglish) || (entry.provider && entry.provider.seriesTitleEnglish) || out.seriesTitleEnglish || null;
-    out.seriesTitleRomaji = entry.seriesTitleRomaji || (entry.extraGuess && entry.extraGuess.seriesTitleRomaji) || (entry.provider && entry.provider.seriesTitleRomaji) || out.seriesTitleRomaji || null;
-    if (typeof out.isMovie === 'undefined' || out.isMovie === null) {
-      if (typeof entry.isMovie === 'boolean') out.isMovie = entry.isMovie;
-      else if (entry.extraGuess && typeof entry.extraGuess.isMovie === 'boolean') out.isMovie = entry.extraGuess.isMovie;
-      else out.isMovie = null;
-    }
+  out.seriesTitle = entry.seriesTitle || (entry.extraGuess && entry.extraGuess.seriesTitle) || out.seriesTitle || out.title || null;
+  out.seriesTitleExact = entry.seriesTitleExact || (entry.extraGuess && (entry.extraGuess.seriesTitleExact || entry.extraGuess.originalSeriesTitle)) || out.seriesTitleExact || null;
+  out.seriesTitleEnglish = entry.seriesTitleEnglish || (entry.extraGuess && entry.extraGuess.seriesTitleEnglish) || (entry.provider && entry.provider.seriesTitleEnglish) || out.seriesTitleEnglish || null;
+  out.seriesTitleRomaji = entry.seriesTitleRomaji || (entry.extraGuess && entry.extraGuess.seriesTitleRomaji) || (entry.provider && entry.provider.seriesTitleRomaji) || out.seriesTitleRomaji || null;
+  if (typeof entry.isMovie === 'boolean') out.isMovie = entry.isMovie;
+  else if (entry.extraGuess && typeof entry.extraGuess.isMovie === 'boolean') out.isMovie = entry.extraGuess.isMovie;
+  if (!out.mediaFormat && entry.mediaFormat) out.mediaFormat = entry.mediaFormat;
+  if (!out.mediaFormat && entry.extraGuess && entry.extraGuess.mediaFormat) out.mediaFormat = entry.extraGuess.mediaFormat;
     out.originalSeriesTitle = entry.originalSeriesTitle || (entry.extraGuess && entry.extraGuess.originalSeriesTitle) || out.originalSeriesTitle || null;
     if (!out.title && out.seriesTitle) out.title = out.seriesTitle;
     out.seriesLookupTitle = entry.seriesLookupTitle || (entry.extraGuess && entry.extraGuess.seriesLookupTitle) || out.seriesLookupTitle || null;
@@ -783,9 +792,7 @@ async function metaLookup(title, apiKey, opts = {}) {
 
   const rawName = (pick && pick.title) ? (pick.title.english || pick.title.romaji || pick.title.native) : (pick && (pick.romaji || pick.english || pick.native) ? (pick.english || pick.romaji || pick.native) : null)
   const name = stripAniListSeasonSuffix(rawName, pick)
-  const format = pick && pick.format ? String(pick.format).toUpperCase() : null
-  const isMovie = format === 'MOVIE'
-  return { provider: 'anilist', id: pick.id, name: name, raw: pick, format, isMovie }
+  return { provider: 'anilist', id: pick.id, name: name, raw: pick }
     } catch (e) { return null }
   }
 
@@ -1791,12 +1798,44 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   let attemptedProvider = false;
   let providerResult = null;
   let providerError = null;
+  let movieSignal = false;
+  let seriesSignal = false;
+  let detectedMediaFormat = null;
+  function considerFormatCandidate(val) {
+    try {
+      if (!val) return;
+      const str = String(val).trim();
+      if (!str) return;
+      if (!detectedMediaFormat) detectedMediaFormat = str;
+      const upper = str.toUpperCase();
+      if (upper.includes('MOVIE') || upper === 'FILM' || upper === 'FEATURE' || upper === 'THEATRICAL') movieSignal = true;
+      if (upper.includes('TV') || upper.includes('SERIES') || upper === 'OVA' || upper === 'ONA' || upper === 'SPECIAL') seriesSignal = true;
+    } catch (e) { /* ignore */ }
+  }
+  function analyzeRawForMedia(raw) {
+    try {
+      if (!raw || typeof raw !== 'object') return;
+      if (raw.format) considerFormatCandidate(raw.format);
+      if (raw.mediaFormat) considerFormatCandidate(raw.mediaFormat);
+      if (raw.subType) considerFormatCandidate(raw.subType);
+      if (raw.subtype) considerFormatCandidate(raw.subtype);
+      const mediaType = raw.media_type || raw.mediaType || raw.type || raw.category;
+      if (mediaType) {
+        const norm = String(mediaType).toLowerCase();
+        if (norm.includes('movie') || norm === 'film') movieSignal = true;
+        if (norm.includes('tv') || norm.includes('series') || norm.includes('show')) seriesSignal = true;
+      }
+      if (raw.release_date && !raw.first_air_date) movieSignal = true;
+      if (raw.first_air_date || raw.number_of_episodes || raw.episode_count || raw.episode_run_time) seriesSignal = true;
+    } catch (e) { /* ignore */ }
+  }
   // lightweight filename parser to strip common release tags and extract season/episode
   const base = path.basename(canonicalPath, path.extname(canonicalPath));
   const parseFilename = require('./lib/filename-parser');
   const parsed = parseFilename(base);
   const normSeason = (parsed.season == null && parsed.episode != null) ? 1 : parsed.season
   const normEpisode = parsed.episode
+  if (normSeason != null || normEpisode != null || parsed.episodeRange) seriesSignal = true;
 
   // split series and episode title heuristically
   let seriesName = parsed.title || parsed.parsedName || base
@@ -2030,24 +2069,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         // Map TMDb response into our guess structure explicitly
         try {
           const raw = res.raw || {}
-          const providerLabel = ((res && res.provider) ? String(res.provider) : (raw && raw.source ? String(raw.source) : '')).toLowerCase()
-          let isMovie = false
-          if (res && typeof res.isMovie === 'boolean') {
-            isMovie = res.isMovie
-          }
-          if (!isMovie && providerLabel === 'anilist') {
-            const fmt = raw && raw.format ? String(raw.format).toUpperCase() : (res && res.format ? String(res.format).toUpperCase() : null)
-            if (fmt === 'MOVIE' || fmt === 'MOVIE_SHORT') isMovie = true
-          }
-          if (!isMovie && providerLabel === 'tmdb') {
-            const mediaType = raw && raw.media_type ? String(raw.media_type).toLowerCase() : (raw && raw.type ? String(raw.type).toLowerCase() : '')
-            if (mediaType === 'movie') isMovie = true
-            else if (!mediaType) {
-              // Heuristic: TMDb movie search responses typically expose title/original_title but no name field
-              const hasSeriesFields = typeof raw.number_of_episodes !== 'undefined' || typeof raw.number_of_seasons !== 'undefined'
-              if (!hasSeriesFields && raw && raw.title && !raw.name) isMovie = true
-            }
-          }
+          analyzeRawForMedia(raw)
           // Title (series/movie)
           // Prefer AniList-provided English title, then romaji, then fallback to provider name fields
           let providerTitleRaw = String(res.name || raw.name || raw.title || '').trim()
@@ -2072,11 +2094,6 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
           }
           const mappedTitle = providerPreferred || String(raw.displayName || guess.title || seriesName || base).trim()
           if (mappedTitle) guess.title = mappedTitle
-          if (isMovie) {
-            guess.isMovie = true
-            guess.season = null
-            guess.episode = null
-          }
 
           // Episode-level data (when available)
           if (res.episode) {
@@ -2228,6 +2245,9 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
             episodeTitle: tvdbHit.episodeTitle,
             raw: tvdbHit.raw
           }
+          seriesSignal = true
+          analyzeRawForMedia(tvdbHit && tvdbHit.raw && tvdbHit.raw.series)
+          analyzeRawForMedia(tvdbHit && tvdbHit.raw && tvdbHit.raw.episode)
           if (tvdbHit.seriesName) addSeriesCandidate('tvdb.seriesName', tvdbHit.seriesName)
           guess.tvdb = { matched: true, id: tvdbHit.seriesId, raw: tvdbHit.raw }
           if (guess.tmdb && guess.tmdb.matched) guess.tmdb.matched = false
@@ -2280,6 +2300,17 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     }
   }
 
+  if (detectedMediaFormat && !guess.mediaFormat) guess.mediaFormat = detectedMediaFormat;
+  if (movieSignal) {
+    if (!seriesSignal) {
+      guess.isMovie = true;
+    } else if (typeof guess.isMovie === 'undefined') {
+      guess.isMovie = true;
+    }
+  } else if (seriesSignal && typeof guess.isMovie === 'undefined') {
+    guess.isMovie = false;
+  }
+
   {
     const candidateValues = seriesTitleCandidates.map(c => c.value)
     // Prefer AniList English title when available to avoid mixed romaji/english folders
@@ -2327,9 +2358,10 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     season: guess.season,
     episode: guess.episode,
     episodeTitle: guess.episodeTitle,
+  isMovie: (typeof guess.isMovie === 'boolean') ? guess.isMovie : null,
+  mediaFormat: guess.mediaFormat || null,
     tmdb: guess.tmdb || null,
     provider: guess.provider || null,
-  isMovie: (typeof guess.isMovie === 'boolean') ? guess.isMovie : null,
     language: 'en',
     timestamp: Date.now(),
     extraGuess: guess
@@ -2668,7 +2700,6 @@ app.post('/api/scan', async (req, res) => {
         if (IGNORED_DIRS.has(e.name)) continue;
         walkDir(full);
       } else {
-        // video file filter (match many common container formats)
         if (extRe.test(e.name)) {
           items.push({ id: uuidv4(), canonicalPath: canonicalize(full), scannedAt: Date.now() });
         }
@@ -3657,6 +3688,7 @@ app.post('/api/rename/preview', (req, res) => {
   try { appendLog(`PREVIEW_EFFECTIVE_OUTPUT user=${req.session && req.session.username ? req.session.username : ''} effectiveOutput=${effectiveOutput || ''}`); } catch (e) {}
   const plans = items.map(it => {
     const fromPath = canonicalize(it.canonicalPath);
+    const key = fromPath;
     const meta = enrichCache[fromPath] || {};
   // prefer enrichment title (provider token) -> parsed/title/basename
   const rawTitle = (meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath));
@@ -3674,44 +3706,48 @@ app.post('/api/rename/preview', (req, res) => {
     } else if (meta && meta.episode != null) {
       epLabel = meta.season != null ? `S${pad(meta.season)}E${pad(meta.episode)}` : `E${pad(meta.episode)}`
     }
-  const episodeTitleToken = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : ''
+  const episodeTitleToken = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '';
 
   // Support extra template tokens: {season}, {episode}, {episodeRange}, {tmdbId}
-    const seasonToken = (meta && meta.season != null) ? String(meta.season) : ''
-    const episodeToken = (meta && meta.episode != null) ? String(meta.episode) : ''
-    const episodeRangeToken = (meta && meta.episodeRange) ? String(meta.episodeRange) : ''
-  const tmdbIdToken = (meta && meta.tmdb && meta.tmdb.raw && (meta.tmdb.raw.id || meta.tmdb.raw.seriesId)) ? String(meta.tmdb.raw.id || meta.tmdb.raw.seriesId) : ''
+  const seasonToken = (meta && meta.season != null) ? String(meta.season) : '';
+  const episodeToken = (meta && meta.episode != null) ? String(meta.episode) : '';
+  const episodeRangeToken = (meta && meta.episodeRange) ? String(meta.episodeRange) : '';
+  const tmdbIdToken = (meta && meta.tmdb && meta.tmdb.raw && (meta.tmdb.raw.id || meta.tmdb.raw.seriesId)) ? String(meta.tmdb.raw.id || meta.tmdb.raw.seriesId) : '';
 
-  // Build title token from provider/parsed tokens and clean it for render.
-  const episodeTitleTokenFromMeta = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : ''
+  const episodeTitleTokenFromMeta = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '';
   const resolvedSeriesTitle = resolveSeriesTitle(meta, rawTitle, fromPath, episodeTitleTokenFromMeta, { preferExact: true });
   const englishSeriesTitle = extractEnglishSeriesTitle(meta);
   const renderBaseTitle = englishSeriesTitle || resolvedSeriesTitle || rawTitle;
   const title = cleanTitleForRender(renderBaseTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
-  const derivedMovieFlag = deriveIsMovieFlag(meta);
-  const cachedIsMovie = (meta && typeof meta.isMovie === 'boolean') ? meta.isMovie : null;
-  const needsMovieUpdate = (typeof derivedMovieFlag === 'boolean' && derivedMovieFlag !== cachedIsMovie);
-  if (englishSeriesTitle || needsMovieUpdate) {
+  const isMovie = determineIsMovie(meta);
+  const folderBaseTitle = renderBaseTitle || title;
+  if (englishSeriesTitle || typeof isMovie === 'boolean') {
     try {
-      const updates = {};
-      if (englishSeriesTitle) {
-        const currentEnglish = meta && meta.seriesTitleEnglish ? String(meta.seriesTitleEnglish).trim() : null;
-        if (!currentEnglish || currentEnglish !== englishSeriesTitle) {
-          updates.seriesTitleEnglish = englishSeriesTitle;
-          updates.seriesTitle = englishSeriesTitle;
-          updates.seriesTitleExact = englishSeriesTitle;
-        }
-      }
-      if (needsMovieUpdate) {
-        updates.isMovie = derivedMovieFlag;
-      }
-      if (Object.keys(updates).length) {
-        updateEnrichCacheInMemory(fromPath, Object.assign({}, meta, updates));
+      const currentEnglish = meta && meta.seriesTitleEnglish ? String(meta.seriesTitleEnglish).trim() : null;
+      const needsEnglishUpdate = !currentEnglish || currentEnglish !== englishSeriesTitle;
+      const needsMovieUpdate = typeof isMovie === 'boolean' && typeof meta.isMovie !== 'boolean';
+      if (needsEnglishUpdate || needsMovieUpdate) {
+        const updatedExtra = meta && meta.extraGuess && typeof meta.extraGuess === 'object' ? Object.assign({}, meta.extraGuess) : {};
+        if (typeof isMovie === 'boolean') updatedExtra.isMovie = isMovie;
+        const cacheUpdate = Object.assign({}, meta, {
+          seriesTitleEnglish: englishSeriesTitle || currentEnglish || null,
+          seriesTitle: englishSeriesTitle || meta.seriesTitle || null,
+          seriesTitleExact: englishSeriesTitle || meta.seriesTitleExact || null,
+          isMovie: (typeof isMovie === 'boolean') ? isMovie : meta && meta.isMovie,
+          extraGuess: updatedExtra,
+        });
+        updateEnrichCacheInMemory(fromPath, cacheUpdate);
         schedulePersistEnrichCache(400);
       }
     } catch (e) { /* best-effort cache update */ }
   }
-  const folderBaseTitle = renderBaseTitle || title;
+  let baseFolderName = String(folderBaseTitle || resolvedSeriesTitle || title || rawTitle || '').trim();
+  if (!baseFolderName) baseFolderName = path.basename(fromPath, path.extname(fromPath)) || rawTitle || title;
+  let sanitizedBaseFolder = sanitize(baseFolderName);
+  if (!sanitizedBaseFolder) sanitizedBaseFolder = sanitize(title) || sanitize(rawTitle) || 'Untitled';
+  const titleFolder = (isMovie && year) ? `${sanitizedBaseFolder} (${year})` : sanitizedBaseFolder;
+  const seasonFolder = (!isMovie && meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
+  const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
 
   // Render template with preferência to enrichment-provided tokens.
   // If the provider returned a renderedName (TMDb), prefer that exact rendered string for preview.
@@ -3720,10 +3756,9 @@ app.post('/api/rename/preview', (req, res) => {
     // strip any extension the provider might include and use the provider-rendered name verbatim
     nameWithoutExtRaw = String(meta.provider.renderedName).replace(/\.[^/.]+$/, '');
   } else {
-    const baseBasename = path.basename(fromPath, path.extname(fromPath));
     nameWithoutExtRaw = baseNameTemplate
       .replace('{title}', sanitize(title))
-      .replace('{basename}', sanitize(baseBasename))
+      .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
       .replace('{year}', year || '')
       .replace('{epLabel}', sanitize(epLabel))
       .replace('{episodeTitle}', sanitize(episodeTitleToken))
@@ -3742,25 +3777,9 @@ app.post('/api/rename/preview', (req, res) => {
     const fileName = (nameWithoutExt + ext).trim();
     // If an output path is configured, plan a hardlink under that path preserving a Jellyfin-friendly layout
     let toPath;
-      if (effectiveOutput) {
-    // folder: <output>/<Show Title>/Season NN for series, keep <Show Title (Year)> for movies
-  const isMovie = (typeof derivedMovieFlag === 'boolean') ? derivedMovieFlag : (cachedIsMovie === true);
-  const isSeriesFolder = !isMovie && (meta && (meta.season != null || meta.episode != null || meta.episodeRange));
-  const seriesFolderName = String(folderBaseTitle || title || '').trim();
-  let titleFolder;
-  if (isSeriesFolder) {
-    titleFolder = sanitize(seriesFolderName);
-  } else if (isMovie) {
-    titleFolder = year ? `${sanitize(folderBaseTitle)} (${year})` : sanitize(folderBaseTitle);
-  } else {
-    titleFolder = sanitize(folderBaseTitle);
-  }
-      const seasonFolder = (meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
-      const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
-      // filename should directly be the rendered template (nameWithoutExt) + ext
+    if (effectiveOutput) {
       let finalFileName = nameWithoutExt;
-  // finalFileName is derived strictly from the rendered template (no automatic year injection)
-  finalFileName = (finalFileName + ext).replace(/\\/g, '/');
+      finalFileName = (finalFileName + ext).replace(/\\/g, '/');
       toPath = path.join(folder, finalFileName).replace(/\\/g, '/');
     } else {
       toPath = path.join(path.dirname(fromPath), fileName).replace(/\\/g, '/');
@@ -4144,37 +4163,116 @@ function cleanTitleForRender(t, epLabel, epTitle) {
   return s || String(t).trim();
 }
 
-// Optional: log when provider returned season/episode but no episodeTitle (helps debug TMDb)
-function logMissingEpisodeTitleIfNeeded(key, providerBlock) {
-
-function deriveIsMovieFlag(meta) {
+function determineIsMovie(meta) {
   try {
-    if (!meta) return null;
+    if (!meta) return false;
     if (typeof meta.isMovie === 'boolean') return meta.isMovie;
-    const guess = meta.extraGuess || {};
-    if (typeof guess.isMovie === 'boolean') return guess.isMovie;
-    const providerBlock = (guess && guess.provider) ? guess.provider : (meta.provider || {});
-    const providerLabel = providerBlock && providerBlock.provider ? String(providerBlock.provider).toLowerCase() : '';
-    const raw = providerBlock && providerBlock.raw ? providerBlock.raw : null;
-    if (raw && raw.format) {
-      const fmt = String(raw.format).toUpperCase();
-      if (fmt === 'MOVIE' || fmt === 'MOVIE_SHORT') return true;
+    const extra = meta.extraGuess || {};
+    if (extra && typeof extra.isMovie === 'boolean') return extra.isMovie;
+    let movie = false;
+    let series = false;
+    const considered = new Set();
+    const pushRaw = (raw) => {
+      if (!raw || typeof raw !== 'object') return;
+      if (considered.has(raw)) return;
+      considered.add(raw);
+      try {
+        const formatCandidates = [raw.format, raw.mediaFormat, raw.subType, raw.subtype];
+        for (const fmt of formatCandidates) {
+          if (!fmt) continue;
+          const up = String(fmt).toUpperCase();
+          if (up.includes('MOVIE') || up === 'FILM' || up === 'FEATURE' || up === 'THEATRICAL') movie = true;
+          if (up.includes('TV') || up.includes('SERIES') || up === 'OVA' || up === 'ONA' || up === 'SPECIAL') series = true;
+        }
+        const mediaType = raw.media_type || raw.mediaType || raw.type || raw.category;
+        if (mediaType) {
+          const low = String(mediaType).toLowerCase();
+          if (low.includes('movie') || low === 'film') movie = true;
+          if (low.includes('tv') || low.includes('series') || low.includes('show')) series = true;
+        }
+        if (raw.release_date && !raw.first_air_date) movie = true;
+        if (raw.first_air_date || raw.number_of_episodes || raw.episode_count || raw.episode_run_time) series = true;
+      } catch (e) { /* ignore raw-level errors */ }
+    };
+    pushRaw(meta.raw);
+    pushRaw(meta.provider && meta.provider.raw);
+    if (extra && extra.provider) pushRaw(extra.provider.raw);
+    pushRaw(meta.tmdb && meta.tmdb.raw);
+    if (extra && extra.tmdb) pushRaw(extra.tmdb.raw);
+    pushRaw(extra && extra.raw);
+    pushRaw(extra && extra.anilist && extra.anilist.raw);
+    if (meta.mediaFormat) {
+      const up = String(meta.mediaFormat).toUpperCase();
+      if (up.includes('MOVIE') || up === 'FILM' || up === 'FEATURE') movie = true;
+      if (up.includes('TV') || up.includes('SERIES') || up === 'OVA' || up === 'ONA' || up === 'SPECIAL') series = true;
     }
-    if (raw && raw.media_type) {
-      if (String(raw.media_type).toLowerCase() === 'movie') return true;
+    if (extra && extra.mediaFormat) {
+      const up = String(extra.mediaFormat).toUpperCase();
+      if (up.includes('MOVIE') || up === 'FILM' || up === 'FEATURE') movie = true;
+      if (up.includes('TV') || up.includes('SERIES') || up === 'OVA' || up === 'ONA' || up === 'SPECIAL') series = true;
     }
-    if (raw && raw.type) {
-      if (String(raw.type).toLowerCase() === 'movie') return true;
+    if (!series) {
+      if (meta.season != null || meta.episode != null || meta.episodeRange) series = true;
+      else if (extra && (extra.season != null || extra.episode != null || extra.episodeRange)) series = true;
     }
-    if (providerLabel === 'tmdb' && raw) {
-      const hasSeriesFields = typeof raw.number_of_episodes !== 'undefined' || typeof raw.number_of_seasons !== 'undefined';
-      if (!hasSeriesFields && raw.title && !raw.name) return true;
-    }
+    if (movie && !series) return true;
+    if (series && !movie) return false;
+    if (movie) return true;
+    if (series) return false;
     return null;
   } catch (e) {
     return null;
   }
 }
+
+function healCachedEnglishAndMovieFlags() {
+  try {
+    const keys = Object.keys(enrichCache || {});
+    if (!keys.length) return;
+    const healed = [];
+    for (const key of keys) {
+      const meta = enrichCache[key];
+      if (!meta || typeof meta !== 'object') continue;
+      let updatedMeta = null;
+      let extraGuess = null;
+      try {
+        const englishTitle = extractEnglishSeriesTitle(meta);
+        const currentEnglish = meta.seriesTitleEnglish ? String(meta.seriesTitleEnglish).trim() : null;
+        if (englishTitle && (!currentEnglish || currentEnglish !== englishTitle)) {
+          updatedMeta = Object.assign({}, meta);
+          extraGuess = Object.assign({}, meta.extraGuess || {});
+          updatedMeta.seriesTitleEnglish = englishTitle;
+          const existingSeries = meta.seriesTitle ? String(meta.seriesTitle).trim() : '';
+          if (!existingSeries || existingSeries === currentEnglish) updatedMeta.seriesTitle = englishTitle;
+          const existingExact = meta.seriesTitleExact ? String(meta.seriesTitleExact).trim() : '';
+          if (!existingExact || existingExact === currentEnglish) updatedMeta.seriesTitleExact = englishTitle;
+          extraGuess.seriesTitleEnglish = englishTitle;
+        }
+        const computedMovie = determineIsMovie(meta);
+        if (computedMovie === true && meta.isMovie !== true) {
+          if (!updatedMeta) updatedMeta = Object.assign({}, meta);
+          extraGuess = extraGuess || Object.assign({}, meta.extraGuess || {});
+          updatedMeta.isMovie = true;
+          extraGuess.isMovie = true;
+        }
+      } catch (e) { /* best-effort per entry */ }
+      if (updatedMeta) {
+        updatedMeta.extraGuess = extraGuess || Object.assign({}, meta.extraGuess || {});
+        enrichCache[key] = updatedMeta;
+        healed.push(key);
+      }
+    }
+    if (healed.length) {
+      try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
+      try { appendLog(`ENRICH_CACHE_HEAL applied=${healed.length}`); } catch (e) {}
+    }
+  } catch (e) {
+    try { appendLog(`ENRICH_CACHE_HEAL_FAIL err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
+  }
+}
+
+// Optional: log when provider returned season/episode but no episodeTitle (helps debug TMDb)
+function logMissingEpisodeTitleIfNeeded(key, providerBlock) {
   try {
     if (!providerBlock) return;
     const hasEp = (providerBlock.episode != null);
@@ -4328,6 +4426,7 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
             // Re-render filename from enrichment and template if available to ensure TMDb-based names are used
             try {
               const enrichment = enrichCache[from] || {};
+              const key = from;
               const tmpl = (p.templateUsed) ? p.templateUsed : (enrichment && enrichment.extraGuess && enrichment.extraGuess.rename_template) || serverSettings.rename_template || '{title}';
               // build tokens similar to previewRename
               const ext2 = path.extname(from);
@@ -4350,9 +4449,8 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const renderBaseTitle2 = englishSeriesTitle2 || resolvedSeriesTitle2 || rawTitle2;
               const titleToken2 = cleanTitleForRender(renderBaseTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
               const yearToken2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : ''
-              const baseBasename2 = path.basename(from, path.extname(from));
               const nameWithoutExtRaw2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
-                .replace('{basename}', sanitize(baseBasename2))
+                .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
                 .replace('{year}', yearToken2)
                 .replace('{epLabel}', sanitize(epLabel2))
                 .replace('{episodeTitle}', sanitize(episodeTitleToken2))
