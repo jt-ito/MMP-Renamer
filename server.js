@@ -3790,8 +3790,57 @@ function pickSeriesTitleFromCandidates(candidates, episodeTitle) {
   return '';
 }
 
+function extractEnglishSeriesTitle(meta) {
+  try {
+    const seen = new Set();
+    const out = [];
+    const push = (value) => {
+      if (!value) return;
+      const trimmed = String(value).trim();
+      if (!trimmed) return;
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(trimmed);
+    };
+    if (meta && typeof meta === 'object') {
+      push(meta.seriesTitleEnglish);
+      if (meta.extraGuess) {
+        push(meta.extraGuess.seriesTitleEnglish);
+      }
+      if (meta.provider) {
+        push(meta.provider.seriesTitleEnglish);
+        push(meta.provider.titleEnglish);
+        if (meta.provider.raw && typeof meta.provider.raw === 'object') {
+          const rawTitle = meta.provider.raw.title;
+          if (rawTitle && typeof rawTitle === 'object') {
+            for (const key of Object.keys(rawTitle)) {
+              if (key && key.toLowerCase().indexOf('english') !== -1) push(rawTitle[key]);
+            }
+          }
+        }
+      }
+      const nestedTitleSources = [];
+      if (meta.raw && typeof meta.raw === 'object') nestedTitleSources.push(meta.raw.title);
+      if (meta.extraGuess && meta.extraGuess.provider && meta.extraGuess.provider.raw && typeof meta.extraGuess.provider.raw === 'object') {
+        nestedTitleSources.push(meta.extraGuess.provider.raw.title);
+      }
+      for (const block of nestedTitleSources) {
+        if (!block || typeof block !== 'object') continue;
+        for (const key of Object.keys(block)) {
+          if (key && key.toLowerCase().indexOf('english') !== -1) push(block[key]);
+        }
+      }
+    }
+    return out.length ? out[0] : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function resolveSeriesTitle(meta, fallbackTitle, fromPath, episodeTitleOverride, options = {}) {
   try {
+    const englishPreferred = extractEnglishSeriesTitle(meta);
     const episodeTitle = String(episodeTitleOverride || (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) || '').trim();
     const candidates = [];
     const seen = new Set();
@@ -3805,8 +3854,10 @@ function resolveSeriesTitle(meta, fallbackTitle, fromPath, episodeTitleOverride,
       candidates.push(trimmed);
     };
     const preferExact = options && options.preferExact;
+    if (preferExact && englishPreferred) return englishPreferred;
     if (preferExact && meta) {
       const exacts = [];
+      if (englishPreferred) exacts.push(englishPreferred);
       const pushExact = (value) => {
         const trimmed = String(value || '').trim();
         if (trimmed) exacts.push(trimmed);
@@ -3834,17 +3885,21 @@ function resolveSeriesTitle(meta, fallbackTitle, fromPath, episodeTitleOverride,
         push(meta.extraGuess.parentCandidate);
         push(meta.extraGuess.seriesLookupTitle);
         push(meta.extraGuess.parsedName);
+        push(meta.extraGuess.seriesTitleEnglish);
       }
       if (meta.provider) {
         push(meta.provider.title);
         push(meta.provider.seriesTitle);
         push(meta.provider.name);
+        push(meta.provider.seriesTitleEnglish);
+        push(meta.provider.titleEnglish);
       }
       if (meta.raw) {
         push(meta.raw.title);
         push(meta.raw.name);
       }
     }
+    push(englishPreferred);
     push(fallbackTitle);
     if (fromPath) {
       try {

@@ -1,0 +1,2 @@
+# TODO
+- [ ] Investigate duplicate series folder creation despite AniList title preference updates
