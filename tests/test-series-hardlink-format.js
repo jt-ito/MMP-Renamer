@@ -35,7 +35,7 @@ function run() {
   const rendered = renderProviderName(providerData, '/mnt/Tor/Sozai Saishuka no Isekai Ryokouki - 03.mkv', null)
   assert(rendered.includes('S01E03'), 'rendered name should include episode label')
   assert(rendered.includes('Home and Journey'), 'rendered name should include episode title')
-  assert(!rendered.includes('(2025)'), 'series provider render should not include year in parentheses')
+  assert(rendered.includes('(2025)'), 'rendered name should include year in parentheses for filenames')
   assert(!rendered.includes('()'), 'rendered name should not contain empty parentheses')
 
   console.log('series hardlink format tests passed')

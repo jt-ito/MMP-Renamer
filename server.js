@@ -2398,10 +2398,8 @@ function renderProviderName(data, key, session) {
     const userTemplate = (session && session.username && users[session.username] && users[session.username].settings && users[session.username].settings.rename_template) ? users[session.username].settings.rename_template : null;
     const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
     const rawTitle = data.title || '';
-    const providerIsMovie = determineIsMovie(data);
-    // Only use an explicit year returned by provider; do not heuristically extract a year
-    // from titles or filenames here — parsed-only results should not show a year.
-    const yearToken = (providerIsMovie && data.year) ? data.year : '';
+    const templateYear = data && data.year ? String(data.year) : '';
+    const sanitizedYear = templateYear ? sanitize(templateYear) : '';
     function pad(n){ return String(n).padStart(2,'0') }
     let epLabel = '';
     if (data.episodeRange) epLabel = data.season != null ? `S${pad(data.season)}E${data.episodeRange}` : `E${data.episodeRange}`
@@ -2410,7 +2408,7 @@ function renderProviderName(data, key, session) {
     const nameWithoutExtRaw = String(baseNameTemplate)
       .replace('{title}', sanitize(titleToken))
       .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
-      .replace('{year}', yearToken || '')
+      .replace('{year}', sanitizedYear)
       .replace('{epLabel}', sanitize(epLabel))
       .replace('{episodeTitle}', sanitize(data.episodeTitle || ''))
       .replace('{season}', data.season != null ? String(data.season) : '')
@@ -2423,6 +2421,21 @@ function renderProviderName(data, key, session) {
       .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
       .replace(/\s{2,}/g, ' ')
       .trim();
+    if (templateYear) {
+      try {
+        const yearPattern = new RegExp(`\\b${escapeRegExp(templateYear)}\\b`);
+        if (!yearPattern.test(providerRendered)) {
+          const splitIdx = providerRendered.indexOf(' - ');
+          if (splitIdx !== -1) {
+            const basePart = providerRendered.slice(0, splitIdx).trim();
+            const suffixPart = providerRendered.slice(splitIdx);
+            providerRendered = `${basePart} (${templateYear})${suffixPart}`;
+          } else {
+            providerRendered = `${providerRendered} (${templateYear})`;
+          }
+        }
+      } catch (e) { /* best-effort */ }
+    }
     return providerRendered;
   } catch (e) { return '' }
 }
