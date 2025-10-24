@@ -26,6 +26,12 @@ function run() {
   }
   assert.strictEqual(extractEpisodeTitle(episodeNativeOnly), '故郷と旅路')
 
+  const episodeWithLangCodes = {
+    name: '故郷と旅路',
+    nameTranslations: ['jpn', 'eng', 'deu']
+  }
+  assert.strictEqual(extractEpisodeTitle(episodeWithLangCodes), '故郷と旅路')
+
   console.log('extractEpisodeTitle tests passed')
 }
 

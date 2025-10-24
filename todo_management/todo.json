@@ -1,1 +1,26 @@
-[]
+[
+  {
+    "id": 1,
+    "title": "Handle TVDB episode translations",
+    "description": "Investigate why episode title becomes language code and adjust extraction to prefer real titles (english -> romaji -> native)",
+    "status": "completed"
+  },
+  {
+    "id": 2,
+    "title": "Add regression coverage",
+    "description": "Extend tests to cover ISO language codes and ensure fallback works",
+    "status": "completed"
+  },
+  {
+    "id": 3,
+    "title": "Run validation suite",
+    "description": "Run npm test and inspect logs",
+    "status": "completed"
+  },
+  {
+    "id": 4,
+    "title": "Push TVDB translation fix",
+    "description": "Stage lib/tvdb.js, tests/test-tvdb-title-priority.js, todo JSON and push to origin/main",
+    "status": "in-progress"
+  }
+]
