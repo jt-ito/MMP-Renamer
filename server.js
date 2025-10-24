@@ -3759,8 +3759,24 @@ app.post('/api/rename/preview', (req, res) => {
   // If the provider returned a renderedName (TMDb), prefer that exact rendered string for preview.
   let nameWithoutExtRaw;
   if (meta && meta.provider && meta.provider.renderedName) {
-    // strip any extension the provider might include and use the provider-rendered name verbatim
-    nameWithoutExtRaw = String(meta.provider.renderedName).replace(/\.[^/.]+$/, '');
+    // strip extension and insert year if provider-rendered name is missing it
+    let providerName = String(meta.provider.renderedName).replace(/\.[^/.]+$/, '');
+    if (templateYear) {
+      try {
+        const yearPattern = new RegExp(`\b${escapeRegExp(templateYear)}\b`);
+        if (!yearPattern.test(providerName)) {
+          const splitIdx = providerName.indexOf(' - ');
+          if (splitIdx !== -1) {
+            const basePart = providerName.slice(0, splitIdx).trim();
+            const suffixPart = providerName.slice(splitIdx);
+            providerName = `${basePart} (${templateYear})${suffixPart}`;
+          } else {
+            providerName = `${providerName} (${templateYear})`;
+          }
+        }
+      } catch (e) { /* best-effort */ }
+    }
+    nameWithoutExtRaw = providerName;
   } else {
     nameWithoutExtRaw = baseNameTemplate
   .replace('{title}', sanitize(title))
