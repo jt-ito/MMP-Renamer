@@ -3701,6 +3701,8 @@ app.post('/api/rename/preview', (req, res) => {
   try {
     if (meta && (meta.year || (meta.extraGuess && meta.extraGuess.year))) {
       year = meta.year || (meta.extraGuess && meta.extraGuess.year) || '';
+    } else if (meta && meta.provider && meta.provider.year) {
+      year = meta.provider.year;
     } else {
       year = extractYear(meta, fromPath) || '';
     }
@@ -4536,8 +4538,17 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const englishSeriesTitle2 = extractEnglishSeriesTitle(enrichment);
               const renderBaseTitle2 = englishSeriesTitle2 || resolvedSeriesTitle2 || rawTitle2;
               const titleToken2 = cleanTitleForRender(renderBaseTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
-              const yearRaw2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : ''
-              const yearToken2 = yearRaw2 ? String(yearRaw2) : ''
+              let yearToken2 = ''
+              try {
+                if (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) {
+                  yearToken2 = String(enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year) || '')
+                } else if (enrichment && enrichment.provider && enrichment.provider.year) {
+                  yearToken2 = String(enrichment.provider.year)
+                } else {
+                  yearToken2 = String(extractYear(enrichment, from) || '')
+                }
+              } catch (e) { yearToken2 = '' }
+              if (yearToken2 === 'undefined') yearToken2 = ''
               const folderYear2 = (isMovie2 === true && yearToken2) ? yearToken2 : ''
               const outputRoot = configuredOut ? path.resolve(configuredOut) : path.resolve(path.dirname(toResolved))
               let baseFolderName2 = stripEpisodeArtifactsForFolder(String(renderBaseTitle2 || titleToken2 || rawTitle2 || '').trim());
@@ -4566,9 +4577,10 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 .replace(/\s{2,}/g, ' ')
                 .trim();
               const safeNameWithoutExt2 = nameWithoutExt2 || sanitize(titleToken2) || sanitize(path.basename(key, path.extname(key))) || 'Untitled';
+              const ensuredNameWithoutExt2 = ensureRenderedNameHasYear(safeNameWithoutExt2, yearToken2);
               // build final basename with extension and set effective target
               try {
-                const finalBasename2 = `${safeNameWithoutExt2}${ext2}`;
+                const finalBasename2 = `${ensuredNameWithoutExt2}${ext2}`;
                 effectiveToResolved = path.resolve(targetFolder2, finalBasename2);
               } catch (e) { /* ignore and leave effectiveToResolved as toResolved */ }
             } catch (renderErr) {

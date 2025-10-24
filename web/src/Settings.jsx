@@ -299,7 +299,11 @@ export default function Settings({ pushToast }){
                 } catch (e) {}
               } catch (e) { pushToast && pushToast('Unapprove', 'Unapprove failed') }
             }}>Unapprove</button>
-            <button className='btn-ghost small' onClick={() => { window.location.hash = '#/hidden' }}>Review hidden items</button>
+            <button
+              className='btn-ghost'
+              style={{ padding: '10px 14px', fontSize: 13, lineHeight: 1.2, whiteSpace: 'nowrap' }}
+              onClick={() => { window.location.hash = '#/hidden' }}
+            >Review hidden items</button>
           </div>
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>Unapproving will mark recently applied items as visible again for rescans. Choose the number of recent applied items to unhide.</div>
         </div>
