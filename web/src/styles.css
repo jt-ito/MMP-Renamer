@@ -62,6 +62,16 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .btn-ghost:hover { background: rgba(255,255,255,0.02) }
 .btn-ghost:disabled { opacity: 0.55; cursor: not-allowed; filter: none }
 
+/* Small button variant used for compact header/actions */
+.btn-ghost.small { padding:6px 10px; height:32px; font-size:13px; border-radius:10px }
+
+/* Hidden items page tweaks */
+.hidden-page .form-card { max-width: 100%; padding: 14px; box-shadow: none; border: 1px solid var(--bg-600) }
+.hidden-list table th { font-size:13px; color:var(--muted) }
+.hidden-list table td { vertical-align: middle }
+.hidden-list tr { background: transparent }
+.hidden-list tr:nth-child(even) { background: transparent }
+
 /* Search button uses hunter-green to match Settings save action */
 .btn-search { background: var(--hunter-green); color: #fff; border: none }
 .btn-search:hover { filter: brightness(0.95) }

@@ -3694,8 +3694,17 @@ app.post('/api/rename/preview', (req, res) => {
     const meta = enrichCache[fromPath] || {};
   // prefer enrichment title (provider token) -> parsed/title/basename
   const rawTitle = (meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath));
-  // Only use explicit year from enrichment or extraGuess; do not fall back to filename heuristics here
-  const year = (meta && (meta.year || (meta.extraGuess && meta.extraGuess.year))) ? (meta.year || (meta.extraGuess && meta.extraGuess.year)) : '';
+  // Prefer explicit year fields on the enrichment entry; if missing, attempt to extract a year
+  // from available metadata (episode/season/series dates) via extractYear so filenames
+  // will include a year when provider metadata contains it.
+  let year = '';
+  try {
+    if (meta && (meta.year || (meta.extraGuess && meta.extraGuess.year))) {
+      year = meta.year || (meta.extraGuess && meta.extraGuess.year) || '';
+    } else {
+      year = extractYear(meta, fromPath) || '';
+    }
+  } catch (e) { year = '' }
     const ext = path.extname(fromPath);
   // support {year} token in template; choose effective template in order: request -> user setting -> server setting -> default
   const userTemplate = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.rename_template) ? users[req.session.username].settings.rename_template : null;
