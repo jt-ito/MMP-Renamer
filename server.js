@@ -3734,7 +3734,7 @@ app.post('/api/rename/preview', (req, res) => {
   const title = cleanTitleForRender(renderBaseTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
   const isMovie = determineIsMovie(meta);
   const templateYear = year ? String(year) : '';
-  const folderYear = (isMovie && templateYear) ? templateYear : '';
+  const folderYear = (isMovie === true && templateYear) ? templateYear : '';
   const folderBaseTitle = renderBaseTitle || title;
   if (englishSeriesTitle || typeof isMovie === 'boolean') {
     try {
@@ -3763,6 +3763,10 @@ app.post('/api/rename/preview', (req, res) => {
   if (!sanitizedBaseFolder) {
     const fallbackFolderTitle = stripEpisodeArtifactsForFolder(title) || stripEpisodeArtifactsForFolder(rawTitle) || 'Untitled';
     sanitizedBaseFolder = sanitize(fallbackFolderTitle) || 'Untitled';
+  }
+  // Ensure series folders don't inherit a year token from provider titles; only movies should have folder years.
+  if (!(isMovie === true)) {
+    try { sanitizedBaseFolder = stripTrailingYear(sanitizedBaseFolder) } catch (e) {}
   }
   const titleFolder = folderYear ? `${sanitizedBaseFolder} (${folderYear})` : sanitizedBaseFolder;
   const seasonFolder = (!isMovie && meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
@@ -3817,11 +3821,27 @@ function sanitize(s) {
 
 function ensureRenderedNameHasYear(name, year) {
   try {
-    const result = String(name || '').trim();
+    let result = String(name || '').trim();
     const yearToken = String(year || '').trim();
     if (!result || !yearToken) return result;
+    // Remove any existing parenthetical occurrences of the same year to avoid duplicates
+    try {
+      const parenRe = new RegExp(`\\(\\s*${escapeRegExp(yearToken)}\\s*\\)`, 'g');
+      result = result.replace(parenRe, '').replace(/\s{2,}/g, ' ').trim();
+    } catch (e) {}
+    // If the original contained the year as a standalone token, normalize to a single parenthetical
     const yearPattern = new RegExp(`\\b${escapeRegExp(yearToken)}\\b`);
-    if (yearPattern.test(result)) return result;
+    if (yearPattern.test(result)) {
+      // insert a single parenthetical year before the first separator
+      const splitIdx = result.indexOf(' - ');
+      if (splitIdx !== -1) {
+        const basePart = result.slice(0, splitIdx).trim();
+        const suffixPart = result.slice(splitIdx);
+        return `${basePart} (${yearToken})${suffixPart}`;
+      }
+      return `${result} (${yearToken})`;
+    }
+    // Otherwise, just insert the parenthetical year
     const splitIdx = result.indexOf(' - ');
     if (splitIdx !== -1) {
       const basePart = result.slice(0, splitIdx).trim();
@@ -4557,6 +4577,10 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               if (!sanitizedBaseFolder2) {
                 const fallbackFolderTitle2 = stripEpisodeArtifactsForFolder(titleToken2) || stripEpisodeArtifactsForFolder(rawTitle2) || 'Untitled';
                 sanitizedBaseFolder2 = sanitize(fallbackFolderTitle2) || 'Untitled';
+              }
+              // If this is not a movie, strip any trailing year from the provider title so series folders don't include a year
+              if (!folderYear2) {
+                try { sanitizedBaseFolder2 = stripTrailingYear(sanitizedBaseFolder2) } catch (e) {}
               }
               const titleFolder2 = folderYear2 ? `${sanitizedBaseFolder2} (${folderYear2})` : sanitizedBaseFolder2;
               const seasonFolder2 = (isMovie2 === true || !(enrichment && enrichment.season != null)) ? '' : `Season ${String(enrichment.season).padStart(2,'0')}`;
