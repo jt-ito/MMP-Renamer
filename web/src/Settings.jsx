@@ -279,6 +279,7 @@ export default function Settings({ pushToast }){
           <label style={{fontSize:13, color:'var(--muted)'}}>Unapprove (unhide) recent applied items</label>
           <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
             <select id='unapproveCount' defaultValue='10' className='form-input'>
+              <option value='1'>Last 1</option>
               <option value='5'>Last 5</option>
               <option value='10'>Last 10</option>
               <option value='20'>Last 20</option>
@@ -298,6 +299,7 @@ export default function Settings({ pushToast }){
                 } catch (e) {}
               } catch (e) { pushToast && pushToast('Unapprove', 'Unapprove failed') }
             }}>Unapprove</button>
+            <button className='btn-ghost' style={{padding:'10px 14px'}} onClick={() => { window.location.hash = '#/hidden' }}>Review hidden items</button>
           </div>
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>Unapproving will mark recently applied items as visible again for rescans. Choose the number of recent applied items to unhide.</div>
         </div>

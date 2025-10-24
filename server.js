@@ -2421,21 +2421,7 @@ function renderProviderName(data, key, session) {
       .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
       .replace(/\s{2,}/g, ' ')
       .trim();
-    if (templateYear) {
-      try {
-        const yearPattern = new RegExp(`\\b${escapeRegExp(templateYear)}\\b`);
-        if (!yearPattern.test(providerRendered)) {
-          const splitIdx = providerRendered.indexOf(' - ');
-          if (splitIdx !== -1) {
-            const basePart = providerRendered.slice(0, splitIdx).trim();
-            const suffixPart = providerRendered.slice(splitIdx);
-            providerRendered = `${basePart} (${templateYear})${suffixPart}`;
-          } else {
-            providerRendered = `${providerRendered} (${templateYear})`;
-          }
-        }
-      } catch (e) { /* best-effort */ }
-    }
+    providerRendered = ensureRenderedNameHasYear(providerRendered, templateYear);
     return providerRendered;
   } catch (e) { return '' }
 }
@@ -3777,21 +3763,7 @@ app.post('/api/rename/preview', (req, res) => {
   if (meta && meta.provider && meta.provider.renderedName) {
     // strip extension and insert year if provider-rendered name is missing it
     let providerName = String(meta.provider.renderedName).replace(/\.[^/.]+$/, '');
-    if (templateYear) {
-      try {
-        const yearPattern = new RegExp(`\b${escapeRegExp(templateYear)}\b`);
-        if (!yearPattern.test(providerName)) {
-          const splitIdx = providerName.indexOf(' - ');
-          if (splitIdx !== -1) {
-            const basePart = providerName.slice(0, splitIdx).trim();
-            const suffixPart = providerName.slice(splitIdx);
-            providerName = `${basePart} (${templateYear})${suffixPart}`;
-          } else {
-            providerName = `${providerName} (${templateYear})`;
-          }
-        }
-      } catch (e) { /* best-effort */ }
-    }
+    providerName = ensureRenderedNameHasYear(providerName, templateYear);
     nameWithoutExtRaw = providerName;
   } else {
     nameWithoutExtRaw = baseNameTemplate
@@ -3830,6 +3802,25 @@ app.post('/api/rename/preview', (req, res) => {
 
 function sanitize(s) {
   return String(s).replace(/[\\/:*?"<>|]/g, '');
+}
+
+function ensureRenderedNameHasYear(name, year) {
+  try {
+    const result = String(name || '').trim();
+    const yearToken = String(year || '').trim();
+    if (!result || !yearToken) return result;
+    const yearPattern = new RegExp(`\\b${escapeRegExp(yearToken)}\\b`);
+    if (yearPattern.test(result)) return result;
+    const splitIdx = result.indexOf(' - ');
+    if (splitIdx !== -1) {
+      const basePart = result.slice(0, splitIdx).trim();
+      const suffixPart = result.slice(splitIdx);
+      return `${basePart} (${yearToken})${suffixPart}`;
+    }
+    return `${result} (${yearToken})`;
+  } catch (e) {
+    return String(name || '').trim();
+  }
 }
 
 // Remove trailing year in parentheses, e.g. "Show (2022)" -> "Show"
@@ -4843,41 +4834,89 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
 app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {
   try {
     const requestedPaths = (req.body && Array.isArray(req.body.paths)) ? req.body.paths : null
-    const count = (!requestedPaths) ? (parseInt((req.body && req.body.count) || '10', 10) || 10) : null
+    const rawCount = !requestedPaths ? ((req.body && req.body.count) ?? '10') : null
+    let count = 10
+    if (rawCount !== null && rawCount !== undefined) {
+      const parsed = parseInt(String(rawCount), 10)
+      if (Number.isFinite(parsed)) count = parsed
+    }
     const changed = []
+
+    function markUnapproved(key) {
+      try {
+        const entry = enrichCache[key]
+        if (!entry) return
+        let updated = false
+        if (entry.applied) {
+          entry.applied = false
+          delete entry.appliedAt
+          delete entry.appliedTo
+          updated = true
+        }
+        if (entry.hidden) {
+          entry.hidden = false
+          updated = true
+        }
+        if (updated && !changed.includes(key)) changed.push(key)
+      } catch (e) {}
+    }
 
     if (requestedPaths && requestedPaths.length > 0) {
       // Unapprove exactly the provided canonical paths
-      for (const p of requestedPaths) {
-        try {
-          if (enrichCache[p] && enrichCache[p].applied) {
-            enrichCache[p].applied = false
-            enrichCache[p].hidden = false
-            delete enrichCache[p].appliedAt
-            delete enrichCache[p].appliedTo
-            changed.push(p)
-          }
-        } catch (e) {}
-      }
+      for (const p of requestedPaths) markUnapproved(p)
     } else {
       // collect applied entries sorted by appliedAt desc and unapprove last N (existing behavior)
-      const applied = Object.keys(enrichCache).map(k => ({ k, v: enrichCache[k] })).filter(x => x.v && x.v.applied).sort((a,b) => (b.v.appliedAt || 0) - (a.v.appliedAt || 0))
-      const toUn = applied.slice(0, count)
-      for (const item of toUn) {
-        try {
-          enrichCache[item.k].applied = false
-          enrichCache[item.k].hidden = false
-          delete enrichCache[item.k].appliedAt
-          delete enrichCache[item.k].appliedTo
-          changed.push(item.k)
-        } catch (e) {}
-      }
+      const applied = Object.keys(enrichCache)
+        .map(k => ({ k, v: enrichCache[k] }))
+        .filter(x => x.v && x.v.applied)
+        .sort((a, b) => (b.v.appliedAt || 0) - (a.v.appliedAt || 0))
+      const limit = (count && count > 0) ? count : applied.length
+      const toUn = applied.slice(0, limit)
+      for (const item of toUn) markUnapproved(item.k)
     }
 
-  try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
+    try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
     appendLog(`UNAPPROVE count=${changed.length}`)
     res.json({ ok: true, unapproved: changed })
   } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get('/api/rename/hidden', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const items = []
+    const entries = enrichCache || {}
+    for (const key of Object.keys(entries)) {
+      const entry = entries[key]
+      if (!entry) continue
+      const hidden = entry.hidden === true
+      const applied = entry.applied === true
+      if (!hidden && !applied) continue
+      const provider = entry.provider || {}
+      const parsed = entry.parsed || {}
+      items.push({
+        path: key,
+        hidden,
+        applied,
+        appliedAt: entry.appliedAt || null,
+        appliedTo: entry.appliedTo || null,
+        providerTitle: provider.renderedName || provider.title || null,
+        providerYear: provider.year || null,
+        providerEpisodeTitle: provider.episodeTitle || null,
+        parsedTitle: parsed.parsedName || parsed.title || null,
+        basename: path.basename(key)
+      })
+    }
+    items.sort((a, b) => {
+      const aKey = a.appliedAt || 0
+      const bKey = b.appliedAt || 0
+      if (aKey !== bKey) return bKey - aKey
+      return a.path.localeCompare(b.path)
+    })
+    res.json({ items })
+  } catch (e) {
+    try { appendLog(`RENAME_HIDDEN_LIST_FAIL err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+    res.status(500).json({ error: e && e.message ? e.message : String(e) })
+  }
 })
 
 // Logs endpoints
@@ -4978,6 +5017,7 @@ module.exports._test.saveScanCache = typeof saveScanCache !== 'undefined' ? save
 module.exports._test.processParsedItem = doProcessParsedItem;
 module.exports._test.determineIsMovie = determineIsMovie;
 module.exports._test.renderProviderName = renderProviderName;
+module.exports._test.ensureRenderedNameHasYear = ensureRenderedNameHasYear;
 module.exports._test.doProcessParsedItem = doProcessParsedItem;
 // expose internal helpers for unit tests
 module.exports._test.stripAniListSeasonSuffix = typeof stripAniListSeasonSuffix !== 'undefined' ? stripAniListSeasonSuffix : null;
