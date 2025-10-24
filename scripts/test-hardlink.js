@@ -65,9 +65,7 @@ function extractYearFromString(s) {
       if (!seriesFolderBase) {
         seriesFolderBase = provRendered;
       }
-      // ensure year present
-      const provYear = year || extractYearFromString(provRendered) || '';
-      if (provYear && seriesFolderBase.indexOf(`(${provYear})`) === -1) seriesFolderBase = `${seriesFolderBase} (${provYear})`;
+      // omit year for series folders; keep exact title only
       const seasonFolder = `Season ${String(season || '1').padStart(2,'0')}`;
       finalDir = path.join(baseOut, sanitize(seriesFolderBase), seasonFolder);
       finalFileName = sanitize(provRendered) + ext; // use exact provider-rendered name as filename (sanitized)

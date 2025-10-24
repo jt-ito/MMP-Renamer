@@ -2398,9 +2398,10 @@ function renderProviderName(data, key, session) {
     const userTemplate = (session && session.username && users[session.username] && users[session.username].settings && users[session.username].settings.rename_template) ? users[session.username].settings.rename_template : null;
     const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
     const rawTitle = data.title || '';
-  // Only use an explicit year returned by provider; do not heuristically extract a year
-  // from titles or filenames here — parsed-only results should not show a year.
-  const yearToken = data.year || '';
+    const providerIsMovie = determineIsMovie(data);
+    // Only use an explicit year returned by provider; do not heuristically extract a year
+    // from titles or filenames here — parsed-only results should not show a year.
+    const yearToken = (providerIsMovie && data.year) ? data.year : '';
     function pad(n){ return String(n).padStart(2,'0') }
     let epLabel = '';
     if (data.episodeRange) epLabel = data.season != null ? `S${pad(data.season)}E${data.episodeRange}` : `E${data.episodeRange}`
@@ -3722,6 +3723,7 @@ app.post('/api/rename/preview', (req, res) => {
   const renderBaseTitle = englishSeriesTitle || resolvedSeriesTitle || rawTitle;
   const title = cleanTitleForRender(renderBaseTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
   const isMovie = determineIsMovie(meta);
+  const effectiveYear = (isMovie && year) ? year : '';
   const folderBaseTitle = renderBaseTitle || title;
   if (englishSeriesTitle || typeof isMovie === 'boolean') {
     try {
@@ -3747,7 +3749,7 @@ app.post('/api/rename/preview', (req, res) => {
   if (!baseFolderName) baseFolderName = path.basename(fromPath, path.extname(fromPath)) || rawTitle || title;
   let sanitizedBaseFolder = sanitize(baseFolderName);
   if (!sanitizedBaseFolder) sanitizedBaseFolder = sanitize(title) || sanitize(rawTitle) || 'Untitled';
-  const titleFolder = (isMovie && year) ? `${sanitizedBaseFolder} (${year})` : sanitizedBaseFolder;
+  const titleFolder = effectiveYear ? `${sanitizedBaseFolder} (${effectiveYear})` : sanitizedBaseFolder;
   const seasonFolder = (!isMovie && meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
   const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
 
@@ -3759,9 +3761,9 @@ app.post('/api/rename/preview', (req, res) => {
     nameWithoutExtRaw = String(meta.provider.renderedName).replace(/\.[^/.]+$/, '');
   } else {
     nameWithoutExtRaw = baseNameTemplate
-      .replace('{title}', sanitize(title))
+  .replace('{title}', sanitize(title))
       .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
-      .replace('{year}', year || '')
+  .replace('{year}', effectiveYear || '')
       .replace('{epLabel}', sanitize(epLabel))
       .replace('{episodeTitle}', sanitize(episodeTitleToken))
       .replace('{season}', sanitize(seasonToken))
@@ -4217,10 +4219,11 @@ function determineIsMovie(meta) {
       if (meta.season != null || meta.episode != null || meta.episodeRange) series = true;
       else if (extra && (extra.season != null || extra.episode != null || extra.episodeRange)) series = true;
     }
-    if (movie && !series) return true;
-    if (series && !movie) return false;
-    if (movie) return true;
-    if (series) return false;
+  if (movie && !series) return true;
+  if (series && !movie) return false;
+  if (series && movie) return false;
+  if (series) return false;
+  if (movie) return true;
     return null;
   } catch (e) {
     return null;
@@ -4444,13 +4447,14 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const episodeToken2 = (enrichment && enrichment.episode != null) ? String(enrichment.episode) : ''
               const episodeRangeToken2 = (enrichment && enrichment.episodeRange) ? String(enrichment.episodeRange) : ''
               const tmdbIdToken2 = (enrichment && enrichment.tmdb && enrichment.tmdb.raw && (enrichment.tmdb.raw.id || enrichment.tmdb.raw.seriesId)) ? String(enrichment.tmdb.raw.id || enrichment.tmdb.raw.seriesId) : ''
+              const isMovie2 = determineIsMovie(enrichment)
               const rawTitle2 = (enrichment && (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title))) ? (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title)) : path.basename(from, ext2)
               // reuse cleaning logic from preview to avoid duplicated episode labels/titles in rendered filenames
               const resolvedSeriesTitle2 = resolveSeriesTitle(enrichment, rawTitle2, from, episodeTitleToken2, { preferExact: true });
               const englishSeriesTitle2 = extractEnglishSeriesTitle(enrichment);
               const renderBaseTitle2 = englishSeriesTitle2 || resolvedSeriesTitle2 || rawTitle2;
               const titleToken2 = cleanTitleForRender(renderBaseTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
-              const yearToken2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : ''
+              const yearToken2 = (isMovie2 && enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : ''
               const nameWithoutExtRaw2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
                 .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
                 .replace('{year}', yearToken2)
@@ -4870,6 +4874,8 @@ module.exports._test.incrementalScanLibrary = typeof incrementalScanLibrary !== 
 module.exports._test.loadScanCache = typeof loadScanCache !== 'undefined' ? loadScanCache : null;
 module.exports._test.saveScanCache = typeof saveScanCache !== 'undefined' ? saveScanCache : null;
 module.exports._test.processParsedItem = doProcessParsedItem;
+module.exports._test.determineIsMovie = determineIsMovie;
+module.exports._test.renderProviderName = renderProviderName;
 module.exports._test.doProcessParsedItem = doProcessParsedItem;
 // expose internal helpers for unit tests
 module.exports._test.stripAniListSeasonSuffix = typeof stripAniListSeasonSuffix !== 'undefined' ? stripAniListSeasonSuffix : null;
