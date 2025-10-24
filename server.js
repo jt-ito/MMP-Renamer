@@ -4199,8 +4199,10 @@ function determineIsMovie(meta) {
           if (low.includes('movie') || low === 'film') markMovie();
           if (low.includes('tv') || low.includes('series') || low.includes('show')) markSeries();
         }
-        if (raw.release_date && !raw.first_air_date) markMovie();
-        if (raw.first_air_date || raw.number_of_episodes || raw.episode_count || raw.episode_run_time) markSeries();
+        const hasEpisodeCounts = raw.first_air_date || raw.firstAirDate || raw.number_of_episodes || raw.episode_count || raw.episode_run_time || raw.episodes || raw.total_episodes;
+        if (hasEpisodeCounts) markSeries();
+        // Treat release_date as movie signal only when no episode info exists
+        if (!hasEpisodeCounts && raw.release_date && !raw.first_air_date && !raw.firstAirDate) markMovie();
       } catch (e) { /* ignore raw-level errors */ }
     };
     pushRaw(meta.raw);
@@ -4210,6 +4212,17 @@ function determineIsMovie(meta) {
     if (extra && extra.tmdb) pushRaw(extra.tmdb.raw);
     pushRaw(extra && extra.raw);
     pushRaw(extra && extra.anilist && extra.anilist.raw);
+    const markSeriesFromBlock = (block) => {
+      if (!block || typeof block !== 'object') return;
+      if (block.episode != null || block.episodeRange || block.season != null || (block.seasons && block.seasons.length)) markSeries();
+      if (block.type && /series|tv|show/i.test(String(block.type))) markSeries();
+    };
+    markSeriesFromBlock(meta);
+    markSeriesFromBlock(meta.provider);
+    markSeriesFromBlock(extra);
+    if (extra && extra.provider) markSeriesFromBlock(extra.provider);
+    if (meta.tmdb) markSeriesFromBlock(meta.tmdb);
+    if (extra && extra.tmdb) markSeriesFromBlock(extra.tmdb);
     if (meta.mediaFormat) {
       const up = String(meta.mediaFormat).toUpperCase();
       if (up.includes('MOVIE') || up === 'FILM' || up === 'FEATURE') markMovie();
@@ -4260,6 +4273,12 @@ function healCachedEnglishAndMovieFlags() {
           extraGuess = extraGuess || Object.assign({}, meta.extraGuess || {});
           updatedMeta.isMovie = true;
           extraGuess.isMovie = true;
+        }
+        if (computedMovie === false && meta.isMovie !== false) {
+          if (!updatedMeta) updatedMeta = Object.assign({}, meta);
+          extraGuess = extraGuess || Object.assign({}, meta.extraGuess || {});
+          updatedMeta.isMovie = false;
+          if (extraGuess && Object.prototype.hasOwnProperty.call(extraGuess, 'isMovie')) delete extraGuess.isMovie;
         }
       } catch (e) { /* best-effort per entry */ }
       if (updatedMeta) {
