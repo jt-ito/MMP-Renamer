@@ -4391,6 +4391,8 @@ function extractYear(meta, fromPath) {
 app.post('/api/rename/apply', requireAuth, (req, res) => {
   const { plans, dryRun } = req.body || {};
   if (!plans || !Array.isArray(plans)) return res.status(400).json({ error: 'plans required' });
+  // Ensure cached movie/english flags are healed before applying rename plans so folder/year logic is correct
+  try { healCachedEnglishAndMovieFlags(); } catch (e) { /* non-fatal */ }
   const results = [];
   for (const p of plans) {
     try {
@@ -4443,7 +4445,21 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               } else if (enrichment && enrichment.episode != null) {
                 epLabel2 = enrichment.season != null ? `S${pad(enrichment.season)}E${pad(enrichment.episode)}` : `E${pad(enrichment.episode)}`
               }
-              const episodeTitleToken2 = enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : ''
+              let episodeTitleToken2 = enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : ''
+              // Fallback: if provider returned a renderedName that includes an episode suffix, try to extract it
+              try {
+                if (!episodeTitleToken2 && enrichment && enrichment.provider && enrichment.provider.renderedName) {
+                  const pr = String(enrichment.provider.renderedName).replace(/\.[^/.]+$/, '');
+                  // split on common separator and pick last segment if it looks like an episode title (not just ep label)
+                  const parts = pr.split(/\s[-–—:]\s/);
+                  if (parts && parts.length > 1) {
+                    const cand = parts[parts.length - 1].trim();
+                    if (cand && !isNoiseLike(cand) && !isEpisodeTokenCandidate(cand) && cand.length > 1) {
+                      episodeTitleToken2 = cand;
+                    }
+                  }
+                }
+              } catch (e) { /* best-effort fallback */ }
               const seasonToken2 = (enrichment && enrichment.season != null) ? String(enrichment.season) : ''
               const episodeToken2 = (enrichment && enrichment.episode != null) ? String(enrichment.episode) : ''
               const episodeRangeToken2 = (enrichment && enrichment.episodeRange) ? String(enrichment.episodeRange) : ''
