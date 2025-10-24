@@ -4490,7 +4490,16 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const englishSeriesTitle2 = extractEnglishSeriesTitle(enrichment);
               const renderBaseTitle2 = englishSeriesTitle2 || resolvedSeriesTitle2 || rawTitle2;
               const titleToken2 = cleanTitleForRender(renderBaseTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
-              const yearToken2 = (isMovie2 && enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : ''
+              const yearRaw2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : ''
+              const yearToken2 = (isMovie2 === true && yearRaw2) ? yearRaw2 : ''
+              const outputRoot = configuredOut ? path.resolve(configuredOut) : path.resolve(path.dirname(toResolved))
+              let baseFolderName2 = String(renderBaseTitle2 || titleToken2 || rawTitle2 || '').trim();
+              if (!baseFolderName2) baseFolderName2 = path.basename(from, ext2) || rawTitle2 || titleToken2;
+              let sanitizedBaseFolder2 = sanitize(baseFolderName2);
+              if (!sanitizedBaseFolder2) sanitizedBaseFolder2 = sanitize(titleToken2) || sanitize(rawTitle2) || 'Untitled';
+              const titleFolder2 = yearToken2 ? `${sanitizedBaseFolder2} (${yearToken2})` : sanitizedBaseFolder2;
+              const seasonFolder2 = (isMovie2 === true || !(enrichment && enrichment.season != null)) ? '' : `Season ${String(enrichment.season).padStart(2,'0')}`;
+              const targetFolder2 = seasonFolder2 ? path.join(outputRoot, titleFolder2, seasonFolder2) : path.join(outputRoot, titleFolder2);
               const nameWithoutExtRaw2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
                 .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
                 .replace('{year}', yearToken2)
@@ -4510,7 +4519,7 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               // build final basename with extension and set effective target
               try {
                 const finalBasename2 = `${safeNameWithoutExt2}${ext2}`;
-                effectiveToResolved = path.resolve(path.dirname(toResolved), finalBasename2);
+                effectiveToResolved = path.resolve(targetFolder2, finalBasename2);
               } catch (e) { /* ignore and leave effectiveToResolved as toResolved */ }
             } catch (renderErr) {
               // fallback: keep effectiveToResolved as toResolved
