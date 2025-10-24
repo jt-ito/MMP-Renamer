@@ -3760,10 +3760,13 @@ app.post('/api/rename/preview', (req, res) => {
       }
     } catch (e) { /* best-effort cache update */ }
   }
-  let baseFolderName = String(folderBaseTitle || resolvedSeriesTitle || title || rawTitle || '').trim();
-  if (!baseFolderName) baseFolderName = path.basename(fromPath, path.extname(fromPath)) || rawTitle || title;
+  let baseFolderName = stripEpisodeArtifactsForFolder(String(folderBaseTitle || resolvedSeriesTitle || title || rawTitle || '').trim());
+  if (!baseFolderName) baseFolderName = stripEpisodeArtifactsForFolder(path.basename(fromPath, path.extname(fromPath)) || rawTitle || title);
   let sanitizedBaseFolder = sanitize(baseFolderName);
-  if (!sanitizedBaseFolder) sanitizedBaseFolder = sanitize(title) || sanitize(rawTitle) || 'Untitled';
+  if (!sanitizedBaseFolder) {
+    const fallbackFolderTitle = stripEpisodeArtifactsForFolder(title) || stripEpisodeArtifactsForFolder(rawTitle) || 'Untitled';
+    sanitizedBaseFolder = sanitize(fallbackFolderTitle) || 'Untitled';
+  }
   const titleFolder = folderYear ? `${sanitizedBaseFolder} (${folderYear})` : sanitizedBaseFolder;
   const seasonFolder = (!isMovie && meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
   const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
@@ -3834,6 +3837,19 @@ function stripTrailingYear(s) {
   try {
     return String(s || '').replace(/\s*\(\s*\d{4}\s*\)\s*$/, '').trim();
   } catch (e) { return String(s || '').trim(); }
+}
+
+function stripEpisodeArtifactsForFolder(name) {
+  try {
+    let out = String(name || '').trim();
+    if (!out) return out;
+    out = out.replace(/\s*[-–—:]+\s*S\d{1,2}E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
+    out = out.replace(/\s*[-–—:]+\s*E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
+    out = out.replace(/\s*[-–—:]+\s*Episode\s+\d+.*$/i, '');
+    return out.trim();
+  } catch (e) {
+    return String(name || '').trim();
+  }
 }
 
 function isEpisodeTokenCandidate(value) {
@@ -4524,10 +4540,13 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const yearToken2 = yearRaw2 ? String(yearRaw2) : ''
               const folderYear2 = (isMovie2 === true && yearToken2) ? yearToken2 : ''
               const outputRoot = configuredOut ? path.resolve(configuredOut) : path.resolve(path.dirname(toResolved))
-              let baseFolderName2 = String(renderBaseTitle2 || titleToken2 || rawTitle2 || '').trim();
-              if (!baseFolderName2) baseFolderName2 = path.basename(from, ext2) || rawTitle2 || titleToken2;
+              let baseFolderName2 = stripEpisodeArtifactsForFolder(String(renderBaseTitle2 || titleToken2 || rawTitle2 || '').trim());
+              if (!baseFolderName2) baseFolderName2 = stripEpisodeArtifactsForFolder(path.basename(from, ext2) || rawTitle2 || titleToken2);
               let sanitizedBaseFolder2 = sanitize(baseFolderName2);
-              if (!sanitizedBaseFolder2) sanitizedBaseFolder2 = sanitize(titleToken2) || sanitize(rawTitle2) || 'Untitled';
+              if (!sanitizedBaseFolder2) {
+                const fallbackFolderTitle2 = stripEpisodeArtifactsForFolder(titleToken2) || stripEpisodeArtifactsForFolder(rawTitle2) || 'Untitled';
+                sanitizedBaseFolder2 = sanitize(fallbackFolderTitle2) || 'Untitled';
+              }
               const titleFolder2 = folderYear2 ? `${sanitizedBaseFolder2} (${folderYear2})` : sanitizedBaseFolder2;
               const seasonFolder2 = (isMovie2 === true || !(enrichment && enrichment.season != null)) ? '' : `Season ${String(enrichment.season).padStart(2,'0')}`;
               const targetFolder2 = seasonFolder2 ? path.join(outputRoot, titleFolder2, seasonFolder2) : path.join(outputRoot, titleFolder2);
