@@ -3723,7 +3723,8 @@ app.post('/api/rename/preview', (req, res) => {
   const renderBaseTitle = englishSeriesTitle || resolvedSeriesTitle || rawTitle;
   const title = cleanTitleForRender(renderBaseTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
   const isMovie = determineIsMovie(meta);
-  const effectiveYear = (isMovie && year) ? year : '';
+  const templateYear = year ? String(year) : '';
+  const folderYear = (isMovie && templateYear) ? templateYear : '';
   const folderBaseTitle = renderBaseTitle || title;
   if (englishSeriesTitle || typeof isMovie === 'boolean') {
     try {
@@ -3750,7 +3751,7 @@ app.post('/api/rename/preview', (req, res) => {
   if (!baseFolderName) baseFolderName = path.basename(fromPath, path.extname(fromPath)) || rawTitle || title;
   let sanitizedBaseFolder = sanitize(baseFolderName);
   if (!sanitizedBaseFolder) sanitizedBaseFolder = sanitize(title) || sanitize(rawTitle) || 'Untitled';
-  const titleFolder = effectiveYear ? `${sanitizedBaseFolder} (${effectiveYear})` : sanitizedBaseFolder;
+  const titleFolder = folderYear ? `${sanitizedBaseFolder} (${folderYear})` : sanitizedBaseFolder;
   const seasonFolder = (!isMovie && meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
   const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
 
@@ -3764,7 +3765,7 @@ app.post('/api/rename/preview', (req, res) => {
     nameWithoutExtRaw = baseNameTemplate
   .replace('{title}', sanitize(title))
       .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
-  .replace('{year}', effectiveYear || '')
+  .replace('{year}', sanitize(templateYear))
       .replace('{epLabel}', sanitize(epLabel))
       .replace('{episodeTitle}', sanitize(episodeTitleToken))
       .replace('{season}', sanitize(seasonToken))
@@ -4491,18 +4492,19 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               const renderBaseTitle2 = englishSeriesTitle2 || resolvedSeriesTitle2 || rawTitle2;
               const titleToken2 = cleanTitleForRender(renderBaseTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
               const yearRaw2 = (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) ? (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year)) : ''
-              const yearToken2 = (isMovie2 === true && yearRaw2) ? yearRaw2 : ''
+              const yearToken2 = yearRaw2 ? String(yearRaw2) : ''
+              const folderYear2 = (isMovie2 === true && yearToken2) ? yearToken2 : ''
               const outputRoot = configuredOut ? path.resolve(configuredOut) : path.resolve(path.dirname(toResolved))
               let baseFolderName2 = String(renderBaseTitle2 || titleToken2 || rawTitle2 || '').trim();
               if (!baseFolderName2) baseFolderName2 = path.basename(from, ext2) || rawTitle2 || titleToken2;
               let sanitizedBaseFolder2 = sanitize(baseFolderName2);
               if (!sanitizedBaseFolder2) sanitizedBaseFolder2 = sanitize(titleToken2) || sanitize(rawTitle2) || 'Untitled';
-              const titleFolder2 = yearToken2 ? `${sanitizedBaseFolder2} (${yearToken2})` : sanitizedBaseFolder2;
+              const titleFolder2 = folderYear2 ? `${sanitizedBaseFolder2} (${folderYear2})` : sanitizedBaseFolder2;
               const seasonFolder2 = (isMovie2 === true || !(enrichment && enrichment.season != null)) ? '' : `Season ${String(enrichment.season).padStart(2,'0')}`;
               const targetFolder2 = seasonFolder2 ? path.join(outputRoot, titleFolder2, seasonFolder2) : path.join(outputRoot, titleFolder2);
               const nameWithoutExtRaw2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
                 .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
-                .replace('{year}', yearToken2)
+                .replace('{year}', sanitize(yearToken2))
                 .replace('{epLabel}', sanitize(epLabel2))
                 .replace('{episodeTitle}', sanitize(episodeTitleToken2))
                 .replace('{season}', sanitize(seasonToken2))
