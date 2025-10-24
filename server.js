@@ -115,6 +115,30 @@ try { ensureFile(wikiSearchLogFile, ''); } catch (e) {}
 let wikiEpisodeCache = {};
 try { wikiEpisodeCache = JSON.parse(fs.readFileSync(wikiEpisodeCacheFile, 'utf8') || '{}') } catch (e) { wikiEpisodeCache = {} }
 
+// Load optional series aliases to control canonical folder names for tricky titles
+const CONFIG_DIR = path.resolve(__dirname, 'config');
+if (!fs.existsSync(CONFIG_DIR)) {
+  try { fs.mkdirSync(CONFIG_DIR) } catch (e) { /* ignore */ }
+}
+const seriesAliasesFile = path.join(CONFIG_DIR, 'series-aliases.json');
+let seriesAliases = {};
+try { ensureFile(seriesAliasesFile, {}); seriesAliases = JSON.parse(fs.readFileSync(seriesAliasesFile, 'utf8') || '{}') } catch (e) { seriesAliases = {} }
+
+function getSeriesAlias(name) {
+  try {
+    if (!name) return null;
+    const key = String(name).trim();
+    if (!key) return null;
+    if (seriesAliases && Object.prototype.hasOwnProperty.call(seriesAliases, key)) return seriesAliases[key];
+    // case-insensitive fallback
+    const lower = key.toLowerCase();
+    for (const k of Object.keys(seriesAliases || {})) {
+      if (String(k).toLowerCase() === lower) return seriesAliases[k];
+    }
+    return null;
+  } catch (e) { return null }
+}
+
 // Normalize a title for use as a cache key: lowercase, remove punctuation, collapse spaces
 function normalizeForCache(s) {
   try {
@@ -3757,7 +3781,17 @@ app.post('/api/rename/preview', (req, res) => {
       }
     } catch (e) { /* best-effort cache update */ }
   }
-  let baseFolderName = stripEpisodeArtifactsForFolder(String(folderBaseTitle || resolvedSeriesTitle || title || rawTitle || '').trim());
+  // Prefer explicit series titles from metadata when available.
+  // Allow an explicit alias to override the computed name (and skip stripping) so known sequels
+  // or numbered canonical titles (e.g. "Kaiju No. 8") are preserved as-is.
+  const seriesBase = (meta && (meta.seriesTitleEnglish || meta.seriesTitle)) ? (meta.seriesTitleEnglish || meta.seriesTitle) : (folderBaseTitle || resolvedSeriesTitle || title || rawTitle || '');
+  const aliasResolved = getSeriesAlias(seriesBase);
+  let baseFolderName;
+  if (aliasResolved) {
+    baseFolderName = stripEpisodeArtifactsForFolder(String(aliasResolved).trim());
+  } else {
+    baseFolderName = stripEpisodeArtifactsForFolder(String(stripSeasonNumberSuffix(seriesBase)).trim());
+  }
   if (!baseFolderName) baseFolderName = stripEpisodeArtifactsForFolder(path.basename(fromPath, path.extname(fromPath)) || rawTitle || title);
   let sanitizedBaseFolder = sanitize(baseFolderName);
   if (!sanitizedBaseFolder) {
@@ -3872,6 +3906,18 @@ function stripEpisodeArtifactsForFolder(name) {
   } catch (e) {
     return String(name || '').trim();
   }
+}
+
+// Remove trailing season-number-like suffixes ("Title 2", "Title II", "Title - Season 2", "Title Part 2")
+function stripSeasonNumberSuffix(name) {
+  try {
+    if (!name) return name;
+    let s = String(name).trim();
+    // Remove common patterns where a season or ordinal is appended to a title
+    // Examples handled: "Title 2", "Title 02", "Title II", "Title 2nd", "Title - Season 2", "Title Part 2"
+    s = s.replace(/\s*(?:[-–—:\/]\s*)?(?:Season|Series|Part)?\s*(?:#\s*)?(?:\b(?:[0-9]{1,2}|[IVXLC]+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|[0-9]{1,2}(?:st|nd|rd|th))\b)\s*$/i, '').trim();
+    return s;
+  } catch (e) { return String(name || '').trim() }
 }
 
 function isEpisodeTokenCandidate(value) {
@@ -4571,7 +4617,14 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               if (yearToken2 === 'undefined') yearToken2 = ''
               const folderYear2 = (isMovie2 === true && yearToken2) ? yearToken2 : ''
               const outputRoot = configuredOut ? path.resolve(configuredOut) : path.resolve(path.dirname(toResolved))
-              let baseFolderName2 = stripEpisodeArtifactsForFolder(String(renderBaseTitle2 || titleToken2 || rawTitle2 || '').trim());
+              const seriesBase2 = (enrichment && (enrichment.seriesTitleEnglish || enrichment.seriesTitle)) ? (enrichment.seriesTitleEnglish || enrichment.seriesTitle) : (renderBaseTitle2 || titleToken2 || rawTitle2 || '');
+              const aliasResolved2 = getSeriesAlias(seriesBase2);
+              let baseFolderName2;
+              if (aliasResolved2) {
+                baseFolderName2 = stripEpisodeArtifactsForFolder(String(aliasResolved2).trim());
+              } else {
+                baseFolderName2 = stripEpisodeArtifactsForFolder(String(stripSeasonNumberSuffix(seriesBase2)).trim());
+              }
               if (!baseFolderName2) baseFolderName2 = stripEpisodeArtifactsForFolder(path.basename(from, ext2) || rawTitle2 || titleToken2);
               let sanitizedBaseFolder2 = sanitize(baseFolderName2);
               if (!sanitizedBaseFolder2) {
