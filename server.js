@@ -2751,12 +2751,13 @@ app.post('/api/scan', async (req, res) => {
   const scanId = uuidv4();
   // Run quick local parsing for each discovered item so the UI shows cleaned parsed names immediately
   let backgroundStarted = false;
+  let incrementalNewItems = [];
   try {
     const session = req.session || {};
     const priorCache2 = loadScanCache();
-  if (!priorCache2 || !priorCache2.files || Object.keys(priorCache2.files).length === 0) {
-  // first full run - process everything
-  for (const it of items) doProcessParsedItem(it, session);
+    if (!priorCache2 || !priorCache2.files || Object.keys(priorCache2.files).length === 0) {
+      // first full run - process everything
+      for (const it of items) doProcessParsedItem(it, session);
       // build current cache map (files + dirs) and save
       const curFiles = {};
       const curDirs = {};
@@ -2781,20 +2782,21 @@ app.post('/api/scan', async (req, res) => {
     } else {
       // incremental scan: optimized walk to detect new/changed files and removals
       const { toProcess, currentCache, removed } = incrementalScanLibrary(libPath);
+      incrementalNewItems = Array.isArray(toProcess) ? toProcess.slice(0) : [];
       // If incremental scan returned currentCache but lacks initialScanAt, preserve prior marker if present
       try {
         const prior = loadScanCache();
-        if (prior && prior.initialScanAt && !currentCache.initialScanAt) currentCache.initialScanAt = prior.initialScanAt;
+        if (prior && prior.initialScanAt && currentCache && !currentCache.initialScanAt) currentCache.initialScanAt = prior.initialScanAt;
       } catch (e) {}
-  // remove stale entries
-  for (const r of removed) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
-  // process new/changed items
-  for (const it of toProcess) doProcessParsedItem(it, session);
+      // remove stale entries
+      for (const r of (removed || [])) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
+      // process new/changed items
+      for (const it of (toProcess || [])) doProcessParsedItem(it, session);
       // persist current cache map (currentCache is { files, dirs })
-      saveScanCache(currentCache);
+      if (currentCache) saveScanCache(currentCache);
       // build items array for artifact from currentCache.files
       // Exclude items that are marked hidden or applied in the enrich cache so restored scans don't re-show them
-      items = Object.keys(currentCache.files || {}).map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }))
+      items = Object.keys((currentCache && currentCache.files) || {}).map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }))
         .filter(it => {
           try {
             const k = canonicalize(it.canonicalPath);
@@ -2804,51 +2806,50 @@ app.post('/api/scan', async (req, res) => {
           } catch (e) { return true; }
         });
     }
-  try { if (db) db.setKV('parsedCache', parsedCache); else writeJson(parsedCacheFile, parsedCache); } catch (e) {}
+    try { if (db) db.setKV('parsedCache', parsedCache); else writeJson(parsedCacheFile, parsedCache); } catch (e) {}
     try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
   } catch (e) { appendLog(`PARSE_MODULE_FAIL err=${e.message}`); }
   // Wrap the remainder of the request flow so we can release the lock if something fails
   try {
 
-  // Determine enrichment candidates: when doing incremental scans we only want to
-  // refresh metadata for new/changed items (toProcess). For full scans, use the
-  // artifact items as before.
-  const enrichCandidates = (typeof toProcess !== 'undefined' && Array.isArray(toProcess) && toProcess.length) ? toProcess : items;
-  const artifact = { id: scanId, libraryId: libraryId || 'local', totalCount: items.length, items, generatedAt: Date.now() };
-  scans[scanId] = artifact;
-  // Persist scans and prune older scan artifacts so we keep only the two most recent scans.
-  try {
-    // write current set first including the new artifact
-    if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans);
-    // prune: keep only the most recent N scans (current + previous)
-    const KEEP = 2;
-    const allIds = Object.keys(scans || {});
-    if (allIds.length > KEEP) {
-      // sort ids by generatedAt desc (most recent first)
-      const sorted = allIds.map(id => ({ id, ts: (scans[id] && scans[id].generatedAt) ? Number(scans[id].generatedAt) : 0 }))
-        .sort((a,b) => b.ts - a.ts)
-        .map(x => x.id);
-      const toKeep = new Set(sorted.slice(0, KEEP));
-      const toRemove = sorted.slice(KEEP);
-      if (toRemove.length) {
-        for (const rid of toRemove) {
-          try { delete scans[rid]; } catch (e) {}
+    // Determine enrichment candidates: when doing incremental scans we only want to
+    // refresh metadata for new/changed items (toProcess). For full scans, use the
+    // artifact items as before.
+    const enrichCandidates = (Array.isArray(incrementalNewItems) && incrementalNewItems.length) ? incrementalNewItems : items;
+    const artifact = { id: scanId, libraryId: libraryId || 'local', totalCount: items.length, items, generatedAt: Date.now() };
+    scans[scanId] = artifact;
+    // Persist scans and prune older scan artifacts so we keep only the two most recent scans.
+    try {
+      // write current set first including the new artifact
+      if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans);
+      // prune: keep only the most recent N scans (current + previous)
+      const KEEP = 2;
+      const allIds = Object.keys(scans || {});
+      if (allIds.length > KEEP) {
+        // sort ids by generatedAt desc (most recent first)
+        const sorted = allIds.map(id => ({ id, ts: (scans[id] && scans[id].generatedAt) ? Number(scans[id].generatedAt) : 0 }))
+          .sort((a, b) => b.ts - a.ts)
+          .map(x => x.id);
+        const toKeep = new Set(sorted.slice(0, KEEP));
+        const toRemove = sorted.slice(KEEP);
+        if (toRemove.length) {
+          for (const rid of toRemove) {
+            try { delete scans[rid]; } catch (e) {}
+          }
         }
-  try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); appendLog(`POST_REFRESH_SCANS_UPDATED ids=${modified.join(',')}`) } catch (e) {}
       }
+    } catch (e) {
+      try { appendLog(`SCAN_PERSIST_PRUNE_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
     }
-  } catch (e) {
-    try { appendLog(`SCAN_PERSIST_PRUNE_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
-  }
-  appendLog(`SCAN_COMPLETE id=${scanId} total=${items.length}`);
-  // Auto-sweep stale enrich cache entries after a scan completes
-  try { const removed = sweepEnrichCache(); if (removed && removed.length) appendLog(`AUTOSWEEP_AFTER_SCAN removed=${removed.length}`); } catch (e) {}
-  res.json({ scanId, totalCount: items.length });
-  // Launch background enrichment (first N items) using centralized helper. Keep behavior identical.
-  try {
-    backgroundStarted = true;
-    void backgroundEnrichFirstN(scanId, enrichCandidates, req.session, libPath, lockKey, 12);
-  } catch (e) { appendLog(`BACKGROUND_FIRSTN_LAUNCH_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); activeScans.delete(lockKey); appendLog(`SCAN_LOCK_RELEASED path=${libPath}`); }
+    appendLog(`SCAN_COMPLETE id=${scanId} total=${items.length}`);
+    // Auto-sweep stale enrich cache entries after a scan completes
+    try { const removed = sweepEnrichCache(); if (removed && removed.length) appendLog(`AUTOSWEEP_AFTER_SCAN removed=${removed.length}`); } catch (e) {}
+    res.json({ scanId, totalCount: items.length });
+    // Launch background enrichment (first N items) using centralized helper. Keep behavior identical.
+    try {
+      backgroundStarted = true;
+      void backgroundEnrichFirstN(scanId, enrichCandidates, req.session, libPath, lockKey, 12);
+    } catch (e) { appendLog(`BACKGROUND_FIRSTN_LAUNCH_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); activeScans.delete(lockKey); appendLog(`SCAN_LOCK_RELEASED path=${libPath}`); }
   } catch (err) {
     try { appendLog(`SCAN_HANDLER_FAIL scan=${scanId} err=${err && err.message ? err.message : String(err)}`); } catch (e) {}
     try { if (!backgroundStarted) { activeScans.delete(lockKey); appendLog(`SCAN_LOCK_RELEASED path=${libPath}`); } } catch (ee) {}
@@ -2916,6 +2917,7 @@ app.post('/api/scan/incremental', async (req, res) => {
       const inc = scanLib.incrementalScanLibrary(libPath, { scanCacheFile, ignoredDirs: new Set(['node_modules','.git','.svn','__pycache__']), videoExts: ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'], canonicalize, uuidv4 });
       // incremental returns { toProcess, currentCache, removed }
       const { toProcess, currentCache, removed } = inc || {};
+      changedItems = Array.isArray(toProcess) ? toProcess.slice(0) : [];
       // remove stale entries
       for (const r of (removed || [])) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
       // do minimal parsing for new/changed entries
@@ -2940,8 +2942,8 @@ app.post('/api/scan/incremental', async (req, res) => {
   // invoking incremental scan; default to 100.
   const sampleLimit = Number.isInteger(parseInt(req.query && req.query.limit)) ? parseInt(req.query.limit) : 100;
   const sample = items.slice(0, sampleLimit);
-  res.json({ scanId, totalCount: items.length, items: sample });
-  try { void backgroundEnrichFirstN(scanId, items, req.session, libPath, `scanPath:${libPath}`, 12); } catch (e) { appendLog(`INCREMENTAL_BACKGROUND_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
+  res.json({ scanId, totalCount: items.length, items: sample, changedPaths: (changedItems || []).map(it => it && it.canonicalPath).filter(Boolean) });
+  try { void backgroundEnrichFirstN(scanId, changedItems, req.session, libPath, `scanPath:${libPath}`, 12); } catch (e) { appendLog(`INCREMENTAL_BACKGROUND_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
 });
 
 app.get('/api/scan/:scanId', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });

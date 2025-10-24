@@ -709,7 +709,7 @@ export default function App() {
       return null
     }
 
-  const endpoint = mode === 'full' ? '/scan' : '/scan/incremental'
+    const endpoint = mode === 'full' ? '/scan' : '/scan/incremental'
 
     setActiveScanKind(mode)
     setScanning(true)
@@ -722,6 +722,8 @@ export default function App() {
     try {
       const response = await axios.post(API(endpoint), { libraryId: lib?.id, path: configuredPath })
       const result = response && response.data ? response.data : {}
+      const changedPaths = Array.isArray(result.changedPaths) ? result.changedPaths.filter(Boolean) : []
+      const changedPathSet = new Set(changedPaths)
       if (!result.scanId) throw new Error('Scan did not return an id')
 
       setScanId(result.scanId)
@@ -782,12 +784,19 @@ export default function App() {
 
       pushToast && pushToast('Scan', mode === 'full' ? 'Full scan complete — all items are ready.' : 'Incremental scan complete — latest items are ready.')
 
-      // Start background server-side refresh but don't await it here — let the
-      // server process new items incrementally. Also bulk-enrich the visible
-      // first page so metadata appears quickly in the UI.
-      void (async () => { try { await refreshScan(result.scanId, true, { trackProgress: true }) } catch (e) {} })()
+      // Start background metadata work without blocking the UI. Full scans refresh the
+      // entire library, while incremental scans only hydrate newly detected items.
+      if (mode === 'full') {
+        void (async () => { try { await refreshScan(result.scanId, true, { trackProgress: true }) } catch (e) {} })()
+      } else if (mode === 'incremental' && changedPathSet.size) {
+        const targeted = Array.from(changedPathSet)
+        void (async () => { try { await refreshEnrichForPaths(targeted) } catch (e) {} })()
+      }
       try {
-        const primePaths = visibleBaseline.slice(0, Math.max(20, Math.min(60, visibleBaseline.length))).map(it => it.canonicalPath).filter(Boolean)
+        const candidatePrimeFromVisible = visibleBaseline.slice(0, Math.max(20, Math.min(60, visibleBaseline.length))).map(it => it.canonicalPath).filter(Boolean)
+        const primePaths = (mode === 'incremental' && changedPathSet.size)
+          ? Array.from(changedPathSet).slice(0, Math.max(20, Math.min(60, changedPathSet.size)))
+          : candidatePrimeFromVisible
         if (primePaths.length) {
           const resp = await axios.post(API('/enrich/bulk'), { paths: primePaths })
           const itemsOut = resp && resp.data && Array.isArray(resp.data.items) ? resp.data.items : []
@@ -1979,15 +1988,7 @@ export default function App() {
                           // clear loading flags (guard in case enrichOne did not remove them)
                           safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
 
-                          // Trigger background server-side refresh when relevant
-                          try {
-                            const sid = scanId || (scanMeta && scanMeta.id) || lastScanId
-                            if (sid && currentScanPaths && selectedPaths.some(p => currentScanPaths.has(p))) {
-                              try { dlog('[client] RESCAN_SELECTED -> refreshScan', { sid, count: selectedPaths.length }) } catch (e) {}
-                              ;(async () => { try { await refreshScan(sid, true) } catch (e) {} })()
-                              try { await postClientRefreshedDebounced({ scanId: sid }) } catch (e) {}
-                            }
-                          } catch (e) {}
+                          // Selected paths already refreshed individually above; no global refresh needed
 
                           setSelected(prev => {
                             if (!prev) return {}
@@ -2103,6 +2104,9 @@ function LoadingScreen({ mode = 'incremental', total = 0, loaded = 0, scanProgre
   const combined = metaPhase ? Math.round((scanWeight * 100) + (metaPct * metaWeight)) : Math.round(scanPct * scanWeight)
 
   const friendlyMode = mode === 'full' ? 'Full scan' : 'Incremental scan'
+  const description = mode === 'full'
+    ? 'We’re reindexing your entire library so every title stays fresh.'
+    : 'We’re preparing recent additions — search will resume once everything is indexed.'
   const totalLabel = total > 0 ? total.toLocaleString() : (total === 0 ? '0' : 'calculating…')
   const loadedLabel = loaded > 0 ? loaded.toLocaleString() : (loaded === 0 ? '0' : String(loaded))
 
@@ -2113,7 +2117,7 @@ function LoadingScreen({ mode = 'incremental', total = 0, loaded = 0, scanProgre
           <svg className="icon spinner" viewBox="0 0 50 50" width="32" height="32"><circle cx="25" cy="25" r="20" stroke="currentColor" strokeWidth="4" strokeOpacity="0.18" fill="none"/><path d="M45 25a20 20 0 0 1-20 20" stroke="currentColor" strokeWidth="4" strokeLinecap="round" fill="none"><animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25" dur="1s" repeatCount="indefinite"/></path></svg>
         </div>
         <h2>{friendlyMode} in progress</h2>
-        <p>We’re preparing your library — search will resume once every item is indexed.</p>
+        <p>{description}</p>
         <div className="loading-details">
           <span>Scan {scanPct}% · {loadedLabel} of {totalLabel} files indexed</span>
           {metaPhase ? <span>Metadata refresh {metaPct}%</span> : <span>Metadata refresh queued</span>}
