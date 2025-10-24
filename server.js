@@ -3729,15 +3729,16 @@ app.post('/api/rename/preview', (req, res) => {
     try {
       const currentEnglish = meta && meta.seriesTitleEnglish ? String(meta.seriesTitleEnglish).trim() : null;
       const needsEnglishUpdate = !currentEnglish || currentEnglish !== englishSeriesTitle;
-      const needsMovieUpdate = typeof isMovie === 'boolean' && typeof meta.isMovie !== 'boolean';
+  const currentMovieFlag = (meta && typeof meta.isMovie === 'boolean') ? meta.isMovie : ((meta && meta.extraGuess && typeof meta.extraGuess.isMovie === 'boolean') ? meta.extraGuess.isMovie : null);
+      const needsMovieUpdate = typeof isMovie === 'boolean' && currentMovieFlag !== isMovie;
       if (needsEnglishUpdate || needsMovieUpdate) {
         const updatedExtra = meta && meta.extraGuess && typeof meta.extraGuess === 'object' ? Object.assign({}, meta.extraGuess) : {};
-        if (typeof isMovie === 'boolean') updatedExtra.isMovie = isMovie;
+  if (typeof isMovie === 'boolean') updatedExtra.isMovie = isMovie;
         const cacheUpdate = Object.assign({}, meta, {
           seriesTitleEnglish: englishSeriesTitle || currentEnglish || null,
           seriesTitle: englishSeriesTitle || meta.seriesTitle || null,
           seriesTitleExact: englishSeriesTitle || meta.seriesTitleExact || null,
-          isMovie: (typeof isMovie === 'boolean') ? isMovie : meta && meta.isMovie,
+          isMovie: (typeof isMovie === 'boolean') ? isMovie : (typeof currentMovieFlag === 'boolean' ? currentMovieFlag : meta && meta.isMovie),
           extraGuess: updatedExtra,
         });
         updateEnrichCacheInMemory(fromPath, cacheUpdate);
@@ -4170,12 +4171,16 @@ function cleanTitleForRender(t, epLabel, epTitle) {
 function determineIsMovie(meta) {
   try {
     if (!meta) return false;
-    if (typeof meta.isMovie === 'boolean') return meta.isMovie;
     const extra = meta.extraGuess || {};
-    if (extra && typeof extra.isMovie === 'boolean') return extra.isMovie;
-    let movie = false;
-    let series = false;
+    const explicitMeta = (typeof meta.isMovie === 'boolean') ? meta.isMovie : null;
+    const explicitExtra = (extra && typeof extra.isMovie === 'boolean') ? extra.isMovie : null;
+    let movie = explicitMeta === true || explicitExtra === true;
+    let series = explicitMeta === false || explicitExtra === false;
     const considered = new Set();
+    const markSeries = () => { series = true; };
+    const markMovie = () => { movie = true; };
+    if (meta.season != null || meta.episode != null || meta.episodeRange) markSeries();
+    else if (extra && (extra.season != null || extra.episode != null || extra.episodeRange)) markSeries();
     const pushRaw = (raw) => {
       if (!raw || typeof raw !== 'object') return;
       if (considered.has(raw)) return;
@@ -4185,17 +4190,17 @@ function determineIsMovie(meta) {
         for (const fmt of formatCandidates) {
           if (!fmt) continue;
           const up = String(fmt).toUpperCase();
-          if (up.includes('MOVIE') || up === 'FILM' || up === 'FEATURE' || up === 'THEATRICAL') movie = true;
-          if (up.includes('TV') || up.includes('SERIES') || up === 'OVA' || up === 'ONA' || up === 'SPECIAL') series = true;
+          if (up.includes('MOVIE') || up === 'FILM' || up === 'FEATURE' || up === 'THEATRICAL') markMovie();
+          if (up.includes('TV') || up.includes('SERIES') || up === 'OVA' || up === 'ONA' || up === 'SPECIAL') markSeries();
         }
         const mediaType = raw.media_type || raw.mediaType || raw.type || raw.category;
         if (mediaType) {
           const low = String(mediaType).toLowerCase();
-          if (low.includes('movie') || low === 'film') movie = true;
-          if (low.includes('tv') || low.includes('series') || low.includes('show')) series = true;
+          if (low.includes('movie') || low === 'film') markMovie();
+          if (low.includes('tv') || low.includes('series') || low.includes('show')) markSeries();
         }
-        if (raw.release_date && !raw.first_air_date) movie = true;
-        if (raw.first_air_date || raw.number_of_episodes || raw.episode_count || raw.episode_run_time) series = true;
+        if (raw.release_date && !raw.first_air_date) markMovie();
+        if (raw.first_air_date || raw.number_of_episodes || raw.episode_count || raw.episode_run_time) markSeries();
       } catch (e) { /* ignore raw-level errors */ }
     };
     pushRaw(meta.raw);
@@ -4207,23 +4212,19 @@ function determineIsMovie(meta) {
     pushRaw(extra && extra.anilist && extra.anilist.raw);
     if (meta.mediaFormat) {
       const up = String(meta.mediaFormat).toUpperCase();
-      if (up.includes('MOVIE') || up === 'FILM' || up === 'FEATURE') movie = true;
-      if (up.includes('TV') || up.includes('SERIES') || up === 'OVA' || up === 'ONA' || up === 'SPECIAL') series = true;
+      if (up.includes('MOVIE') || up === 'FILM' || up === 'FEATURE') markMovie();
+      if (up.includes('TV') || up.includes('SERIES') || up === 'OVA' || up === 'ONA' || up === 'SPECIAL') markSeries();
     }
     if (extra && extra.mediaFormat) {
       const up = String(extra.mediaFormat).toUpperCase();
-      if (up.includes('MOVIE') || up === 'FILM' || up === 'FEATURE') movie = true;
-      if (up.includes('TV') || up.includes('SERIES') || up === 'OVA' || up === 'ONA' || up === 'SPECIAL') series = true;
+      if (up.includes('MOVIE') || up === 'FILM' || up === 'FEATURE') markMovie();
+      if (up.includes('TV') || up.includes('SERIES') || up === 'OVA' || up === 'ONA' || up === 'SPECIAL') markSeries();
     }
-    if (!series) {
-      if (meta.season != null || meta.episode != null || meta.episodeRange) series = true;
-      else if (extra && (extra.season != null || extra.episode != null || extra.episodeRange)) series = true;
-    }
-  if (movie && !series) return true;
-  if (series && !movie) return false;
-  if (series && movie) return false;
-  if (series) return false;
-  if (movie) return true;
+    if (series && !movie) return false;
+    if (movie && !series) return true;
+    if (series && movie) return false;
+    if (typeof explicitMeta === 'boolean') return explicitMeta;
+    if (typeof explicitExtra === 'boolean') return explicitExtra;
     return null;
   } catch (e) {
     return null;
@@ -4464,9 +4465,16 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 .replace('{episode}', sanitize(episodeToken2))
                 .replace('{episodeRange}', sanitize(episodeRangeToken2))
   .replace('{tmdbId}', sanitize(tmdbIdToken2));
+              const nameWithoutExt2 = String(nameWithoutExtRaw2)
+                .replace(/\s*\(\s*\)\s*/g, '')
+                .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
+                .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
+                .replace(/\s{2,}/g, ' ')
+                .trim();
+              const safeNameWithoutExt2 = nameWithoutExt2 || sanitize(titleToken2) || sanitize(path.basename(key, path.extname(key))) || 'Untitled';
               // build final basename with extension and set effective target
               try {
-                const finalBasename2 = `${nameWithoutExtRaw2}${ext2}`;
+                const finalBasename2 = `${safeNameWithoutExt2}${ext2}`;
                 effectiveToResolved = path.resolve(path.dirname(toResolved), finalBasename2);
               } catch (e) { /* ignore and leave effectiveToResolved as toResolved */ }
             } catch (renderErr) {

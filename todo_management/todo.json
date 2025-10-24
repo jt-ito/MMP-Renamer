@@ -27,6 +27,6 @@
     "id": 5,
     "title": "Fix hardlink naming for series",
     "description": "Ensure series folders omit year and episode filenames include titles without empty parentheses",
-    "status": "completed"
+    "status": "in-progress"
   }
 ]
