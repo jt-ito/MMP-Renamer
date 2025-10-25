@@ -4563,8 +4563,23 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
           try {
             // Prepare effective target path (default to provided toResolved). If rendering succeeds we'll replace it.
             let effectiveToResolved = toResolved;
+            // If the preview plan already contained a computed toPath under the configured output,
+            // prefer that path (it reflects the preview UI) and skip re-rendering. This prevents
+            // cases where the enrichCache was updated between preview and apply and the season
+            // or other tokens differ unexpectedly.
+            let usePlanToPath = false;
+            try {
+              if (p && p.toPath && effectiveOutput) {
+                const candidate = path.resolve(p.toPath);
+                if (String(candidate).startsWith(path.resolve(effectiveOutput))) {
+                  effectiveToResolved = candidate;
+                  usePlanToPath = true;
+                }
+              }
+            } catch (e) { /* ignore */ }
 
             // Re-render filename from enrichment and template if available to ensure TMDb-based names are used
+            if (!usePlanToPath) {
             try {
               const enrichment = enrichCache[from] || {};
               const key = from;
@@ -4663,6 +4678,10 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
             } catch (renderErr) {
               // fallback: keep effectiveToResolved as toResolved
               effectiveToResolved = toResolved;
+            }
+            } else {
+              // using the preview plan's toPath; ensure we still canonicalize any oddities
+              try { effectiveToResolved = path.resolve(effectiveToResolved); } catch (e) {}
             }
             // helper: ensure source and destination live on the same filesystem/device
             function nearestExistingParent(dir) {
