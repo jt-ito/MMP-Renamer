@@ -4723,6 +4723,30 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
               }
             } catch (e) { throw e }
 
+              // If the preview plan's path was used, ensure the season folder matches any S## token in the filename
+              try {
+                const finalBasenameCheck = path.basename(effectiveToResolved || toResolved);
+                // look for SxxEyy pattern in filename
+                const sMatch = String(finalBasenameCheck || '').match(/S(\d{2})E\d{2}/i);
+                if (sMatch && sMatch[1]) {
+                  const fileSeasonNum = Number(sMatch[1]);
+                  const parentDir = path.dirname(effectiveToResolved || toResolved) || '';
+                  const parentName = path.basename(parentDir || '');
+                  if (/^Season\s*\d{1,2}$/i.test(parentName)) {
+                    const parentNum = Number(parentName.replace(/[^0-9]/g, '')) || 0;
+                    if (fileSeasonNum && parentNum && fileSeasonNum !== parentNum) {
+                      // swap season folder to match file's Sxx
+                      const grandParent = path.dirname(parentDir);
+                      const newSeasonFolder = `Season ${String(fileSeasonNum).padStart(2,'0')}`;
+                      const newParent = path.join(grandParent, newSeasonFolder);
+                      const newEffective = path.join(newParent, path.basename(effectiveToResolved || toResolved));
+                      appendLog(`APPLY_FIX_SEASON fromParent=${parentName} toParent=${newSeasonFolder} fileSeason=${fileSeasonNum} pathBefore=${effectiveToResolved} pathAfter=${newEffective}`);
+                      effectiveToResolved = newEffective;
+                    }
+                  }
+                }
+              } catch (e) { /* best-effort */ }
+
               // Ensure destination parent exists
               try {
                 const parentDir = path.dirname(effectiveToResolved);
