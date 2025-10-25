@@ -4574,12 +4574,14 @@ function extractYear(meta, fromPath) {
 }
 
 // Apply rename plans (safe execution)
-app.post('/api/rename/apply', requireAuth, (req, res) => {
+app.post('/api/rename/apply', requireAuth, async (req, res) => {
   const { plans, dryRun } = req.body || {};
   if (!plans || !Array.isArray(plans)) return res.status(400).json({ error: 'plans required' });
   // Ensure cached movie/english flags are healed before applying rename plans so folder/year logic is correct
   try { healCachedEnglishAndMovieFlags(); } catch (e) { /* non-fatal */ }
   const results = [];
+  // helper sleep for transient retries
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   for (const p of plans) {
     try {
       const from = p.fromPath;
@@ -4821,43 +4823,60 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 const err = new Error('Cross-device link not supported: source and target are on different filesystems');
                 throw err;
               }
-              try {
-                fs.linkSync(from, effectiveToResolved);
-                resultsItem.status = 'hardlinked';
-                resultsItem.to = effectiveToResolved;
-                appendLog(`HARDLINK_OK from=${from} to=${effectiveToResolved}`);
-              } catch (linkErr) {
-                // Do NOT fallback to copy. Hardlink must succeed or the operation fails.
-                appendLog(`HARDLINK_FAIL from=${from} to=${effectiveToResolved} linkErr=${linkErr && linkErr.message ? linkErr.message : String(linkErr)}`);
-                // Additional diagnostics to help identify ENOENT / mount issues
+              // Attempt hardlink with transient retries for filesystem contention errors
+              const transientCodes = new Set(['EMFILE','EAGAIN','EBUSY','EACCES','ENFILE']);
+              let linkErrFinal = null;
+              for (let attempt = 0; attempt < 4; attempt++) {
                 try {
-                  const exists = fs.existsSync(from);
-                  appendLog(`HARDLINK_DIAG_EXISTS from=${from} exists=${exists}`);
-                  const resolvedFrom = path.resolve(from);
-                  const canonicalFrom = canonicalize(from);
-                  appendLog(`HARDLINK_DIAG_PATHS resolved=${resolvedFrom} canonical=${canonicalFrom}`);
-                  const parentDir = path.dirname(from);
-                  function findNearestExisting(dir) {
-                    let cur = dir;
+                  fs.linkSync(from, effectiveToResolved);
+                  resultsItem.status = 'hardlinked';
+                  resultsItem.to = effectiveToResolved;
+                  appendLog(`HARDLINK_OK from=${from} to=${effectiveToResolved}`);
+                  linkErrFinal = null;
+                  break;
+                } catch (linkErr2) {
+                  linkErrFinal = linkErr2;
+                  appendLog(`HARDLINK_FAIL_ATTEMPT from=${from} to=${effectiveToResolved} attempt=${attempt} err=${linkErr2 && linkErr2.message ? linkErr2.message : String(linkErr2)}`);
+                  // collect diagnostics on first failure
+                  if (attempt === 0) {
                     try {
-                      while (cur && !fs.existsSync(cur)) {
-                        const p = path.dirname(cur);
-                        if (!p || p === cur) break;
-                        cur = p;
+                      const exists = fs.existsSync(from);
+                      appendLog(`HARDLINK_DIAG_EXISTS from=${from} exists=${exists}`);
+                      const resolvedFrom = path.resolve(from);
+                      const canonicalFrom = canonicalize(from);
+                      appendLog(`HARDLINK_DIAG_PATHS resolved=${resolvedFrom} canonical=${canonicalFrom}`);
+                      const parentDir = path.dirname(from);
+                      function findNearestExisting(dir) {
+                        let cur = dir;
+                        try {
+                          while (cur && !fs.existsSync(cur)) {
+                            const p = path.dirname(cur);
+                            if (!p || p === cur) break;
+                            cur = p;
+                          }
+                        } catch (e) { cur = null }
+                        return cur && fs.existsSync(cur) ? cur : null;
                       }
-                    } catch (e) { cur = null }
-                    return cur && fs.existsSync(cur) ? cur : null;
+                      const nearest = findNearestExisting(parentDir);
+                      appendLog(`HARDLINK_DIAG_PARENT parentExists=${fs.existsSync(parentDir)} nearestExisting=${nearest}`);
+                      if (nearest) {
+                        try { const list = fs.readdirSync(nearest).slice(0,40).join(', '); appendLog(`HARDLINK_DIAG_NEAREST_LIST nearest=${nearest} sample=${list}`); } catch (e) {}
+                      }
+                    } catch (ee) {}
                   }
-                  const nearest = findNearestExisting(parentDir);
-                  appendLog(`HARDLINK_DIAG_PARENT parentExists=${fs.existsSync(parentDir)} nearestExisting=${nearest}`);
-                  if (nearest) {
-                    try {
-                      const list = fs.readdirSync(nearest).slice(0,40).join(', ');
-                      appendLog(`HARDLINK_DIAG_NEAREST_LIST nearest=${nearest} sample=${list}`);
-                    } catch (e) {}
+                  // If transient, wait then retry; otherwise stop retrying
+                  if (linkErr2 && linkErr2.code && transientCodes.has(linkErr2.code)) {
+                    // small backoff
+                    await sleep(100 * (attempt + 1));
+                    continue;
                   }
-                } catch (ee) {}
-                throw linkErr;
+                  break;
+                }
+              }
+              if (linkErrFinal) {
+                // after retries, still failed
+                appendLog(`HARDLINK_FAIL from=${from} to=${effectiveToResolved} finalErr=${linkErrFinal && linkErrFinal.message ? linkErrFinal.message : String(linkErrFinal)}`);
+                throw linkErrFinal;
               }
             } else {
               // target already exists
