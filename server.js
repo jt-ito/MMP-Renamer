@@ -4138,6 +4138,9 @@ function resolveSeriesTitle(meta, fallbackTitle, fromPath, episodeTitleOverride,
       if (exacts.length) return exacts[0];
     }
     if (meta) {
+      // If we have an English-preferred title, prefer it early so provider-localized names
+      // (e.g., Japanese) don't override a clear English series title.
+      if (englishPreferred) push(englishPreferred);
       push(meta.seriesTitleExact);
       push(meta.seriesTitle);
       push(meta.title);
@@ -4166,7 +4169,7 @@ function resolveSeriesTitle(meta, fallbackTitle, fromPath, episodeTitleOverride,
         push(meta.raw.name);
       }
     }
-    push(englishPreferred);
+  // englishPreferred already pushed if present; keep fallbackTitle afterwards
     push(fallbackTitle);
     if (fromPath) {
       try {
@@ -4256,6 +4259,8 @@ function updateEnrichCacheInMemory(key, nextObj) {
     }
     const normalized = normalizeEnrichEntry(merged);
     enrichCache[key] = preserveAppliedFlags(prev, normalized);
+    // Persist sooner so rescans show updated values quickly (best-effort, debounced)
+    try { schedulePersistEnrichCache(150); } catch (e) {}
     return enrichCache[key];
   } catch (e) { return nextObj; }
 }
