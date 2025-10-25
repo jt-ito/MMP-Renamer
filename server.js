@@ -294,7 +294,32 @@ function normalizeEnrichEntry(entry) {
     const normalizedFailure = normalizeProviderFailure(entry.providerFailure);
     out.providerFailure = normalizedFailure;
     if (out.provider && out.provider.matched) out.providerFailure = null;
-    return out;
+      // Post-normalization: strip season-like suffixes from series/title when safe
+      try {
+        // Respect explicit aliases: do not alter if an alias exists
+        const alias = getSeriesAlias(out.seriesTitle || out.title || '');
+        if (!alias) {
+          // If provider raw data is present (AniList), use the AniList-aware stripper for higher confidence
+          const rawPick = (entry && entry.provider && entry.provider.raw) ? entry.provider.raw : null;
+          if (out.seriesTitle) {
+            const before = out.seriesTitle;
+            const after = rawPick ? stripAniListSeasonSuffix(before, rawPick) : stripSeasonNumberSuffix(before);
+            if (after && after !== before) {
+              try { appendLog(`STRIP_SEASON_NORMALIZED series before=${String(before).slice(0,200)} after=${String(after).slice(0,200)}`); } catch (e) {}
+              out.seriesTitle = after;
+            }
+          }
+          if (out.title) {
+            const beforeT = out.title;
+            const afterT = rawPick ? stripAniListSeasonSuffix(beforeT, rawPick) : stripSeasonNumberSuffix(beforeT);
+            if (afterT && afterT !== beforeT) {
+              try { appendLog(`STRIP_SEASON_NORMALIZED title before=${String(beforeT).slice(0,200)} after=${String(afterT).slice(0,200)}`); } catch (e) {}
+              out.title = afterT;
+            }
+          }
+        }
+      } catch (e) { /* best-effort */ }
+      return out;
   } catch (e) {
     return entry || {};
   }
@@ -3922,10 +3947,23 @@ function stripEpisodeArtifactsForFolder(name) {
 function stripSeasonNumberSuffix(name) {
   try {
     if (!name) return name;
-    let s = String(name).trim();
-    // Remove common patterns where a season or ordinal is appended to a title
-    // Examples handled: "Title 2", "Title 02", "Title II", "Title 2nd", "Title - Season 2", "Title Part 2"
-    s = s.replace(/\s*(?:[-–—:\/]\s*)?(?:Season|Series|Part)?\s*(?:#\s*)?(?:\b(?:[0-9]{1,2}|[IVXLC]+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|[0-9]{1,2}(?:st|nd|rd|th))\b)\s*$/i, '').trim();
+    const orig = String(name).trim();
+    let s = orig;
+    // Do not aggressively strip when the numeric suffix appears to be part of a canonical title
+    // Examples to preserve: "Kaiju No. 8", "No. 6", "Volume 2", "Vol. 2", "Chapter 3"
+    // If the suffix is explicitly prefixed with common non-season tokens, don't strip.
+    if (/\b(No\.?|Vol(?:ume)?|Chapter|Ch\.?|Book)\b\s*\d+\s*$/i.test(s)) return orig;
+
+    // If the title contains an explicit 'No.' token anywhere, assume numeric parts may be canonical
+    if (/\bNo\.?\b/i.test(s) && /\d+\b/.test(s)) return orig;
+
+    // Remove common season/part patterns at the end
+    s = s.replace(/\s*(?:[-–—:\/]\s*)?(?:Season|Series|Part)\s*(?:#\s*)?(?:\b(?:[0-9]{1,2}|[IVXLC]+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|[0-9]{1,2}(?:st|nd|rd|th))\b)\s*$/i, '').trim();
+    // Also handle trailing bare numbers when they look like ' Title 2' (but avoid removing years)
+    // Only strip bare trailing 1-2 digit numbers if the whole string doesn't also end in a 4-digit year
+    if (!/\b\d{4}\b$/.test(s)) {
+      s = s.replace(/\s*(?:[-–—:\/]\s*)?(?:#\s*)?(?:\b(?:[0-9]{1,2}|[IVXLC]+)\b)\s*$/i, '').trim();
+    }
     return s;
   } catch (e) { return String(name || '').trim() }
 }
