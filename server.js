@@ -3812,11 +3812,21 @@ app.post('/api/rename/preview', (req, res) => {
   if (meta && meta.provider && meta.provider.renderedName) {
     // strip extension and insert year if provider-rendered name is missing it
     let providerName = String(meta.provider.renderedName).replace(/\.[^/.]+$/, '');
+    try {
+      // strip season-like suffix from the leading title portion if present
+      const parts = providerName.split(/\s[-–—:]\s/);
+      if (parts && parts.length > 0) {
+        parts[0] = stripSeasonNumberSuffix(parts[0]);
+        providerName = parts.join(' - ');
+      } else {
+        providerName = stripSeasonNumberSuffix(providerName);
+      }
+    } catch (e) {}
     providerName = ensureRenderedNameHasYear(providerName, templateYear);
     nameWithoutExtRaw = providerName;
   } else {
     nameWithoutExtRaw = baseNameTemplate
-  .replace('{title}', sanitize(title))
+  .replace('{title}', sanitize(stripSeasonNumberSuffix(title)))
       .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
   .replace('{year}', sanitize(templateYear))
       .replace('{epLabel}', sanitize(epLabel))
@@ -4666,6 +4676,12 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
                 .replace('{episode}', sanitize(episodeToken2))
                 .replace('{episodeRange}', sanitize(episodeRangeToken2))
   .replace('{tmdbId}', sanitize(tmdbIdToken2));
+              // strip season-like suffixes from the title token in the final filename
+              try {
+                const cleanTitleToken2 = stripSeasonNumberSuffix(titleToken2 || '');
+                // replace the sanitized {title} again with cleaned one to ensure strip applied
+                nameWithoutExtRaw2 = String(nameWithoutExtRaw2).replace(sanitize(titleToken2 || ''), sanitize(cleanTitleToken2 || ''));
+              } catch (e) {}
               const nameWithoutExt2 = String(nameWithoutExtRaw2)
                 .replace(/\s*\(\s*\)\s*/g, '')
                 .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
