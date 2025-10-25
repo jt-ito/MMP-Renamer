@@ -4569,14 +4569,18 @@ app.post('/api/rename/apply', requireAuth, (req, res) => {
             // or other tokens differ unexpectedly.
             let usePlanToPath = false;
             try {
-              if (p && p.toPath && effectiveOutput) {
+              // Compare preview toPath against the configured output for this apply run.
+              if (p && p.toPath && configuredOut) {
                 const candidate = path.resolve(p.toPath);
-                if (String(candidate).startsWith(path.resolve(effectiveOutput))) {
+                if (String(candidate).startsWith(path.resolve(configuredOut))) {
                   effectiveToResolved = candidate;
                   usePlanToPath = true;
+                  try { appendLog(`APPLY_USE_PLAN topath=${candidate}`) } catch (e) {}
+                } else {
+                  try { appendLog(`APPLY_PLAN_IGNORED planToPath=${String(p.toPath)} configuredOut=${String(configuredOut)}`) } catch (e) {}
                 }
               }
-            } catch (e) { /* ignore */ }
+            } catch (e) { try { appendLog(`APPLY_PLAN_CHECK_ERR err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
 
             // Re-render filename from enrichment and template if available to ensure TMDb-based names are used
             if (!usePlanToPath) {
