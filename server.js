@@ -294,13 +294,81 @@ function normalizeEnrichEntry(entry) {
     const normalizedFailure = normalizeProviderFailure(entry.providerFailure);
     out.providerFailure = normalizedFailure;
     if (out.provider && out.provider.matched) out.providerFailure = null;
-      // Post-normalization: strip season-like suffixes from series/title when safe
+
+    // Prefer parsed/exact and child-relation matches over a parent-provider fallback when obvious.
+    try {
+      // Respect explicit aliases: do not alter if an alias exists
+      const alias = getSeriesAlias(out.seriesTitle || out.title || '');
+      const rawPick = (entry && entry.provider && entry.provider.raw) ? entry.provider.raw : null;
+      // 1) If we have a provider raw with relation nodes, try to match a child relation to parsed title or parsedName
       try {
-        // Respect explicit aliases: do not alter if an alias exists
-        const alias = getSeriesAlias(out.seriesTitle || out.title || '');
+        const parsedTitle = out.parsed && out.parsed.title ? String(out.parsed.title).trim() : null;
+        const parsedName = out.parsedName || null;
+        const lookupCandidates = [];
+        if (parsedTitle) lookupCandidates.push(parsedTitle);
+        if (parsedName) lookupCandidates.push(parsedName);
+        if (out.seriesLookupTitle) lookupCandidates.push(out.seriesLookupTitle);
+        if (out.title) lookupCandidates.push(out.title);
+
+        function normForCompare(s) { try { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g,''); } catch (e) { return String(s || '') } }
+
+        if (!alias && rawPick) {
+          // AniList-style relations: rawPick.relations.nodes
+          const nodes = (rawPick.relations && Array.isArray(rawPick.relations.nodes)) ? rawPick.relations.nodes : (rawPick.series && rawPick.series.relations && Array.isArray(rawPick.series.relations.nodes) ? rawPick.series.relations.nodes : null);
+          if (nodes && nodes.length) {
+            for (const node of nodes) {
+              try {
+                // gather possible names for the node
+                const names = [];
+                if (node.title && typeof node.title === 'object') {
+                  if (node.title.english) names.push(node.title.english);
+                  if (node.title.romaji) names.push(node.title.romaji);
+                  if (node.title.native) names.push(node.title.native);
+                }
+                if (node.name) names.push(node.name);
+                if (node.aliases && Array.isArray(node.aliases)) names.push(...node.aliases);
+                const normNames = names.map(normForCompare).filter(Boolean);
+                for (const cand of lookupCandidates) {
+                  const nc = normForCompare(cand);
+                  if (!nc) continue;
+                  for (const nn of normNames) {
+                    if (nn && nc && (nn === nc || nn.indexOf(nc) !== -1 || nc.indexOf(nn) !== -1)) {
+                      // match! prefer this node's english or romaji title
+                      const chosen = (node.title && (node.title.english || node.title.romaji || node.title.native)) ? (node.title.english || node.title.romaji || node.title.native) : (names[0] || null);
+                      if (chosen) {
+                        try { appendLog(`PICK_RELATION_CHILD match=${String(cand).slice(0,120)} node=${String(chosen).slice(0,120)}`) } catch (e) {}
+                        out.seriesTitle = chosen;
+                        out.seriesTitleEnglish = (node.title && node.title.english) ? node.title.english : out.seriesTitleEnglish || null;
+                        break;
+                      }
+                    }
+                  }
+                  if (out.seriesTitle && out.seriesTitle === (node.title && (node.title.english || node.title.romaji || node.title.native))) break;
+                }
+                if (out.seriesTitle && out.seriesTitle === (node.title && (node.title.english || node.title.romaji || node.title.native))) break;
+              } catch (e) { /* ignore node errors */ }
+            }
+          }
+        }
+        // 2) Prefer parsed/exact candidate when confident and when provider appears to be a parent fallback
+        try {
+          const parsedTitle = out.parsed && out.parsed.title ? String(out.parsed.title).trim() : null;
+          if (!alias && parsedTitle && parsedTitle.length > 2 && !looksLikeEpisodeTitleCandidate(parsedTitle)) {
+            // if provider raw indicates relations (parent) or provider lacks a clear seriesTitleExact, prefer parsedTitle
+            const providerLooksLikeParent = !!(rawPick && (rawPick.relations || (rawPick.series && rawPick.series.relations)));
+            if (providerLooksLikeParent || !out.seriesTitleExact) {
+              if (out.seriesTitle !== parsedTitle) {
+                try { appendLog(`PICK_PARSED_OVER_PARENT parsed=${String(parsedTitle).slice(0,200)} prev=${String(out.seriesTitle).slice(0,200)}`) } catch (e) {}
+                out.seriesTitle = parsedTitle;
+              }
+            }
+          }
+        } catch (e) {}
+      } catch (e) { /* best-effort relation handling */ }
+
+      // 3) Strip season-like suffixes from series/title when safe (use AniList-aware when raw present)
+      try {
         if (!alias) {
-          // If provider raw data is present (AniList), use the AniList-aware stripper for higher confidence
-          const rawPick = (entry && entry.provider && entry.provider.raw) ? entry.provider.raw : null;
           if (out.seriesTitle) {
             const before = out.seriesTitle;
             const after = rawPick ? stripAniListSeasonSuffix(before, rawPick) : stripSeasonNumberSuffix(before);
@@ -319,7 +387,8 @@ function normalizeEnrichEntry(entry) {
           }
         }
       } catch (e) { /* best-effort */ }
-      return out;
+    } catch (e) { /* best-effort outer */ }
+    return out;
   } catch (e) {
     return entry || {};
   }
