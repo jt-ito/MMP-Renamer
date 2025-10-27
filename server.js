@@ -222,7 +222,7 @@ if (!db) {
   try { parsedCache = JSON.parse(fs.readFileSync(parsedCacheFile, 'utf8') || '{}'); } catch (e) { parsedCache = {}; }
   try { renderedIndex = JSON.parse(fs.readFileSync(renderedIndexFile, 'utf8') || '{}'); } catch (e) { renderedIndex = {}; }
   try { scans = JSON.parse(fs.readFileSync(scanStoreFile, 'utf8') || '{}'); } catch (e) { scans = {}; }
-  if (!Array.isArray(hideEvents)) hideEvents = [];
+  if (!title) return null;
 }
 
 try { healCachedEnglishAndMovieFlags(); } catch (e) { try { appendLog(`ENRICH_CACHE_HEAL_INIT_FAIL err=${e && e.message ? e.message : String(e)}`); } catch (ee) {} }
@@ -248,7 +248,7 @@ function appendLog(line) {
         try { console.error('appendLog failed', e && e.message ? e.message : e); } catch (ee) {}
       }
     } else {
-      try { console.log(ts + ' ' + String(line)) } catch (ee) {}
+      return (recall * 0.75) + (precision * 0.25);
     }
   } catch (e) {
     try { console.error('appendLog failed', e && e.message ? e.message : e); } catch (ee) {}
@@ -2053,9 +2053,39 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // Compute a parent-folder candidate but do NOT prefer it yet — we'll try filename first, then parent if TMDb fails.
   let parentCandidate = null
   try {
-    const parent = path.dirname(canonicalPath)
+    let parent = path.dirname(canonicalPath)
     // normalize separators to '/' so splitting works for both Windows and POSIX-style input
-    const parts = String(parent).replace(/\\/g,'/').split('/').filter(Boolean)
+    let parentNorm = String(parent).replace(/\\/g,'/');
+    try {
+      // gather configured scan input paths (global + per-user) to strip library roots
+      const configured = [];
+      try { if (serverSettings && serverSettings.scan_input_path) configured.push(String(serverSettings.scan_input_path).replace(/\\/g,'/').replace(/\/+$/,'')); } catch(e){}
+      try {
+        for (const un of Object.keys(users || {})) {
+          try {
+            const s = users[un] && users[un].settings && users[un].settings.scan_input_path ? String(users[un].settings.scan_input_path).replace(/\\/g,'/') : null;
+            if (s) configured.push(s.replace(/\/+$/,''));
+          } catch (e) { /* ignore user-level */ }
+        }
+      } catch (e) {}
+      // Also consider environment override
+      try { if (process.env.SCAN_INPUT_PATH) configured.push(String(process.env.SCAN_INPUT_PATH).replace(/\\/g,'/').replace(/\/+$/,'')); } catch(e){}
+      // normalize configured entries and deduplicate
+      const uniq = Array.from(new Set((configured || []).map(x => String(x || '').trim()).filter(Boolean)));
+      for (const cfg of uniq) {
+        try {
+          const c = String(cfg).trim();
+          if (!c) continue;
+          if (parentNorm.toLowerCase().startsWith(c.toLowerCase())) {
+            // strip the configured prefix
+            parentNorm = parentNorm.slice(c.length);
+            if (parentNorm.startsWith('/')) parentNorm = parentNorm.slice(1);
+            break;
+          }
+        } catch (e) {}
+      }
+    } catch (e) { /* ignore */ }
+    const parts = parentNorm.split('/').filter(Boolean)
     const SKIP_FOLDER_TOKENS = new Set(['input','library','scan','local','media','video']);
     for (let i = parts.length - 1; i >= 0; i--) {
       try {
