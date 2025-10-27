@@ -328,6 +328,27 @@ function normalizeEnrichEntry(entry) {
                 if (node.name) names.push(node.name);
                 if (node.aliases && Array.isArray(node.aliases)) names.push(...node.aliases);
                 const normNames = names.map(normForCompare).filter(Boolean);
+                // helper: normalized levenshtein distance
+                function levenshteinNorm(a,b) {
+                  try {
+                    const A = String(a||''); const B = String(b||'');
+                    const al = A.length, bl = B.length;
+                    if (al === 0) return bl;
+                    if (bl === 0) return al;
+                    const dp = Array.from({length: al+1}, () => Array(bl+1).fill(0));
+                    for (let i=0;i<=al;i++) dp[i][0]=i;
+                    for (let j=0;j<=bl;j++) dp[0][j]=j;
+                    for (let i=1;i<=al;i++){
+                      for (let j=1;j<=bl;j++){
+                        const cost = A[i-1] === B[j-1] ? 0 : 1;
+                        dp[i][j] = Math.min(dp[i-1][j] + 1, dp[i][j-1] + 1, dp[i-1][j-1] + cost);
+                      }
+                    }
+                    const dist = dp[al][bl];
+                    const norm = dist / Math.max(al, bl, 1);
+                    return norm;
+                  } catch (e) { return 1 }
+                }
                 for (const cand of lookupCandidates) {
                   const nc = normForCompare(cand);
                   if (!nc) continue;
@@ -341,6 +362,39 @@ function normalizeEnrichEntry(entry) {
                         out.seriesTitleEnglish = (node.title && node.title.english) ? node.title.english : out.seriesTitleEnglish || null;
                         break;
                       }
+                    } else {
+                      // fuzzy heuristics: token overlap or small normalized edit distance
+                      try {
+                        // token overlap
+                        const candTokens = String(cand || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+                        const nameTokens = String(names.join(' ') || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+                        const overlap = candTokens.filter(t => nameTokens.indexOf(t) !== -1);
+                        if (overlap.length && overlap.some(t => t.length >= 3)) {
+                          const chosen = (node.title && (node.title.english || node.title.romaji || node.title.native)) ? (node.title.english || node.title.romaji || node.title.native) : (names[0] || null);
+                          if (chosen) {
+                            try { appendLog(`PICK_RELATION_CHILD_FUZZY tokenOverlap=${overlap.join(',')} match=${String(cand).slice(0,120)} node=${String(chosen).slice(0,120)}`) } catch (e) {}
+                            out.seriesTitle = chosen;
+                            out.seriesTitleEnglish = (node.title && node.title.english) ? node.title.english : out.seriesTitleEnglish || null;
+                            break;
+                          }
+                        }
+                        // normalized edit distance check against each name
+                        for (const rawName of names) {
+                          const nnRaw = normForCompare(rawName || '');
+                          const ncRaw = normForCompare(cand || '');
+                          if (!nnRaw || !ncRaw) continue;
+                          const nscore = levenshteinNorm(nnRaw, ncRaw);
+                          if (nscore <= 0.35) {
+                            const chosen = (node.title && (node.title.english || node.title.romaji || node.title.native)) ? (node.title.english || node.title.romaji || node.title.native) : (names[0] || null);
+                            if (chosen) {
+                              try { appendLog(`PICK_RELATION_CHILD_FUZZY_lev dist=${nscore.toFixed(3)} match=${String(cand).slice(0,120)} node=${String(chosen).slice(0,120)}`) } catch (e) {}
+                              out.seriesTitle = chosen;
+                              out.seriesTitleEnglish = (node.title && node.title.english) ? node.title.english : out.seriesTitleEnglish || null;
+                              break;
+                            }
+                          }
+                        }
+                      } catch (e) { /* ignore fuzzy errors */ }
                     }
                   }
                   if (out.seriesTitle && out.seriesTitle === (node.title && (node.title.english || node.title.romaji || node.title.native))) break;
