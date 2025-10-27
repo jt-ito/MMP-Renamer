@@ -2085,7 +2085,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         } catch (e) {}
       }
     } catch (e) { /* ignore */ }
-    let parts = parentNorm.split('/').filter(Boolean)
+  let parts = parentNorm.split('/').filter(Boolean)
     const ROOT_PREFIX_TOKENS = new Set(['', 'mnt','media','volume','volumes','storage','nas','share','shares','srv','data','library','input','output','home','users','public']);
     const GENERIC_LIBRARY_NAMES = new Set(['anime','animes','manga','mangas','shows','series','tv','television','movies','movie','films','film','cartoons','animation']);
     const isWindowsDrive = (seg) => /^[A-Za-z]:$/.test(String(seg || ''));
@@ -2108,7 +2108,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     if (parts.length && parts[0] && parts[0].length <= 4 && /^[a-z0-9]+$/i.test(parts[0]) && removedPrefix) {
       parts.shift();
     }
-    const segments = parts.length ? parts : [];
+    const segments = parts;
     const SKIP_FOLDER_TOKENS = new Set(['input','library','scan','local','media','video']);
     for (let i = segments.length - 1; i >= 0; i--) {
       try {
