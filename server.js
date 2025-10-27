@@ -2085,11 +2085,34 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         } catch (e) {}
       }
     } catch (e) { /* ignore */ }
-    const parts = parentNorm.split('/').filter(Boolean)
+    let parts = parentNorm.split('/').filter(Boolean)
+    const ROOT_PREFIX_TOKENS = new Set(['', 'mnt','media','volume','volumes','storage','nas','share','shares','srv','data','library','input','output','home','users','public']);
+    const GENERIC_LIBRARY_NAMES = new Set(['anime','animes','manga','mangas','shows','series','tv','television','movies','movie','films','film','cartoons','animation']);
+    const isWindowsDrive = (seg) => /^[A-Za-z]:$/.test(String(seg || ''));
+    let removedPrefix = false;
+    while (parts.length) {
+      const seg = parts[0];
+      if (!seg) { parts.shift(); continue; }
+      const lower = String(seg).toLowerCase();
+      if (isWindowsDrive(seg) || ROOT_PREFIX_TOKENS.has(lower)) {
+        removedPrefix = true;
+        parts.shift();
+        continue;
+      }
+      break;
+    }
+    if (parts.length > 1 && GENERIC_LIBRARY_NAMES.has(String(parts[0]).toLowerCase())) {
+      removedPrefix = true;
+      parts.shift();
+    }
+    if (parts.length && parts[0] && parts[0].length <= 4 && /^[a-z0-9]+$/i.test(parts[0]) && removedPrefix) {
+      parts.shift();
+    }
+    const segments = parts.length ? parts : [];
     const SKIP_FOLDER_TOKENS = new Set(['input','library','scan','local','media','video']);
-    for (let i = parts.length - 1; i >= 0; i--) {
+    for (let i = segments.length - 1; i >= 0; i--) {
       try {
-        const seg = parts[i]
+        const seg = segments[i]
         if (!seg) continue
         const pParsed = parseFilename(seg)
         let cand = pParsed && pParsed.title ? String(pParsed.title).trim() : ''
