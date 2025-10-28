@@ -2063,11 +2063,11 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         let configuredInput = null;
         try {
           if (opts && opts.username && users && users[opts.username] && users[opts.username].settings && users[opts.username].settings.scan_input_path) {
-            configuredInput = String(users[opts.username].settings.scan_input_path).replace(/\\/g,'/').replace(/\/\/+$/,'');
+            configuredInput = String(users[opts.username].settings.scan_input_path).replace(/\\/g,'/').replace(/\/+$/,'');
           } else if (serverSettings && serverSettings.scan_input_path) {
-            configuredInput = String(serverSettings.scan_input_path).replace(/\\/g,'/').replace(/\/\/+$/,'');
+            configuredInput = String(serverSettings.scan_input_path).replace(/\\/g,'/').replace(/\/+$/,'');
           } else if (process.env.SCAN_INPUT_PATH) {
-            configuredInput = String(process.env.SCAN_INPUT_PATH).replace(/\\/g,'/').replace(/\/\/+$/,'');
+            configuredInput = String(process.env.SCAN_INPUT_PATH).replace(/\\/g,'/').replace(/\/+$/,'');
           }
         } catch (e) { /* ignore lookup errors */ }
         try { appendLog(`META_PARENT_DERIVE_CONFIG username=${opts && opts.username || '<none>'} configuredInput=${configuredInput || '<none>'} parentNormBefore=${parentNorm}`) } catch (e) {}
