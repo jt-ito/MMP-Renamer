@@ -4234,16 +4234,22 @@ function extractEnglishSeriesTitle(meta) {
   try {
     const seen = new Set();
     const out = [];
-    const push = (value) => {
+    const push = (value, stripSeason = true) => {
       if (!value) return;
-      const trimmed = String(value).trim();
+      let trimmed = String(value).trim();
       if (!trimmed) return;
+      // Strip "Season X" suffix from English titles since we specify season with SxxExx notation
+      if (stripSeason) {
+        trimmed = trimmed.replace(/\s+Season\s+\d{1,2}$/i, '').trim();
+        trimmed = trimmed.replace(/\s+\(Season\s+\d{1,2}\)$/i, '').trim();
+      }
       const key = trimmed.toLowerCase();
       if (seen.has(key)) return;
       seen.add(key);
       out.push(trimmed);
     };
     if (meta && typeof meta === 'object') {
+      // Priority 1: Explicitly marked English titles
       push(meta.seriesTitleEnglish);
       if (meta.extraGuess) {
         push(meta.extraGuess.seriesTitleEnglish);
@@ -4251,26 +4257,46 @@ function extractEnglishSeriesTitle(meta) {
       if (meta.provider) {
         push(meta.provider.seriesTitleEnglish);
         push(meta.provider.titleEnglish);
-        if (meta.provider.raw && typeof meta.provider.raw === 'object') {
+      }
+      
+      // Priority 2: English field in raw title objects (AniList/TVDB)
+      // Check provider.raw.title.english first (most common case)
+      if (meta.provider && meta.provider.raw && typeof meta.provider.raw === 'object') {
+        const rawTitle = meta.provider.raw.title;
+        if (rawTitle && typeof rawTitle === 'object' && rawTitle.english) {
+          push(rawTitle.english);
+        }
+      }
+      
+      // Check meta.raw.title.english (AniList search results)
+      if (meta.raw && typeof meta.raw === 'object' && meta.raw.title && typeof meta.raw.title === 'object' && meta.raw.title.english) {
+        push(meta.raw.title.english);
+      }
+      
+      // Check extraGuess provider raw
+      if (meta.extraGuess && meta.extraGuess.provider && meta.extraGuess.provider.raw && typeof meta.extraGuess.provider.raw === 'object') {
+        const extraRawTitle = meta.extraGuess.provider.raw.title;
+        if (extraRawTitle && typeof extraRawTitle === 'object' && extraRawTitle.english) {
+          push(extraRawTitle.english);
+        }
+      }
+      
+      // Priority 3: Fallback to romaji if English not available
+      if (out.length === 0) {
+        // Try romaji from provider.raw.title
+        if (meta.provider && meta.provider.raw && typeof meta.provider.raw === 'object') {
           const rawTitle = meta.provider.raw.title;
-          if (rawTitle && typeof rawTitle === 'object') {
-            for (const key of Object.keys(rawTitle)) {
-              if (key && key.toLowerCase().indexOf('english') !== -1) push(rawTitle[key]);
-            }
+          if (rawTitle && typeof rawTitle === 'object' && rawTitle.romaji) {
+            push(rawTitle.romaji);
           }
         }
-      }
-      const nestedTitleSources = [];
-      if (meta.raw && typeof meta.raw === 'object') nestedTitleSources.push(meta.raw.title);
-      if (meta.extraGuess && meta.extraGuess.provider && meta.extraGuess.provider.raw && typeof meta.extraGuess.provider.raw === 'object') {
-        nestedTitleSources.push(meta.extraGuess.provider.raw.title);
-      }
-      for (const block of nestedTitleSources) {
-        if (!block || typeof block !== 'object') continue;
-        for (const key of Object.keys(block)) {
-          if (key && key.toLowerCase().indexOf('english') !== -1) push(block[key]);
+        // Try romaji from meta.raw.title
+        if (meta.raw && typeof meta.raw === 'object' && meta.raw.title && typeof meta.raw.title === 'object' && meta.raw.title.romaji) {
+          push(meta.raw.title.romaji);
         }
       }
+      
+      // Priority 4: Rendered name from provider (already cleaned)
       if (meta.provider && meta.provider.renderedName) {
         let rendered = String(meta.provider.renderedName || '').replace(/\.[^/.]+$/, '');
         const dashSplit = rendered.split(/\s+-\s+S\d{1,2}/i);
@@ -4278,6 +4304,8 @@ function extractEnglishSeriesTitle(meta) {
         rendered = rendered.replace(/\s+\(Season\s+\d{1,2}\)$/i, '').trim();
         if (rendered) push(rendered);
       }
+      
+      // Priority 5: Generic title field
       if (meta.title && typeof meta.title === 'string') {
         push(meta.title);
       }
@@ -4505,6 +4533,10 @@ function cleanTitleForRender(t, epLabel, epTitle) {
   if (!t) return '';
   let s = String(t).trim();
   try {
+    // Strip "Season X" suffix since we specify season with SxxExx notation
+    s = s.replace(/\s+Season\s+\d{1,2}$/i, '').trim();
+    s = s.replace(/\s+\(Season\s+\d{1,2}\)$/i, '').trim();
+    
     if (epLabel) {
       const lbl = String(epLabel).trim();
       if (lbl) s = s.replace(new RegExp('\\b' + escapeRegExp(lbl) + '\\b', 'i'), '').trim();
