@@ -2126,6 +2126,16 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
           // if after stripping it's still a skip token, ignore
           if (SKIP_FOLDER_TOKENS.has(String(cand).toLowerCase())) continue
         } catch (e) { /* ignore token cleanup errors */ }
+        // Defensive: skip very short single-word candidates that often represent
+        // mount/host names (e.g., 'Tor') when they come from high-level path segments.
+        // These small tokens are rarely valid series names and tend to pollute
+        // provider queries.
+        try {
+          if (cand && typeof cand === 'string') {
+            const singleWord = !/\s+/.test(cand)
+            if (singleWord && cand.length <= 3 && segments.length > 1) continue
+          }
+        } catch (e) { /* ignore */ }
         // If candidate is numeric-only but the original folder segment contains an explicit season marker
         // (e.g., 'S01' or '1x02'), accept the numeric series name. Otherwise skip episode-like or noisy candidates.
         const rawSeg = String(seg || '')
