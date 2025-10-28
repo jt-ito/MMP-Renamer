@@ -609,6 +609,13 @@ async function metaLookup(title, apiKey, opts = {}) {
     if (!candidates.length || !expectations.length) {
       return { ok: true, bestScore: 1, bestName: candidates[0] || null, bestExpected: expectations[0] || null }
     }
+    
+    // When expectationList is null (filename-based search), trust AniList's search API.
+    // AniList already matched this result via synonyms/aliases, so we don't need strict
+    // word overlap validation. This prevents rejecting correct matches when the filename
+    // uses shortened/alternate names (e.g., "sutetsuyo" for "Japan Anima(tor)'s Exhibition").
+    const hasExplicitExpectations = Array.isArray(expectationList) && expectationList.length > 0;
+    
     let bestScore = 0
     let bestName = null
     let bestExpected = null
@@ -630,10 +637,19 @@ async function metaLookup(title, apiKey, opts = {}) {
         }
       }
     }
-    if (bestScore < MIN_ANILIST_MATCH_SCORE) {
+    
+    // Only enforce minimum score check when we have explicit expectations (parent candidate search).
+    // For filename-based searches (no explicit expectations), trust AniList's search result.
+    if (hasExplicitExpectations && bestScore < MIN_ANILIST_MATCH_SCORE) {
       try { appendLog(`META_ANILIST_MISMATCH context=${contextLabel} query=${queryVariant || '<none>'} candidate=${bestName ? bestName.slice(0,120) : '<none>'} expected=${bestExpected ? bestExpected.slice(0,120) : '<none>'} score=${bestScore.toFixed(2)}`) } catch (e) {}
       return { ok: false, bestScore, bestName, bestExpected }
     }
+    
+    // Log successful match for diagnostics
+    if (!hasExplicitExpectations && bestScore < MIN_ANILIST_MATCH_SCORE) {
+      try { appendLog(`META_ANILIST_ACCEPT_LOW_OVERLAP context=${contextLabel} query=${queryVariant || '<none>'} candidate=${bestName ? bestName.slice(0,120) : '<none>'} score=${bestScore.toFixed(2)} reason=trust_anilist_search`) } catch (e) {}
+    }
+    
     return { ok: true, bestScore, bestName, bestExpected }
   }
 
