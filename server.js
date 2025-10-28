@@ -2070,11 +2070,13 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
             configuredInput = String(process.env.SCAN_INPUT_PATH).replace(/\\/g,'/').replace(/\/\/+$/,'');
           }
         } catch (e) { /* ignore lookup errors */ }
+        try { appendLog(`META_PARENT_DERIVE_CONFIG username=${opts && opts.username || '<none>'} configuredInput=${configuredInput || '<none>'} parentNormBefore=${parentNorm}`) } catch (e) {}
         if (configuredInput) {
           try {
             if (parentNorm.toLowerCase().startsWith(String(configuredInput).toLowerCase())) {
               parentNorm = parentNorm.slice(configuredInput.length);
               if (parentNorm.startsWith('/')) parentNorm = parentNorm.slice(1);
+              try { appendLog(`META_PARENT_DERIVE_STRIPPED parentNormAfter=${parentNorm}`) } catch (e) {}
             }
           } catch (e) { /* ignore */ }
         }
