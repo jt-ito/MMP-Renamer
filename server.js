@@ -1956,6 +1956,37 @@ async function metaLookup(title, apiKey, opts = {}) {
 
 async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   try { console.log('DEBUG: externalEnrich START path=', canonicalPath, 'providedKeyPresent=', !!providedKey); } catch (e) {}
+  
+  // Strip the configured scan input path from canonicalPath BEFORE any parsing or parent derivation.
+  // This ensures the library root (e.g., "/mnt/Tor") never appears in parsed segments or parent candidates.
+  // Priority: per-user setting -> server setting -> env var.
+  let strippedPath = canonicalPath;
+  try {
+    let configuredInput = null;
+    if (opts && opts.username && users && users[opts.username] && users[opts.username].settings && users[opts.username].settings.scan_input_path) {
+      configuredInput = String(users[opts.username].settings.scan_input_path);
+    } else if (serverSettings && serverSettings.scan_input_path) {
+      configuredInput = String(serverSettings.scan_input_path);
+    } else if (process.env.SCAN_INPUT_PATH) {
+      configuredInput = String(process.env.SCAN_INPUT_PATH);
+    }
+    if (configuredInput) {
+      // Normalize separators and trailing slashes for consistent matching
+      const configNorm = configuredInput.replace(/\\/g, '/').replace(/\/+$/, '');
+      const pathNorm = String(canonicalPath).replace(/\\/g, '/');
+      try { appendLog(`META_STRIP_LIBRARY_PATH username=${opts && opts.username || '<none>'} configuredInput=${configNorm} pathBefore=${pathNorm}`) } catch (e) {}
+      // Case-insensitive prefix match (handles Windows drive letters)
+      if (pathNorm.toLowerCase().startsWith(configNorm.toLowerCase())) {
+        strippedPath = pathNorm.slice(configNorm.length);
+        // Remove leading slash after stripping
+        if (strippedPath.startsWith('/')) strippedPath = strippedPath.slice(1);
+        try { appendLog(`META_STRIP_LIBRARY_PATH_RESULT pathAfter=${strippedPath}`) } catch (e) {}
+      }
+    }
+  } catch (e) {
+    try { appendLog(`META_STRIP_LIBRARY_PATH_ERROR err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+  }
+  
   const key = canonicalize(canonicalPath);
   const forceLookup = !!(opts && opts.force);
   const existingEntry = enrichCache[key] || null;
@@ -2002,7 +2033,8 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     } catch (e) { /* ignore */ }
   }
   // lightweight filename parser to strip common release tags and extract season/episode
-  const base = path.basename(canonicalPath, path.extname(canonicalPath));
+  // Use strippedPath (library root already removed) instead of canonicalPath
+  const base = path.basename(strippedPath, path.extname(strippedPath));
   const parseFilename = require('./lib/filename-parser');
   const parsed = parseFilename(base);
   const normSeason = (parsed.season == null && parsed.episode != null) ? 1 : parsed.season
@@ -2053,39 +2085,13 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // Compute a parent-folder candidate but do NOT prefer it yet — we'll try filename first, then parent if TMDb fails.
   let parentCandidate = null
   try {
-      let parent = path.dirname(canonicalPath)
+      // Use strippedPath (library root already removed at function entry) for parent derivation
+      let parent = path.dirname(strippedPath)
       // normalize separators to '/' so splitting works for both Windows and POSIX-style input
       let parentNorm = String(parent).replace(/\\/g,'/');
-      try {
-        // Respect the requesting user's configured scan input path (if provided) and
-        // strip it from the parent path so the library root is never considered
-        // as a parent-folder candidate. Priority: per-user setting -> server setting -> env var.
-        let configuredInput = null;
-        try {
-          if (opts && opts.username && users && users[opts.username] && users[opts.username].settings && users[opts.username].settings.scan_input_path) {
-            configuredInput = String(users[opts.username].settings.scan_input_path).replace(/\\/g,'/').replace(/\/+$/,'');
-          } else if (serverSettings && serverSettings.scan_input_path) {
-            configuredInput = String(serverSettings.scan_input_path).replace(/\\/g,'/').replace(/\/+$/,'');
-          } else if (process.env.SCAN_INPUT_PATH) {
-            configuredInput = String(process.env.SCAN_INPUT_PATH).replace(/\\/g,'/').replace(/\/+$/,'');
-          }
-        } catch (e) { /* ignore lookup errors */ }
-        try { appendLog(`META_PARENT_DERIVE_CONFIG username=${opts && opts.username || '<none>'} configuredInput=${configuredInput || '<none>'} parentNormBefore=${parentNorm}`) } catch (e) {}
-        if (configuredInput) {
-          try {
-            if (parentNorm.toLowerCase().startsWith(String(configuredInput).toLowerCase())) {
-              parentNorm = parentNorm.slice(configuredInput.length);
-              if (parentNorm.startsWith('/')) parentNorm = parentNorm.slice(1);
-              try { appendLog(`META_PARENT_DERIVE_STRIPPED parentNormAfter=${parentNorm}`) } catch (e) {}
-            }
-          } catch (e) { /* ignore */ }
-        }
-      } catch (e) { /* ignore */ }
-    let parts = parentNorm.split('/').filter(Boolean)
-      // Use the remaining path segments (after configured input path stripping) to derive a candidate.
-      // Keep a conservative filter to avoid episode/season folders but do NOT apply additional
-      // hard-coded library-root heuristics here: we rely on the configured input path to remove
-      // the library root as requested.
+      let parts = parentNorm.split('/').filter(Boolean)
+      // Use the remaining path segments to derive a candidate.
+      // Keep a conservative filter to avoid episode/season folders.
       const segments = parts;
     const SKIP_FOLDER_TOKENS = new Set(['input','library','scan','local','media','video']);
     for (let i = segments.length - 1; i >= 0; i--) {
@@ -2185,30 +2191,12 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     attemptedProvider = true;
     let res = null;
     try {
-      let parentPath = path.resolve(path.dirname(canonicalPath))
-      // Strip the configured scan input path from parentPath as well so metaLookup
-      // cannot derive a parent candidate from the library root directory
-      try {
-        let configuredInputForParentPath = null;
-        try {
-          if (opts && opts.username && users && users[opts.username] && users[opts.username].settings && users[opts.username].settings.scan_input_path) {
-            configuredInputForParentPath = String(users[opts.username].settings.scan_input_path).replace(/\\/g,'/').replace(/\/+$/,'');
-          } else if (serverSettings && serverSettings.scan_input_path) {
-            configuredInputForParentPath = String(serverSettings.scan_input_path).replace(/\\/g,'/').replace(/\/+$/,'');
-          } else if (process.env.SCAN_INPUT_PATH) {
-            configuredInputForParentPath = String(process.env.SCAN_INPUT_PATH).replace(/\\/g,'/').replace(/\/+$/,'');
-          }
-        } catch (e) { /* ignore */ }
-        if (configuredInputForParentPath) {
-          let parentPathNorm = String(parentPath).replace(/\\/g,'/');
-          if (parentPathNorm.toLowerCase().startsWith(String(configuredInputForParentPath).toLowerCase())) {
-            parentPathNorm = parentPathNorm.slice(configuredInputForParentPath.length);
-            if (parentPathNorm.startsWith('/')) parentPathNorm = parentPathNorm.slice(1);
-            // If parentPath is now empty (file is in library root), set to null
-            parentPath = parentPathNorm || null;
-          }
-        }
-      } catch (e) { /* ignore */ }
+      // Use strippedPath (library root already removed) for parentPath derivation
+      let parentPath = path.resolve(path.dirname(strippedPath))
+      // If parentPath is empty (file is directly in library root after stripping), set to null
+      if (!parentPath || parentPath === '.' || parentPath === '/') {
+        parentPath = null;
+      }
       // Ensure we search the series title first. If the parsed `seriesName` still contains
       // episode tokens (e.g. 'S01E11.5 ...' or leading 'S01P01'), strip those episode-like
       // tokens out so TMDb receives a clean series candidate. We keep the original parsed
