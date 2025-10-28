@@ -3991,9 +3991,8 @@ app.post('/api/rename/preview', (req, res) => {
   // Prefer explicit series titles from metadata when available.
   // Allow an explicit alias to override the computed name (and skip stripping) so known sequels
   // or numbered canonical titles (e.g. "Kaiju No. 8") are preserved as-is.
-  // Prefer explicit metadata series title (english first), otherwise prefer extracted English or resolved title,
-  // then clean-rendered title, then raw fallback.
-  const seriesBase = (meta && (meta.seriesTitleEnglish || meta.seriesTitle)) ? (meta.seriesTitleEnglish || meta.seriesTitle) : (englishSeriesTitle || resolvedSeriesTitle || title || rawTitle || '');
+  // Prefer englishSeriesTitle (which already has Season suffix stripped) over meta.seriesTitleEnglish
+  const seriesBase = englishSeriesTitle || (meta && (meta.seriesTitleEnglish || meta.seriesTitle)) || resolvedSeriesTitle || title || rawTitle || '';
   const aliasResolved = getSeriesAlias(seriesBase);
   let baseFolderName;
   if (aliasResolved) {
@@ -4909,7 +4908,8 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
               if (yearToken2 === 'undefined') yearToken2 = ''
               const folderYear2 = (isMovie2 === true && yearToken2) ? yearToken2 : ''
               const outputRoot = configuredOut ? path.resolve(configuredOut) : path.resolve(path.dirname(toResolved))
-              const seriesBase2 = (enrichment && (enrichment.seriesTitleEnglish || enrichment.seriesTitle)) ? (enrichment.seriesTitleEnglish || enrichment.seriesTitle) : (englishSeriesTitle2 || resolvedSeriesTitle2 || titleToken2 || rawTitle2 || '');
+              // Prefer englishSeriesTitle2 (which already has Season suffix stripped) over enrichment.seriesTitleEnglish
+              const seriesBase2 = englishSeriesTitle2 || (enrichment && (enrichment.seriesTitleEnglish || enrichment.seriesTitle)) || resolvedSeriesTitle2 || titleToken2 || rawTitle2 || '';
               const aliasResolved2 = getSeriesAlias(seriesBase2);
               let baseFolderName2;
               if (aliasResolved2) {
