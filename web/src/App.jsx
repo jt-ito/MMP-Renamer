@@ -1823,7 +1823,21 @@ export default function App() {
         </div>
       ) : null}
       <header>
-        <h1 style={{cursor:'pointer'}} onClick={() => (window.location.hash = '#/')} title="Go to dashboard">MMP Renamer</h1>
+        <h1 
+          style={{cursor:'pointer'}} 
+          onClick={() => {
+            // If user is actively searching, clicking the title clears the search (acts as clear button)
+            if (searchQuery && searchQuery.trim()) {
+              doSearch('')
+            } else {
+              // Otherwise navigate to dashboard (existing behavior)
+              window.location.hash = '#/'
+            }
+          }} 
+          title={searchQuery && searchQuery.trim() ? "Clear search" : "Go to dashboard"}
+        >
+          MMP Renamer
+        </h1>
   {/* Header search: only show when authenticated */}
   {auth ? (
     <div className="header-search">
