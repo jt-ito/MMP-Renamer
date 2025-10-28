@@ -2319,7 +2319,12 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
             guess.originalSeriesTitle = providerPreferred
             guess.seriesTitleExact = providerPreferred
             // store English/romaji separately for later preference logic
-            if (anilistEnglish) guess.seriesTitleEnglish = anilistEnglish
+            // Strip "Season X" suffix from stored English title since we use SxxExx notation
+            if (anilistEnglish) {
+              let cleanedEnglish = anilistEnglish.replace(/\s+Season\s+\d{1,2}$/i, '').trim();
+              cleanedEnglish = cleanedEnglish.replace(/\s+\(Season\s+\d{1,2}\)$/i, '').trim();
+              guess.seriesTitleEnglish = cleanedEnglish;
+            }
             if (anilistRomaji) guess.seriesTitleRomaji = anilistRomaji
             addSeriesCandidate('provider.original', providerPreferred, { prepend: true })
           }
