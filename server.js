@@ -2185,7 +2185,30 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     attemptedProvider = true;
     let res = null;
     try {
-      const parentPath = path.resolve(path.dirname(canonicalPath))
+      let parentPath = path.resolve(path.dirname(canonicalPath))
+      // Strip the configured scan input path from parentPath as well so metaLookup
+      // cannot derive a parent candidate from the library root directory
+      try {
+        let configuredInputForParentPath = null;
+        try {
+          if (opts && opts.username && users && users[opts.username] && users[opts.username].settings && users[opts.username].settings.scan_input_path) {
+            configuredInputForParentPath = String(users[opts.username].settings.scan_input_path).replace(/\\/g,'/').replace(/\/+$/,'');
+          } else if (serverSettings && serverSettings.scan_input_path) {
+            configuredInputForParentPath = String(serverSettings.scan_input_path).replace(/\\/g,'/').replace(/\/+$/,'');
+          } else if (process.env.SCAN_INPUT_PATH) {
+            configuredInputForParentPath = String(process.env.SCAN_INPUT_PATH).replace(/\\/g,'/').replace(/\/+$/,'');
+          }
+        } catch (e) { /* ignore */ }
+        if (configuredInputForParentPath) {
+          let parentPathNorm = String(parentPath).replace(/\\/g,'/');
+          if (parentPathNorm.toLowerCase().startsWith(String(configuredInputForParentPath).toLowerCase())) {
+            parentPathNorm = parentPathNorm.slice(configuredInputForParentPath.length);
+            if (parentPathNorm.startsWith('/')) parentPathNorm = parentPathNorm.slice(1);
+            // If parentPath is now empty (file is in library root), set to null
+            parentPath = parentPathNorm || null;
+          }
+        }
+      } catch (e) { /* ignore */ }
       // Ensure we search the series title first. If the parsed `seriesName` still contains
       // episode tokens (e.g. 'S01E11.5 ...' or leading 'S01P01'), strip those episode-like
       // tokens out so TMDb receives a clean series candidate. We keep the original parsed
