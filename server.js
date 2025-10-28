@@ -2053,62 +2053,38 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // Compute a parent-folder candidate but do NOT prefer it yet — we'll try filename first, then parent if TMDb fails.
   let parentCandidate = null
   try {
-    let parent = path.dirname(canonicalPath)
-    // normalize separators to '/' so splitting works for both Windows and POSIX-style input
-    let parentNorm = String(parent).replace(/\\/g,'/');
-    try {
-      // gather configured scan input paths (global + per-user) to strip library roots
-      const configured = [];
-      try { if (serverSettings && serverSettings.scan_input_path) configured.push(String(serverSettings.scan_input_path).replace(/\\/g,'/').replace(/\/+$/,'')); } catch(e){}
+      let parent = path.dirname(canonicalPath)
+      // normalize separators to '/' so splitting works for both Windows and POSIX-style input
+      let parentNorm = String(parent).replace(/\\/g,'/');
       try {
-        for (const un of Object.keys(users || {})) {
-          try {
-            const s = users[un] && users[un].settings && users[un].settings.scan_input_path ? String(users[un].settings.scan_input_path).replace(/\\/g,'/') : null;
-            if (s) configured.push(s.replace(/\/+$/,''));
-          } catch (e) { /* ignore user-level */ }
-        }
-      } catch (e) {}
-      // Also consider environment override
-      try { if (process.env.SCAN_INPUT_PATH) configured.push(String(process.env.SCAN_INPUT_PATH).replace(/\\/g,'/').replace(/\/+$/,'')); } catch(e){}
-      // normalize configured entries and deduplicate
-      const uniq = Array.from(new Set((configured || []).map(x => String(x || '').trim()).filter(Boolean)));
-      for (const cfg of uniq) {
+        // Respect the requesting user's configured scan input path (if provided) and
+        // strip it from the parent path so the library root is never considered
+        // as a parent-folder candidate. Priority: per-user setting -> server setting -> env var.
+        let configuredInput = null;
         try {
-          const c = String(cfg).trim();
-          if (!c) continue;
-          if (parentNorm.toLowerCase().startsWith(c.toLowerCase())) {
-            // strip the configured prefix
-            parentNorm = parentNorm.slice(c.length);
-            if (parentNorm.startsWith('/')) parentNorm = parentNorm.slice(1);
-            break;
+          if (opts && opts.username && users && users[opts.username] && users[opts.username].settings && users[opts.username].settings.scan_input_path) {
+            configuredInput = String(users[opts.username].settings.scan_input_path).replace(/\\/g,'/').replace(/\/\/+$/,'');
+          } else if (serverSettings && serverSettings.scan_input_path) {
+            configuredInput = String(serverSettings.scan_input_path).replace(/\\/g,'/').replace(/\/\/+$/,'');
+          } else if (process.env.SCAN_INPUT_PATH) {
+            configuredInput = String(process.env.SCAN_INPUT_PATH).replace(/\\/g,'/').replace(/\/\/+$/,'');
           }
-        } catch (e) {}
-      }
-    } catch (e) { /* ignore */ }
-  let parts = parentNorm.split('/').filter(Boolean)
-    const ROOT_PREFIX_TOKENS = new Set(['', 'mnt','media','volume','volumes','storage','nas','share','shares','srv','data','library','input','output','home','users','public']);
-    const GENERIC_LIBRARY_NAMES = new Set(['anime','animes','manga','mangas','shows','series','tv','television','movies','movie','films','film','cartoons','animation']);
-    const isWindowsDrive = (seg) => /^[A-Za-z]:$/.test(String(seg || ''));
-    let removedPrefix = false;
-    while (parts.length) {
-      const seg = parts[0];
-      if (!seg) { parts.shift(); continue; }
-      const lower = String(seg).toLowerCase();
-      if (isWindowsDrive(seg) || ROOT_PREFIX_TOKENS.has(lower)) {
-        removedPrefix = true;
-        parts.shift();
-        continue;
-      }
-      break;
-    }
-    if (parts.length > 1 && GENERIC_LIBRARY_NAMES.has(String(parts[0]).toLowerCase())) {
-      removedPrefix = true;
-      parts.shift();
-    }
-    if (parts.length && parts[0] && parts[0].length <= 4 && /^[a-z0-9]+$/i.test(parts[0]) && removedPrefix) {
-      parts.shift();
-    }
-    const segments = parts;
+        } catch (e) { /* ignore lookup errors */ }
+        if (configuredInput) {
+          try {
+            if (parentNorm.toLowerCase().startsWith(String(configuredInput).toLowerCase())) {
+              parentNorm = parentNorm.slice(configuredInput.length);
+              if (parentNorm.startsWith('/')) parentNorm = parentNorm.slice(1);
+            }
+          } catch (e) { /* ignore */ }
+        }
+      } catch (e) { /* ignore */ }
+    let parts = parentNorm.split('/').filter(Boolean)
+      // Use the remaining path segments (after configured input path stripping) to derive a candidate.
+      // Keep a conservative filter to avoid episode/season folders but do NOT apply additional
+      // hard-coded library-root heuristics here: we rely on the configured input path to remove
+      // the library root as requested.
+      const segments = parts;
     const SKIP_FOLDER_TOKENS = new Set(['input','library','scan','local','media','video']);
     for (let i = segments.length - 1; i >= 0; i--) {
       try {
@@ -2126,16 +2102,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
           // if after stripping it's still a skip token, ignore
           if (SKIP_FOLDER_TOKENS.has(String(cand).toLowerCase())) continue
         } catch (e) { /* ignore token cleanup errors */ }
-        // Defensive: skip very short single-word candidates that often represent
-        // mount/host names (e.g., 'Tor') when they come from high-level path segments.
-        // These small tokens are rarely valid series names and tend to pollute
-        // provider queries.
-        try {
-          if (cand && typeof cand === 'string') {
-            const singleWord = !/\s+/.test(cand)
-            if (singleWord && cand.length <= 3 && segments.length > 1) continue
-          }
-        } catch (e) { /* ignore */ }
+        
         // If candidate is numeric-only but the original folder segment contains an explicit season marker
         // (e.g., 'S01' or '1x02'), accept the numeric series name. Otherwise skip episode-like or noisy candidates.
         const rawSeg = String(seg || '')
