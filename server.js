@@ -3418,11 +3418,20 @@ app.post('/api/enrich', async (req, res) => {
   const key = canonicalize(p || '');
   appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'}`);
   try {
-    // Clear cached preview path and title fields on rescan so they regenerate with current logic
+    // On forced rescan, clear the entire cache entry except applied/hidden flags
+    // so all metadata regenerates with current logic
     if (force && enrichCache[key]) {
-      delete enrichCache[key].planTo;
-      delete enrichCache[key].seriesTitleEnglish;
-      delete enrichCache[key].seriesTitleRomaji;
+      const oldApplied = enrichCache[key].applied;
+      const oldAppliedAt = enrichCache[key].appliedAt;
+      const oldAppliedTo = enrichCache[key].appliedTo;
+      const oldHidden = enrichCache[key].hidden;
+      enrichCache[key] = {};
+      if (oldApplied) {
+        enrichCache[key].applied = oldApplied;
+        enrichCache[key].appliedAt = oldAppliedAt;
+        enrichCache[key].appliedTo = oldAppliedTo;
+      }
+      if (oldHidden) enrichCache[key].hidden = oldHidden;
     }
     // prefer existing enrichment when present and not forcing
     // Only short-circuit to cached provider if it appears to be a complete provider hit
