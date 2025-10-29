@@ -3418,9 +3418,11 @@ app.post('/api/enrich', async (req, res) => {
   const key = canonicalize(p || '');
   appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'}`);
   try {
-    // Clear cached preview path on rescan so it regenerates with current logic
-    if (force && enrichCache[key] && enrichCache[key].planTo) {
+    // Clear cached preview path and title fields on rescan so they regenerate with current logic
+    if (force && enrichCache[key]) {
       delete enrichCache[key].planTo;
+      delete enrichCache[key].seriesTitleEnglish;
+      delete enrichCache[key].seriesTitleRomaji;
     }
     // prefer existing enrichment when present and not forcing
     // Only short-circuit to cached provider if it appears to be a complete provider hit
