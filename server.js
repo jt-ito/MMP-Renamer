@@ -3538,12 +3538,13 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
     const p = req.body && req.body.path ? req.body.path : null
     if (!p) return res.status(400).json({ error: 'path required' })
   const key = canonicalize(p)
-  // Fast response path: update in-memory cache immediately so clients see instant hide
+  // Update cache and persist immediately so changes survive browser close
   try {
-    updateEnrichCacheInMemory(key, Object.assign({}, enrichCache[key] || {}, { hidden: true }));
-    // schedule a quick persist (debounced) so disk write is batched and fast
-    schedulePersistEnrichCache(300);
-  } catch (e) { appendLog(`HIDE_INMEM_FAIL path=${p} err=${e && e.message ? e.message : String(e)}`) }
+    enrichCache[key] = enrichCache[key] || {};
+    enrichCache[key].hidden = true;
+    // Persist immediately instead of debouncing
+    try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) { appendLog(`HIDE_PERSIST_FAIL path=${p} err=${e && e.message ? e.message : String(e)}`) }
+  } catch (e) { appendLog(`HIDE_UPDATE_FAIL path=${p} err=${e && e.message ? e.message : String(e)}`) }
 
   // respond immediately to the client so UI hides instantly
   res.json({ ok: true, path: key, enrichment: enrichCache[key] || null, modifiedScanIds: [] });
