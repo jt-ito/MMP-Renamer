@@ -1225,7 +1225,9 @@ export default function App() {
   // include configured output path from local storage (client preference), server will also accept its persisted setting
   const outputPath = (() => { try { return localStorage.getItem('scan_output_path') || '' } catch { return '' } })()
   const effectiveTemplate = template || (() => { try { return localStorage.getItem('rename_template') || renameTemplate } catch { return renameTemplate } })()
-  const r = await axios.post(API('/rename/preview'), { items: selected, template: effectiveTemplate, outputPath })
+  // Only send canonicalPath to reduce payload size (server looks up enrichment from cache)
+  const itemPaths = selected.map(it => ({ canonicalPath: it.canonicalPath }))
+  const r = await axios.post(API('/rename/preview'), { items: itemPaths, template: effectiveTemplate, outputPath })
     return r.data.plans
   }
 
