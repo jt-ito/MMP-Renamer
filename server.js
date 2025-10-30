@@ -2114,6 +2114,14 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
       try {
         const seg = segments[i]
         if (!seg) continue
+        
+        // Check if the raw segment is a season folder before parsing
+        // This catches "Season 1", "Season 01", "S01", etc.
+        if (isSeasonFolderToken(seg)) {
+          try { appendLog(`META_PARENT_SKIP_SEASON_FOLDER seg=${String(seg).slice(0,50)}`) } catch (e) {}
+          continue
+        }
+        
         const pParsed = parseFilename(seg)
         let cand = pParsed && pParsed.title ? String(pParsed.title).trim() : ''
         if (!cand) continue
@@ -2131,7 +2139,6 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         // (e.g., 'S01' or '1x02'), accept the numeric series name. Otherwise skip episode-like or noisy candidates.
         const rawSeg = String(seg || '')
         const hasSeasonMarker = /\bS\d{1,2}([EPp]\d{1,3})?\b|\b\d{1,2}x\d{1,3}\b/i.test(rawSeg)
-        if (isSeasonFolderToken(cand)) continue
         if (!(/^[0-9]+$/.test(String(cand).trim()) && hasSeasonMarker)) {
           if (isEpisodeTokenCandidate(cand) || isNoiseLike(cand)) continue
         }
