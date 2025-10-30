@@ -756,7 +756,12 @@ export default function App() {
       pushToast && pushToast('Scan', mode === 'full' ? 'Full scan started — we’ll surface results once everything is ready.' : 'Incremental scan started — results will appear once all items are ready.')
 
       phaseStartRef.current.scanStart = Date.now()
-      const aggregated = await hydrateScanItems(result.scanId, reportedTotal || hydratedFirst.length, hydratedFirst)
+      // For incremental scans, skip full hydration and show items immediately
+      // so they appear without delay. Items will populate with metadata as
+      // background enrichment completes.
+      const aggregated = mode === 'incremental'
+        ? hydratedFirst
+        : await hydrateScanItems(result.scanId, reportedTotal || hydratedFirst.length, hydratedFirst)
       if (phaseStartRef.current.scanStart) {
         const elapsed = Math.max(0, Date.now() - phaseStartRef.current.scanStart)
         const history = Array.isArray(timingHistoryRef.current.scanDurations) ? timingHistoryRef.current.scanDurations.slice() : []
