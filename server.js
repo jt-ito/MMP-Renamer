@@ -13,7 +13,7 @@ const tvdb = require('./lib/tvdb');
 const app = express();
 // Enable CORS but allow credentials so cookies can be sent from the browser (echo origin)
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 const bcrypt = require('bcryptjs');
 const cookieSession = require('cookie-session');
 
