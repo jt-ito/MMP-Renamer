@@ -2145,9 +2145,24 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
 
   if (parentCandidate) addSeriesCandidate('parentCandidate', parentCandidate)
 
+  // Check if parsed title looks episode-like OR if it appears to be an episode title
+  // (e.g., filename is "S02E08-Roast Beef, Cheesecake Again.mkv" where the parsed title
+  // is "Roast Beef, Cheesecake Again" - this should use parent folder as series name)
   const parsedTitleLooksEpisodeLike = !seriesName || isEpisodeTokenCandidate(seriesName) || /^episode\b/i.test(String(seriesName)) || /^part\b/i.test(String(seriesName))
-  if (parentCandidate && parsedTitleLooksEpisodeLike) {
-    try { appendLog(`META_PARENT_ELEVATED parsedTitle=${String(seriesName).slice(0,120)} parent=${parentCandidate} path=${String(canonicalPath).slice(0,200)}`) } catch (e) {}
+  
+  // Check if the original filename (basename) starts with episode marker followed by dash/space
+  // indicating the parsed title is likely an episode title, not series name
+  let filenameStartsWithEpisode = false;
+  try {
+    const bn = path.basename(canonicalPath, path.extname(canonicalPath));
+    // Match patterns like: S01E01-, S01E01 -, E01-, 1x01-, etc. at start of filename
+    if (/^(S\d{1,2}E\d{1,3}|E\d{1,3}|\d{1,2}x\d{1,3})\s*[-\s]/i.test(bn)) {
+      filenameStartsWithEpisode = true;
+    }
+  } catch (e) {}
+  
+  if (parentCandidate && (parsedTitleLooksEpisodeLike || filenameStartsWithEpisode)) {
+    try { appendLog(`META_PARENT_ELEVATED parsedTitle=${String(seriesName).slice(0,120)} parent=${parentCandidate} path=${String(canonicalPath).slice(0,200)} reason=${filenameStartsWithEpisode ? 'filename-starts-with-episode' : 'episode-like'}`) } catch (e) {}
     seriesName = parentCandidate
     addSeriesCandidate('parent.elevated', seriesName)
   }
@@ -2770,7 +2785,8 @@ async function backgroundEnrichFirstN(scanId, enrichCandidates, session, libPath
           const providerRendered = renderProviderName(data, key, session);
           const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
           try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
-          updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+          // Merge entire data object to preserve seriesTitleEnglish, seriesTitleRomaji, etc.
+          updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
         } catch (e) {
           updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { sourceId: 'provider', cachedAt: Date.now() }));
         }
@@ -3490,7 +3506,8 @@ app.post('/api/enrich', async (req, res) => {
         const providerRendered = renderProviderName(data, key, req.session);
         const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
         try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
-        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+        // Merge entire data object to preserve seriesTitleEnglish, seriesTitleRomaji, etc.
+        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
       } else {
         updateEnrichCache(key, Object.assign({}, { ...data, cachedAt: Date.now() }));
       }
