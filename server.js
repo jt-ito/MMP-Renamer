@@ -2152,12 +2152,15 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   
   // Check if the original filename (basename) starts with episode marker followed by dash/space
   // indicating the parsed title is likely an episode title, not series name
+  // Use strippedPath to match the path used for parsing
   let filenameStartsWithEpisode = false;
   try {
-    const bn = path.basename(canonicalPath, path.extname(canonicalPath));
+    const bn = path.basename(strippedPath, path.extname(strippedPath));
     // Match patterns like: S01E01-, S01E01 -, E01-, 1x01-, etc. at start of filename
+    // Also match if the basename is ONLY episode marker + title (no series name before it)
     if (/^(S\d{1,2}E\d{1,3}|E\d{1,3}|\d{1,2}x\d{1,3})\s*[-\s]/i.test(bn)) {
       filenameStartsWithEpisode = true;
+      try { appendLog(`META_FILENAME_EPISODE_PATTERN basename=${String(bn).slice(0,100)}`) } catch (e) {}
     }
   } catch (e) {}
   
