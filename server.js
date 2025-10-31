@@ -1976,6 +1976,9 @@ async function metaLookup(title, apiKey, opts = {}) {
 async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   try { console.log('DEBUG: externalEnrich START path=', canonicalPath, 'providedKeyPresent=', !!providedKey); } catch (e) {}
   
+  // Declare seriesCacheKey at function scope so it's available throughout
+  let seriesCacheKey = null;
+  
   // Strip the configured scan input path from canonicalPath BEFORE any parsing or parent derivation.
   // This ensures the library root (e.g., "/mnt/Tor") never appears in parsed segments or parent candidates.
   // Priority: per-user setting -> server setting -> env var.
@@ -2285,7 +2288,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   // Check series-level cache: if we've already identified the series for this parent folder,
   // reuse that series info for all episodes in the folder to ensure consistency
   let cachedSeries = null;
-  const seriesCacheKey = parentPath ? path.dirname(strippedPath) : null;
+  seriesCacheKey = parentPath ? path.dirname(strippedPath) : null;
   
   // Clear series cache for this folder when forcing a rescan
   if (forceLookup && seriesCacheKey && seriesCache[seriesCacheKey]) {
