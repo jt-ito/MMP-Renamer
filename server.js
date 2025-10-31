@@ -2658,7 +2658,8 @@ function renderProviderName(data, key, session) {
   try {
     const userTemplate = (session && session.username && users[session.username] && users[session.username].settings && users[session.username].settings.rename_template) ? users[session.username].settings.rename_template : null;
     const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
-    const rawTitle = data.title || '';
+    // Prefer English title when available from AniList metadata
+    const rawTitle = data.seriesTitleEnglish || data.title || '';
     const templateYear = data && data.year ? String(data.year) : '';
     const sanitizedYear = templateYear ? sanitize(templateYear) : '';
     function pad(n){ return String(n).padStart(2,'0') }
@@ -3722,10 +3723,16 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
                   episodeTitle: lookup.episodeTitle || '',
                   raw: (lookup.provider && lookup.provider.raw) || lookup.raw || lookup.provider,
                   renderedName: providerRendered || (lookup.provider && lookup.provider.renderedName) || '',
-                  matched: lookup.provider && typeof lookup.provider.matched !== 'undefined' ? lookup.provider.matched : !!lookup.title
+                  matched: lookup.provider && typeof lookup.provider.matched !== 'undefined' ? lookup.provider.matched : !!lookup.title,
+                  // Preserve title variants from externalEnrich (seriesTitleEnglish, seriesTitleRomaji, etc.)
+                  seriesTitleEnglish: lookup.seriesTitleEnglish || null,
+                  seriesTitleRomaji: lookup.seriesTitleRomaji || null,
+                  seriesTitleExact: lookup.seriesTitleExact || null,
+                  originalSeriesTitle: lookup.originalSeriesTitle || null
                 };
                 try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
-                updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+                // Merge entire lookup object to preserve all fields like seriesTitleEnglish
+                updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, lookup, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
               } else {
                 updateEnrichCache(key, Object.assign({}, { ...lookup, cachedAt: Date.now() }));
               }
