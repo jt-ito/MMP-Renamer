@@ -2340,6 +2340,18 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         episodeTitle: res && res.episodeTitle ? res.episodeTitle : '',
         provider: Object.assign({}, cachedSeries.provider)
       });
+    } else {
+      // Episode lookup succeeded - merge cached series info (especially year) with episode data
+      res = Object.assign({}, cachedSeries, res, {
+        // Preserve series-level fields from cache
+        year: cachedSeries.year || res.year,
+        seriesTitle: cachedSeries.seriesTitle || res.seriesTitle,
+        seriesTitleEnglish: cachedSeries.seriesTitleEnglish || res.seriesTitleEnglish,
+        seriesTitleRomaji: cachedSeries.seriesTitleRomaji || res.seriesTitleRomaji,
+        seriesTitleExact: cachedSeries.seriesTitleExact || res.seriesTitleExact,
+        originalSeriesTitle: cachedSeries.originalSeriesTitle || res.originalSeriesTitle,
+        provider: Object.assign({}, cachedSeries.provider, res.provider || {})
+      });
     }
   } else {
     // Fresh lookup
