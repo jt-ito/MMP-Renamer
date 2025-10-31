@@ -180,9 +180,6 @@ let enrichCache = {};
 let parsedCache = {};
 let scans = {};
 let renderedIndex = {};
-// Series-level cache: maps parent folder paths to series metadata
-// This ensures all episodes in the same folder use the same series
-let seriesCache = {};
 // Recent hide events for client polling: { ts, path, originalPath, modifiedScanIds }
 let hideEvents = [];
 // Require DB at startup. Fail fast if DB init or cache loads fail so we don't silently fall back to JSON files.
@@ -1976,9 +1973,6 @@ async function metaLookup(title, apiKey, opts = {}) {
 async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   try { console.log('DEBUG: externalEnrich START path=', canonicalPath, 'providedKeyPresent=', !!providedKey); } catch (e) {}
   
-  // Declare seriesCacheKey at function scope so it's available throughout
-  let seriesCacheKey = null;
-  
   // Strip the configured scan input path from canonicalPath BEFORE any parsing or parent derivation.
   // This ensures the library root (e.g., "/mnt/Tor") never appears in parsed segments or parent candidates.
   // Priority: per-user setting -> server setting -> env var.
@@ -2285,26 +2279,6 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   addSeriesCandidate('series.lookup', seriesLookupTitle)
   try { console.log('DEBUG: externalEnrich will attempt metaLookup seriesLookupTitle=', seriesLookupTitle, 'tmdbKeyPresent=', !!tmdbKey); } catch (e) {}
   
-  // Check series-level cache: if we've already identified the series for this parent folder,
-  // reuse that series info for all episodes in the folder to ensure consistency
-  let cachedSeries = null;
-  seriesCacheKey = parentPath ? path.dirname(strippedPath) : null;
-  
-  // Clear series cache for this folder when forcing a rescan
-  if (forceLookup && seriesCacheKey && seriesCache[seriesCacheKey]) {
-    try {
-      appendLog(`SERIES_CACHE_CLEAR_FORCED path=${seriesCacheKey}`)
-      delete seriesCache[seriesCacheKey];
-    } catch (e) {}
-  }
-  
-  if (seriesCacheKey && seriesCache[seriesCacheKey]) {
-    cachedSeries = seriesCache[seriesCacheKey];
-    try { 
-      appendLog(`SERIES_CACHE_HIT path=${seriesCacheKey} series=${cachedSeries.seriesTitle || cachedSeries.name || '<unknown>'}`) 
-    } catch (e) {}
-  }
-  
   // For specials, do not pass season/episode to the provider lookup so we can
   // perform name-based matching against TMDb's season-0 specials list. However
   // keep the parsed episode/season locally so the UI and hardlink names still
@@ -2318,45 +2292,8 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     metaOpts.episode = normEpisode;
   }
   
-  // Use cached series if available, otherwise perform fresh lookup
-  if (cachedSeries && cachedSeries.provider && !forceLookup) {
-    // Reuse cached series info but still query for episode-specific data
-    try {
-      appendLog(`SERIES_CACHE_REUSE path=${seriesCacheKey} series=${cachedSeries.seriesTitle || cachedSeries.name} season=${normSeason} episode=${normEpisode}`)
-    } catch (e) {}
-    // Perform episode-specific lookup using the cached series as context
-    const episodeMetaOpts = Object.assign({}, metaOpts, { 
-      season: normSeason, 
-      episode: normEpisode,
-      cachedSeriesId: cachedSeries.provider && cachedSeries.provider.id ? cachedSeries.provider.id : null,
-      cachedSeriesProvider: cachedSeries.provider && cachedSeries.provider.provider ? cachedSeries.provider.provider : null
-    });
-    res = await metaLookup(cachedSeries.seriesTitle || cachedSeries.name, tmdbKey, episodeMetaOpts);
-    // If episode lookup fails, fall back to cached series info
-    if (!res || !res.episodeTitle) {
-      res = Object.assign({}, cachedSeries, {
-        season: normSeason,
-        episode: normEpisode,
-        episodeTitle: res && res.episodeTitle ? res.episodeTitle : '',
-        provider: Object.assign({}, cachedSeries.provider)
-      });
-    } else {
-      // Episode lookup succeeded - merge cached series info (especially year) with episode data
-      res = Object.assign({}, cachedSeries, res, {
-        // Preserve series-level fields from cache
-        year: cachedSeries.year || res.year,
-        seriesTitle: cachedSeries.seriesTitle || res.seriesTitle,
-        seriesTitleEnglish: cachedSeries.seriesTitleEnglish || res.seriesTitleEnglish,
-        seriesTitleRomaji: cachedSeries.seriesTitleRomaji || res.seriesTitleRomaji,
-        seriesTitleExact: cachedSeries.seriesTitleExact || res.seriesTitleExact,
-        originalSeriesTitle: cachedSeries.originalSeriesTitle || res.originalSeriesTitle,
-        provider: Object.assign({}, cachedSeries.provider, res.provider || {})
-      });
-    }
-  } else {
-    // Fresh lookup
-    res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts)
-  }
+  // Perform metadata lookup
+  let res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts)
   try { console.log('DEBUG: externalEnrich metaLookup returned res=', !!res); } catch (e) {}
   // Diagnostic: log a trimmed version of the metaLookup response so we can
   // see whether the provider returned series/episode data before parent fallback.
@@ -2668,27 +2605,6 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     guess.title = normalizeCapitalization(seriesName).trim()
   }
   if (!guess.seriesLookupTitle) guess.seriesLookupTitle = seriesLookupTitle || null
-
-  // Cache series-level info for this parent folder so future episodes use the same series
-  if (seriesCacheKey && guess.provider && guess.seriesTitleExact) {
-    try {
-      const seriesToCache = {
-        name: guess.title || guess.seriesTitle,
-        seriesTitle: guess.seriesTitle,
-        seriesTitleExact: guess.seriesTitleExact,
-        seriesTitleEnglish: guess.seriesTitleEnglish,
-        seriesTitleRomaji: guess.seriesTitleRomaji,
-        originalSeriesTitle: guess.originalSeriesTitle,
-        year: guess.year,
-        provider: guess.provider,
-        cachedAt: Date.now()
-      };
-      seriesCache[seriesCacheKey] = seriesToCache;
-      appendLog(`SERIES_CACHE_STORE path=${seriesCacheKey} series=${seriesToCache.seriesTitle || seriesToCache.name}`)
-    } catch (e) {
-      try { appendLog(`SERIES_CACHE_STORE_FAIL path=${seriesCacheKey} err=${e && e.message}`) } catch (ee) {}
-    }
-  }
 
   return {
     sourceId: 'mock:1',
