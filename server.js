@@ -3784,6 +3784,7 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
           if (!lookup && fallbackParsed) {
             lookup = {
               title: fallbackParsed.title || null,
+              year: fallbackParsed.year || (entryAfterParse && entryAfterParse.year) || null,
               season: fallbackParsed.season,
               episode: fallbackParsed.episode,
               episodeRange: fallbackParsed.episodeRange,
