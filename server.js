@@ -3699,7 +3699,11 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
               episodeTitle: providerClone.episodeTitle || '',
               provider: providerClone,
               raw: providerClone.raw || null,
-              parsedName: (fallbackParsed && (fallbackParsed.parsedName || fallbackParsed.title)) || providerClone.renderedName || null
+              parsedName: (fallbackParsed && (fallbackParsed.parsedName || fallbackParsed.title)) || providerClone.renderedName || null,
+              // Pull title variants from cached provider block OR top-level entry
+              seriesTitleEnglish: providerClone.seriesTitleEnglish || (entryAfterParse && entryAfterParse.seriesTitleEnglish) || null,
+              seriesTitleRomaji: providerClone.seriesTitleRomaji || (entryAfterParse && entryAfterParse.seriesTitleRomaji) || null,
+              seriesTitleExact: providerClone.seriesTitleExact || (entryAfterParse && entryAfterParse.seriesTitleExact) || null
             };
           }
           if (!lookup && fallbackParsed) {
