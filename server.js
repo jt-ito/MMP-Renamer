@@ -293,9 +293,20 @@ function startFolderWatcher(username, libPath) {
           const result = scanLib.incrementalScanLibrary(libPath, prior, false);
           saveScanCacheFn(result.scanCache);
           
+          // Filter out hidden/applied items before creating scan artifact
+          const allItems = scanLib.buildIncrementalItems(result.scanCache, result.toProcess, uuidv4);
+          const filteredItems = allItems.filter(it => {
+            try {
+              const k = canonicalize(it.canonicalPath);
+              const e = enrichCache[k] || null;
+              if (e && (e.hidden || e.applied)) return false;
+              return true;
+            } catch (e) { return true; }
+          });
+          
           const generatedAt = Date.now();
           const scanId = uuidv4();
-          const scanObj = { scanId, items: result.items, generatedAt, incrementalScanPath: libPath, username };
+          const scanObj = { scanId, items: filteredItems, generatedAt, incrementalScanPath: libPath, username, totalCount: filteredItems.length };
           
           if (db) {
             try { db.saveScan(scanObj); } catch (e) {}
@@ -303,7 +314,7 @@ function startFolderWatcher(username, libPath) {
           scans[scanId] = scanObj;
           if (!db) writeJson(scanStoreFile, scans);
           
-          appendLog(`WATCHER_SCAN_COMPLETE username=${username} scanId=${scanId} items=${result.items.length}`);
+          appendLog(`WATCHER_SCAN_COMPLETE username=${username} scanId=${scanId} items=${filteredItems.length} hidden_filtered=${allItems.length - filteredItems.length}`);
         } catch (err) {
           appendLog(`WATCHER_SCAN_ERROR username=${username} err=${err.message}`);
         }
@@ -3313,16 +3324,25 @@ app.post('/api/scan/incremental', async (req, res) => {
 
   // proceed to create artifact and background enrich similar to /api/scan
   const scanId = uuidv4();
-  const artifact = { id: scanId, libraryId: libraryId || 'local', totalCount: items.length, items, generatedAt: Date.now() };
+  // Filter out items that are marked hidden or applied in enrichCache before creating artifact
+  const filteredItems = items.filter(it => {
+    try {
+      const k = canonicalize(it.canonicalPath);
+      const e = enrichCache[k] || null;
+      if (e && (e.hidden || e.applied)) return false;
+      return true;
+    } catch (e) { return true; }
+  });
+  const artifact = { id: scanId, libraryId: libraryId || 'local', totalCount: filteredItems.length, items: filteredItems, generatedAt: Date.now() };
   scans[scanId] = artifact;
   try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); } catch (e) {}
-  appendLog(`INCREMENTAL_SCAN_COMPLETE id=${scanId} total=${items.length}`);
+  appendLog(`INCREMENTAL_SCAN_COMPLETE id=${scanId} total=${filteredItems.length} hidden_filtered=${items.length - filteredItems.length}`);
   // include a small sample of first-page items to help clients refresh UI without
   // requiring an extra request. Clients may pass a 'limit' query param when
   // invoking incremental scan; default to 100.
   const sampleLimit = Number.isInteger(parseInt(req.query && req.query.limit)) ? parseInt(req.query.limit) : 100;
-  const sample = items.slice(0, sampleLimit);
-  res.json({ scanId, totalCount: items.length, items: sample, changedPaths: (changedItems || []).map(it => it && it.canonicalPath).filter(Boolean) });
+  const sample = filteredItems.slice(0, sampleLimit);
+  res.json({ scanId, totalCount: filteredItems.length, items: sample, changedPaths: (changedItems || []).map(it => it && it.canonicalPath).filter(Boolean) });
   try { void backgroundEnrichFirstN(scanId, changedItems, req.session, libPath, `scanPath:${libPath}`, 12); } catch (e) { appendLog(`INCREMENTAL_BACKGROUND_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
 });
 
