@@ -2175,6 +2175,56 @@ function LogsPanel({ logs, refresh, pushToast }) {
 }
 
 function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false }) {
+  const listRef = useRef(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStartIndex, setDragStartIndex] = useState(null)
+  const [dragCurrentIndex, setDragCurrentIndex] = useState(null)
+  const dragInitialSelected = useRef({})
+  
+  // Handle drag selection
+  useEffect(() => {
+    if (!selectMode || !isDragging || dragStartIndex === null || dragCurrentIndex === null) return
+    
+    const start = Math.min(dragStartIndex, dragCurrentIndex)
+    const end = Math.max(dragStartIndex, dragCurrentIndex)
+    
+    // Update selection for range
+    for (let i = start; i <= end; i++) {
+      const item = items[i]
+      if (item && item.canonicalPath) {
+        toggleSelect(item.canonicalPath, true)
+      }
+    }
+  }, [isDragging, dragStartIndex, dragCurrentIndex, items, selectMode, toggleSelect])
+  
+  // Handle mouse up globally to end drag
+  useEffect(() => {
+    if (!selectMode) return
+    
+    const handleMouseUp = () => {
+      setIsDragging(false)
+      setDragStartIndex(null)
+      setDragCurrentIndex(null)
+      dragInitialSelected.current = {}
+    }
+    
+    document.addEventListener('mouseup', handleMouseUp)
+    return () => document.removeEventListener('mouseup', handleMouseUp)
+  }, [selectMode])
+  
+  const handleRowMouseDown = (index) => {
+    if (!selectMode) return
+    setIsDragging(true)
+    setDragStartIndex(index)
+    setDragCurrentIndex(index)
+    dragInitialSelected.current = { ...selected }
+  }
+  
+  const handleRowMouseEnter = (index) => {
+    if (!selectMode || !isDragging) return
+    setDragCurrentIndex(index)
+  }
+  
   const Row = ({ index, style }) => {
   const it = items[index]
   const rawEnrichment = it ? enrichCache?.[it.canonicalPath] : null
@@ -2204,7 +2254,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const basename = (it && it.canonicalPath ? it.canonicalPath.split('/').pop() : '')
   const primary = providerRendered || parsedName || basename || ''
   const handleRowClick = (ev) => {
-    if (!selectMode || !it) return
+    if (!selectMode || !it || isDragging) return
     // ignore clicks originating from action buttons or the checkbox container
     const interactive = ev.target.closest('.actions') || ev.target.closest('button') || ev.target.closest('a') || ev.target.closest('input')
     if (interactive) return
@@ -2216,6 +2266,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
         className={"row" + (selectMode ? ' row-select-mode' : '') + (isSelected ? ' row-selected' : '')}
         style={style}
         onClick={handleRowClick}
+        onMouseDown={() => handleRowMouseDown(index)}
+        onMouseEnter={() => handleRowMouseEnter(index)}
         role={selectMode ? 'button' : undefined}
         tabIndex={selectMode ? 0 : undefined}
         onKeyDown={ev => {
@@ -2326,7 +2378,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
 
   return (
     <>
-      <List height={600} itemCount={items.length} itemSize={80} width={'100%'} onItemsRendered={onItemsRendered}>
+      <List ref={listRef} height={600} itemCount={items.length} itemSize={80} width={'100%'} onItemsRendered={onItemsRendered}>
       {Row}
     </List>
     </>
