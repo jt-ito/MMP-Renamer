@@ -3959,7 +3959,7 @@ app.get('/api/scan/:scanId/progress', requireAuth, (req, res) => {
 })
 
 // Rename preview (generate plan)
-app.post('/api/rename/preview', (req, res) => {
+app.post('/api/rename/preview', async (req, res) => {
   const { items, template, outputPath } = req.body || {};
   if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'items required' });
   // resolve effective output path: request overrides per-user setting -> server setting
@@ -3982,6 +3982,58 @@ app.post('/api/rename/preview', (req, res) => {
     effectiveOutput = outputPath || (serverSettings && serverSettings.scan_output_path) || '';
   }
   try { appendLog(`PREVIEW_EFFECTIVE_OUTPUT user=${req.session && req.session.username ? req.session.username : ''} effectiveOutput=${effectiveOutput || ''}`); } catch (e) {}
+  
+  // Enrich items on-demand if not already enriched (fixes issue where items beyond first 12 lack metadata)
+  const username = req.session && req.session.username;
+  let tmdbKey = null;
+  try {
+    if (username && users[username] && users[username].settings && users[username].settings.tmdb_api_key) {
+      tmdbKey = users[username].settings.tmdb_api_key;
+    } else if (serverSettings && serverSettings.tmdb_api_key) {
+      tmdbKey = serverSettings.tmdb_api_key;
+    }
+  } catch (e) { tmdbKey = null; }
+  
+  // Check which items need enrichment and enrich them
+  const enrichPromises = items.map(async (it) => {
+    const fromPath = canonicalize(it.canonicalPath);
+    const existing = enrichCache[fromPath] || null;
+    const prov = existing && existing.provider ? existing.provider : null;
+    // Only enrich if not already complete
+    if (!isProviderComplete(prov)) {
+      try {
+        const data = await externalEnrich(fromPath, tmdbKey, { username });
+        if (data) {
+          const providerRendered = renderProviderName(data, fromPath, req.session);
+          const providerBlock = {
+            title: data.title,
+            year: data.year,
+            season: data.season,
+            episode: data.episode,
+            episodeTitle: data.episodeTitle || '',
+            raw: data.raw || data,
+            renderedName: providerRendered,
+            matched: !!data.title,
+            seriesTitleEnglish: data.seriesTitleEnglish || null,
+            seriesTitleRomaji: data.seriesTitleRomaji || null,
+            seriesTitleExact: data.seriesTitleExact || null,
+            originalSeriesTitle: data.originalSeriesTitle || null
+          };
+          updateEnrichCache(fromPath, Object.assign({}, enrichCache[fromPath] || {}, data, {
+            provider: providerBlock,
+            sourceId: 'provider',
+            cachedAt: Date.now()
+          }));
+        }
+      } catch (e) {
+        try { appendLog(`PREVIEW_ENRICH_FAIL path=${fromPath} err=${e && e.message}`); } catch (ee) {}
+      }
+    }
+  });
+  
+  // Wait for all enrichments to complete
+  await Promise.all(enrichPromises);
+  
   const plans = items.map(it => {
     const fromPath = canonicalize(it.canonicalPath);
     const key = fromPath;
