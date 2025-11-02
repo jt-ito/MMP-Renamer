@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const tvdb = require('./lib/tvdb');
+const chokidar = require('chokidar');
 
 // External API integration removed: TMDb-related helpers and https monkey-patch
 // have been disabled to eliminate external HTTP calls. The metaLookup function
@@ -182,6 +183,8 @@ let scans = {};
 let renderedIndex = {};
 // Recent hide events for client polling: { ts, path, originalPath, modifiedScanIds }
 let hideEvents = [];
+// Folder watchers by username: { [username]: watcher }
+const folderWatchers = {};
 // Require DB at startup. Fail fast if DB init or cache loads fail so we don't silently fall back to JSON files.
 try {
   const dbLib = require('./lib/db');
@@ -234,6 +237,117 @@ try { healCachedEnglishAndMovieFlags(); } catch (e) { try { appendLog(`ENRICH_CA
 const activeScans = new Set();
 // In-memory progress tracker for background refresh operations
 const refreshProgress = {};
+
+// Folder watching helper: start watching a directory for changes
+function startFolderWatcher(username, libPath) {
+  try {
+    // Stop existing watcher if any
+    if (folderWatchers[username]) {
+      try { folderWatchers[username].close(); } catch (e) {}
+      delete folderWatchers[username];
+    }
+    
+    // Don't start watcher if path doesn't exist
+    if (!fs.existsSync(libPath) || !fs.statSync(libPath).isDirectory()) {
+      appendLog(`WATCHER_SKIP_INVALID_PATH username=${username} path=${libPath}`);
+      return;
+    }
+    
+    // Start new watcher with debounce
+    let debounceTimer = null;
+    const watcher = chokidar.watch(libPath, {
+      persistent: true,
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 2000, pollInterval: 500 },
+      depth: 10
+    });
+    
+    const triggerIncrementalScan = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(async () => {
+        try {
+          appendLog(`WATCHER_TRIGGER_SCAN username=${username} path=${libPath}`);
+          const scanLib = require('./lib/scan');
+          const loadScanCacheFn = () => scanLib.loadScanCache(scanCacheFile);
+          const saveScanCacheFn = (obj) => scanLib.saveScanCache(scanCacheFile, obj);
+          
+          let prior = loadScanCacheFn();
+          if ((!prior || !prior.files || Object.keys(prior.files).length === 0) && scans && Object.keys(scans || {}).length) {
+            const allIds = Object.keys(scans || {}).map(k => scans[k]).filter(Boolean);
+            allIds.sort((a,b) => (b.generatedAt || 0) - (a.generatedAt || 0));
+            const recent = allIds[0];
+            if (recent && recent.items && Array.isArray(recent.items)) {
+              prior = { files: {} };
+              for (const it of recent.items) {
+                if (it && it.fromPath) {
+                  try {
+                    const st = fs.statSync(it.fromPath);
+                    prior.files[it.fromPath] = { mtime: st.mtimeMs, size: st.size };
+                  } catch (e) {}
+                }
+              }
+              saveScanCacheFn(prior);
+            }
+          }
+          
+          const result = scanLib.incrementalScanLibrary(libPath, prior, false);
+          saveScanCacheFn(result.scanCache);
+          
+          const generatedAt = Date.now();
+          const scanId = uuidv4();
+          const scanObj = { scanId, items: result.items, generatedAt, incrementalScanPath: libPath, username };
+          
+          if (db) {
+            try { db.saveScan(scanObj); } catch (e) {}
+          }
+          scans[scanId] = scanObj;
+          if (!db) writeJson(scanStoreFile, scans);
+          
+          appendLog(`WATCHER_SCAN_COMPLETE username=${username} scanId=${scanId} items=${result.items.length}`);
+        } catch (err) {
+          appendLog(`WATCHER_SCAN_ERROR username=${username} err=${err.message}`);
+        }
+      }, 3000); // 3 second debounce
+    };
+    
+    watcher.on('add', triggerIncrementalScan);
+    watcher.on('change', triggerIncrementalScan);
+    watcher.on('unlink', triggerIncrementalScan);
+    
+    folderWatchers[username] = watcher;
+    appendLog(`WATCHER_STARTED username=${username} path=${libPath}`);
+  } catch (err) {
+    appendLog(`WATCHER_START_ERROR username=${username} path=${libPath} err=${err.message}`);
+  }
+}
+
+// Stop watcher for a user
+function stopFolderWatcher(username) {
+  try {
+    if (folderWatchers[username]) {
+      folderWatchers[username].close();
+      delete folderWatchers[username];
+      appendLog(`WATCHER_STOPPED username=${username}`);
+    }
+  } catch (err) {
+    appendLog(`WATCHER_STOP_ERROR username=${username} err=${err.message}`);
+  }
+}
+
+// Initialize watchers for all users with scan_input_path on startup
+function initializeAllWatchers() {
+  try {
+    for (const username in users) {
+      const user = users[username];
+      if (user && user.settings && user.settings.scan_input_path) {
+        const libPath = path.resolve(user.settings.scan_input_path);
+        startFolderWatcher(username, libPath);
+      }
+    }
+  } catch (err) {
+    appendLog(`WATCHER_INIT_ALL_ERROR err=${err.message}`);
+  }
+}
 
 // Lightweight logging helper: append a timestamped line to data/logs.txt
 function appendLog(line) {
@@ -3423,9 +3537,24 @@ app.post('/api/settings', requireAuth, (req, res) => {
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
   const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'tvdb_v4_api_key', 'tvdb_v4_user_pin'];
+    
+    // Check if scan_input_path changed to update watcher
+    const oldScanPath = users[username].settings.scan_input_path;
+    const newScanPath = body.scan_input_path;
+    
     for (const k of allowed) { if (body[k] !== undefined) users[username].settings[k] = body[k]; }
     writeJson(usersFile, users);
     appendLog(`SETTINGS_SAVED_USER user=${username} keys=${Object.keys(body).join(',')}`);
+    
+    // Update folder watcher if scan_input_path changed
+    if (newScanPath !== undefined && newScanPath !== oldScanPath) {
+      stopFolderWatcher(username);
+      if (newScanPath) {
+        const libPath = path.resolve(newScanPath);
+        startFolderWatcher(username, libPath);
+      }
+    }
+    
     return res.json({ ok: true, userSettings: users[username].settings });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
@@ -5585,6 +5714,8 @@ module.exports.wikiEpisodeCache = wikiEpisodeCache;
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Server listening on ${PORT}`);
+    // Initialize folder watchers for all users with scan_input_path
+    initializeAllWatchers();
   });
 }
 

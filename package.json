@@ -3,24 +3,25 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-  "start": "node server.js",
-  "test": "npm run test:unit && node ./tests/test-extract-year.js && node ./tests/test-filename-parser.js && node ./tests/test-meta-anilist-no-special.js && node ./tests/test-tvdb-title-priority.js && node ./tests/test-series-hardlink-format.js",
-  "test:unit": "mocha --exit tests/scan.test.js tests/rescan-reparse.test.js",
-  "test-hardlink": "node ./scripts/test-hardlink.js",
-  "dev": "concurrently \"node server.js\" \"cd web && npm run dev\"",
-  "docker:start": "node server.js",
+    "start": "node server.js",
+    "test": "npm run test:unit && node ./tests/test-extract-year.js && node ./tests/test-filename-parser.js && node ./tests/test-meta-anilist-no-special.js && node ./tests/test-tvdb-title-priority.js && node ./tests/test-series-hardlink-format.js",
+    "test:unit": "mocha --exit tests/scan.test.js tests/rescan-reparse.test.js",
+    "test-hardlink": "node ./scripts/test-hardlink.js",
+    "dev": "concurrently \"node server.js\" \"cd web && npm run dev\"",
+    "docker:start": "node server.js",
     "web:install": "cd web && npm install",
     "install:all": "npm install && cd web && npm install"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^9.5.0",
+    "chokidar": "^4.0.3",
+    "cookie-session": "^2.0.0",
     "cors": "^2.8.5",
     "express": "^4.18.2",
-  "minimist": "^1.2.8",
-  "uuid": "^9.0.0",
-  "bcryptjs": "^2.4.3",
-  "cookie-session": "^2.0.0",
-  "better-sqlite3": "^9.5.0",
-  "stream-json": "^1.7.3"
+    "minimist": "^1.2.8",
+    "stream-json": "^1.7.3",
+    "uuid": "^9.0.0"
   },
   "devDependencies": {
     "concurrently": "^8.2.0",
