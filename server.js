@@ -2948,7 +2948,17 @@ async function backgroundEnrichFirstN(scanId, enrichCandidates, session, libPath
         if (!data) { continue; }
         try {
           const providerRendered = renderProviderName(data, key, session);
-          const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
+          const providerBlock = { 
+            title: data.title, 
+            year: data.year, 
+            season: data.season, 
+            episode: data.episode, 
+            episodeTitle: data.episodeTitle || '', 
+            raw: data.raw || data, 
+            renderedName: providerRendered, 
+            matched: !!data.title,
+            source: data.source || (data.provider ? data.provider : null)
+          };
           try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
           // Merge entire data object to preserve seriesTitleEnglish, seriesTitleRomaji, etc.
           updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
@@ -4200,6 +4210,7 @@ app.post('/api/rename/preview', async (req, res) => {
             raw: data.raw || data,
             renderedName: providerRendered,
             matched: !!data.title,
+            source: data.source || (data.provider ? data.provider : null),
             seriesTitleEnglish: data.seriesTitleEnglish || null,
             seriesTitleRomaji: data.seriesTitleRomaji || null,
             seriesTitleExact: data.seriesTitleExact || null,
