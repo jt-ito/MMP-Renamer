@@ -2957,7 +2957,7 @@ async function backgroundEnrichFirstN(scanId, enrichCandidates, session, libPath
             raw: data.raw || data, 
             renderedName: providerRendered, 
             matched: !!data.title,
-            source: data.source || (data.provider ? data.provider : null)
+            source: data.source || null
           };
           try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
           // Merge entire data object to preserve seriesTitleEnglish, seriesTitleRomaji, etc.
@@ -3712,7 +3712,7 @@ app.post('/api/enrich', async (req, res) => {
           raw: data.raw || data, 
           renderedName: providerRendered, 
           matched: !!data.title,
-          source: data.source || (data.provider ? data.provider : null)
+          source: data.source || null
         };
         try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
         // Merge entire data object to preserve seriesTitleEnglish, seriesTitleRomaji, etc.
@@ -4210,7 +4210,7 @@ app.post('/api/rename/preview', async (req, res) => {
             raw: data.raw || data,
             renderedName: providerRendered,
             matched: !!data.title,
-            source: data.source || (data.provider ? data.provider : null),
+            source: data.source || null,
             seriesTitleEnglish: data.seriesTitleEnglish || null,
             seriesTitleRomaji: data.seriesTitleRomaji || null,
             seriesTitleExact: data.seriesTitleExact || null,
