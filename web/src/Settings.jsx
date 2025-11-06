@@ -37,12 +37,16 @@ export default function Settings({ pushToast }){
   // keys: tmdb for TMDb (keep backward compatibility with tvdb_api_key)
   const [tmdbKey, setTmdbKey] = useState('')
   const [anilistKey, setAnilistKey] = useState('')
+  const [anidbUsername, setAnidbUsername] = useState('')
+  const [anidbPassword, setAnidbPassword] = useState('')
   const [tvdbV4ApiKey, setTvdbV4ApiKey] = useState('')
   const [tvdbV4UserPin, setTvdbV4UserPin] = useState('')
   const [defaultProvider, setDefaultProvider] = useState('tmdb')
   const [renameTemplate, setRenameTemplate] = useState('{title} - {epLabel} - {episodeTitle}')
   const [showTmdbKey, setShowTmdbKey] = useState(false)
   const [showAnilistKey, setShowAnilistKey] = useState(false)
+  const [showAnidbUsername, setShowAnidbUsername] = useState(false)
+  const [showAnidbPassword, setShowAnidbPassword] = useState(false)
   const [showTvdbV4ApiKey, setShowTvdbV4ApiKey] = useState(false)
   const [showTvdbV4UserPin, setShowTvdbV4UserPin] = useState(false)
   const [inputPath, setInputPath] = useState('')
@@ -57,6 +61,8 @@ export default function Settings({ pushToast }){
         if (user) {
           setTmdbKey(user.tmdb_api_key || user.tvdb_api_key || '')
           setAnilistKey(user.anilist_api_key || '')
+          setAnidbUsername(user.anidb_username || '')
+          setAnidbPassword(user.anidb_password || '')
           setTvdbV4ApiKey(user.tvdb_v4_api_key || '')
           setTvdbV4UserPin(user.tvdb_v4_user_pin || '')
           setDefaultProvider(user.default_meta_provider || 'tmdb')
@@ -70,6 +76,8 @@ export default function Settings({ pushToast }){
         const server = (r.data && r.data.serverSettings) ? r.data.serverSettings : {}
         const v = server.tmdb_api_key || localStorage.getItem('tmdb_api_key') || localStorage.getItem('tvdb_api_key') || ''
         const a = server.anilist_api_key || localStorage.getItem('anilist_api_key') || ''
+        const anidbUser = server.anidb_username || localStorage.getItem('anidb_username') || ''
+        const anidbPass = server.anidb_password || localStorage.getItem('anidb_password') || ''
         const tvV4Key = server.tvdb_v4_api_key || localStorage.getItem('tvdb_v4_api_key') || ''
         const tvV4Pin = server.tvdb_v4_user_pin || localStorage.getItem('tvdb_v4_user_pin') || ''
         const inp = localStorage.getItem('scan_input_path') || ''
@@ -77,6 +85,8 @@ export default function Settings({ pushToast }){
         const dp = localStorage.getItem('default_meta_provider') || 'tmdb'
         setTmdbKey(v)
         setAnilistKey(a)
+        setAnidbUsername(anidbUser)
+        setAnidbPassword(anidbPass)
         setTvdbV4ApiKey(tvV4Key)
         setTvdbV4UserPin(tvV4Pin)
         setInputPath(inp)
@@ -87,6 +97,8 @@ export default function Settings({ pushToast }){
       try {
         const v = localStorage.getItem('tmdb_api_key') || localStorage.getItem('tvdb_api_key') || ''
         const a = localStorage.getItem('anilist_api_key') || ''
+        const anidbUser = localStorage.getItem('anidb_username') || ''
+        const anidbPass = localStorage.getItem('anidb_password') || ''
         const tvV4Key = localStorage.getItem('tvdb_v4_api_key') || ''
         const tvV4Pin = localStorage.getItem('tvdb_v4_user_pin') || ''
         const inp = localStorage.getItem('scan_input_path') || ''
@@ -94,6 +106,8 @@ export default function Settings({ pushToast }){
         const dp = localStorage.getItem('default_meta_provider') || 'tmdb'
         setTmdbKey(v)
         setAnilistKey(a)
+        setAnidbUsername(anidbUser)
+        setAnidbPassword(anidbPass)
         setTvdbV4ApiKey(tvV4Key)
         setTvdbV4UserPin(tvV4Pin)
         setInputPath(inp)
@@ -124,6 +138,8 @@ export default function Settings({ pushToast }){
       // save locally as fallback (tmdb)
       try { localStorage.setItem('tmdb_api_key', tmdbKey); localStorage.setItem('tvdb_api_key', tmdbKey) } catch (e) {}
       try { localStorage.setItem('anilist_api_key', anilistKey) } catch (e) {}
+      try { localStorage.setItem('anidb_username', anidbUsername) } catch (e) {}
+      try { localStorage.setItem('anidb_password', anidbPassword) } catch (e) {}
       try { localStorage.setItem('tvdb_v4_api_key', tvdbV4ApiKey) } catch (e) {}
       try { localStorage.setItem('tvdb_v4_user_pin', tvdbV4UserPin) } catch (e) {}
       try { localStorage.setItem('default_meta_provider', defaultProvider) } catch (e) {}
@@ -134,6 +150,8 @@ export default function Settings({ pushToast }){
       axios.post(API('/settings'), {
         tmdb_api_key: tmdbKey,
         anilist_api_key: anilistKey,
+        anidb_username: anidbUsername,
+        anidb_password: anidbPassword,
         tvdb_v4_api_key: tvdbV4ApiKey,
         tvdb_v4_user_pin: tvdbV4UserPin,
         default_meta_provider: defaultProvider,
@@ -150,6 +168,8 @@ export default function Settings({ pushToast }){
     try {
       setTmdbKey('')
       setAnilistKey('')
+      setAnidbUsername('')
+      setAnidbPassword('')
       setTvdbV4ApiKey('')
       setTvdbV4UserPin('')
       setDefaultProvider('tmdb')
@@ -158,6 +178,8 @@ export default function Settings({ pushToast }){
       setOutputPath('')
       localStorage.removeItem('tmdb_api_key')
       localStorage.removeItem('anilist_api_key')
+      localStorage.removeItem('anidb_username')
+      localStorage.removeItem('anidb_password')
       localStorage.removeItem('tvdb_api_key')
       localStorage.removeItem('tvdb_v4_api_key')
       localStorage.removeItem('tvdb_v4_user_pin')
@@ -165,7 +187,7 @@ export default function Settings({ pushToast }){
       localStorage.removeItem('scan_input_path')
       localStorage.removeItem('scan_output_path')
       localStorage.setItem('rename_template', '{title} - {epLabel} - {episodeTitle}')
-      axios.post(API('/settings'), { tmdb_api_key: '', anilist_api_key: '', default_meta_provider: 'tmdb', tvdb_v4_api_key: '', tvdb_v4_user_pin: '', scan_input_path: '', scan_output_path: '', rename_template: '{title} - {epLabel} - {episodeTitle}' }).catch(()=>{})
+      axios.post(API('/settings'), { tmdb_api_key: '', anilist_api_key: '', anidb_username: '', anidb_password: '', default_meta_provider: 'tmdb', tvdb_v4_api_key: '', tvdb_v4_user_pin: '', scan_input_path: '', scan_output_path: '', rename_template: '{title} - {epLabel} - {episodeTitle}' }).catch(()=>{})
       setDirty(false)
       pushToast && pushToast('Settings', 'Cleared')
     } catch (e) { pushToast && pushToast('Error', 'Failed to clear') }
@@ -239,6 +261,35 @@ export default function Settings({ pushToast }){
             <button className="btn-ghost" onClick={() => setShowAnilistKey(s => !s)}>{showAnilistKey ? 'Hide' : 'Show'}</button>
           </div>
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>AniList is used to find anime series titles (preferred). The saved key is obfuscated by default; toggle <strong>Show</strong> to reveal it temporarily.</div>
+        </div>
+
+        <div style={{marginTop:12}}>
+          <label style={{fontSize:13, color:'var(--muted)'}}>AniDB Credentials (Anime File Hash Lookup)</label>
+          <div style={{display:'flex', gap:8, marginTop:6}}>
+            <input
+              type={showAnidbUsername ? 'text' : 'password'}
+              value={anidbUsername}
+              onChange={e=>{ setAnidbUsername(e.target.value); setDirty(true) }}
+              placeholder="AniDB Username"
+              style={{flex:1, padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
+            />
+            <button className="btn-ghost" onClick={() => setShowAnidbUsername(s => !s)}>{showAnidbUsername ? 'Hide' : 'Show'}</button>
+          </div>
+          <div style={{display:'flex', gap:8, marginTop:10}}>
+            <input
+              type={showAnidbPassword ? 'text' : 'password'}
+              value={anidbPassword}
+              onChange={e=>{ setAnidbPassword(e.target.value); setDirty(true) }}
+              placeholder="AniDB Password"
+              style={{flex:1, padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
+            />
+            <button className="btn-ghost" onClick={() => setShowAnidbPassword(s => !s)}>{showAnidbPassword ? 'Hide' : 'Show'}</button>
+          </div>
+          <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>
+            AniDB uses <strong>ED2K file hashing</strong> to identify anime episodes with 99% accuracy, even with bad filenames. 
+            Get a free account at <a href="https://anidb.net/" target="_blank" rel="noopener noreferrer" style={{color:'var(--accent)'}}>anidb.net</a>. 
+            Rate-limited to respect AniDB guidelines (2.5s between requests). Falls back to AniList/TVDb if file not found.
+          </div>
         </div>
 
   {/* Input path moved below the template section per UX request */}
