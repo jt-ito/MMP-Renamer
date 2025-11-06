@@ -3693,7 +3693,17 @@ app.post('/api/enrich', async (req, res) => {
     try {
       if (data && data.title) {
         const providerRendered = renderProviderName(data, key, req.session);
-        const providerBlock = { title: data.title, year: data.year, season: data.season, episode: data.episode, episodeTitle: data.episodeTitle || '', raw: data.raw || data, renderedName: providerRendered, matched: !!data.title };
+        const providerBlock = { 
+          title: data.title, 
+          year: data.year, 
+          season: data.season, 
+          episode: data.episode, 
+          episodeTitle: data.episodeTitle || '', 
+          raw: data.raw || data, 
+          renderedName: providerRendered, 
+          matched: !!data.title,
+          source: data.source || (data.provider ? data.provider : null)
+        };
         try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
         // Merge entire data object to preserve seriesTitleEnglish, seriesTitleRomaji, etc.
         updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
