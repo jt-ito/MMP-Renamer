@@ -2777,6 +2777,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   mediaFormat: guess.mediaFormat || null,
     tmdb: guess.tmdb || null,
     provider: guess.provider || null,
+    source: guess.source || (res && res.source) || null,
     language: 'en',
     timestamp: Date.now(),
     extraGuess: guess
