@@ -2298,7 +2298,14 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               </div>
             ) : null }
             {/* show source of primary info: provider vs parsed */}
-            <div style={{fontSize:11, opacity:0.65, marginTop:3}}>Source: {provider ? 'provider' : (parsed ? 'parsed' : 'unknown')}</div>
+            <div style={{fontSize:11, opacity:0.65, marginTop:3}}>
+              Source: {provider ? (
+                <>
+                  <span style={{textTransform:'capitalize'}}>{provider.source || (provider.raw?.provider) || 'provider'}</span>
+                  {provider.source === 'anidb-ed2k' && <span style={{marginLeft:4, opacity:0.8}}>(ED2K hash)</span>}
+                </>
+              ) : (parsed ? 'parsed' : 'unknown')}
+            </div>
           </div>
         </div>
         <div className="actions">
