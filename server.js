@@ -3917,6 +3917,7 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
                   raw: (lookup.provider && lookup.provider.raw) || lookup.raw || lookup.provider,
                   renderedName: providerRendered || (lookup.provider && lookup.provider.renderedName) || '',
                   matched: lookup.provider && typeof lookup.provider.matched !== 'undefined' ? lookup.provider.matched : !!lookup.title,
+                  source: lookup.source || (lookup.provider && lookup.provider.source) || null,
                   // Preserve title variants from externalEnrich (seriesTitleEnglish, seriesTitleRomaji, etc.)
                   seriesTitleEnglish: lookup.seriesTitleEnglish || null,
                   seriesTitleRomaji: lookup.seriesTitleRomaji || null,
