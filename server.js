@@ -5,6 +5,7 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const tvdb = require('./lib/tvdb');
 const chokidar = require('chokidar');
+const { lookupMetadataWithAniDB, getAniDBCredentials } = require('./lib/meta-providers');
 
 // External API integration removed: TMDb-related helpers and https monkey-patch
 // have been disabled to eliminate external HTTP calls. The metaLookup function
@@ -2417,8 +2418,33 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     metaOpts.episode = normEpisode;
   }
   
-  // Perform metadata lookup
-  let res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts)
+  // Perform metadata lookup with AniDB first, then fallback to existing chain
+  // Get AniDB credentials
+  const anidbCreds = getAniDBCredentials(opts && opts.username ? opts.username : null, serverSettings, users);
+  
+  // Prepare options for AniDB-enhanced lookup
+  const metaLookupOpts = Object.assign({}, metaOpts, {
+    anidb_username: anidbCreds.anidb_username,
+    anidb_password: anidbCreds.anidb_password,
+    fallbackMetaLookup: metaLookup,
+    tmdbApiKey: tmdbKey
+  });
+  
+  // Try AniDB first if credentials are available and we have a real file path
+  let res = null;
+  if (anidbCreds.hasCredentials && realPath && fs.existsSync(realPath)) {
+    try {
+      console.log('[Server] Attempting AniDB lookup for:', realPath);
+      res = await lookupMetadataWithAniDB(realPath, seriesLookupTitle, metaLookupOpts);
+    } catch (anidbErr) {
+      console.log('[Server] AniDB lookup failed, will try fallback:', anidbErr.message);
+    }
+  }
+  
+  // If AniDB didn't find anything, use the existing metaLookup
+  if (!res) {
+    res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts);
+  }
   try { console.log('DEBUG: externalEnrich metaLookup returned res=', !!res); } catch (e) {}
   // Diagnostic: log a trimmed version of the metaLookup response so we can
   // see whether the provider returned series/episode data before parent fallback.
@@ -3545,7 +3571,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_output_path', 'rename_template', 'default_meta_provider', 'tvdb_v4_api_key', 'tvdb_v4_user_pin'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'scan_output_path', 'rename_template', 'default_meta_provider', 'tvdb_v4_api_key', 'tvdb_v4_user_pin'];
       for (const k of allowed) if (body[k] !== undefined) serverSettings[k] = body[k];
       writeJson(settingsFile, serverSettings);
       appendLog(`SETTINGS_SAVED_GLOBAL by=${username} keys=${Object.keys(body).join(',')}`);
@@ -3556,7 +3582,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'tvdb_v4_api_key', 'tvdb_v4_user_pin'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'tvdb_v4_api_key', 'tvdb_v4_user_pin'];
     
     // Check if scan_input_path changed to update watcher
     const oldScanPath = users[username].settings.scan_input_path;
