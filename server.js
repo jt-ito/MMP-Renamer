@@ -397,6 +397,15 @@ function normalizeEnrichEntry(entry) {
     const out = Object.assign({}, entry);
     out.parsed = entry.parsed || (entry.parsedName || entry.title ? { title: entry.title || null, parsedName: entry.parsedName || null, season: entry.season != null ? entry.season : null, episode: entry.episode != null ? entry.episode : null } : null);
     out.provider = entry.provider || null;
+    
+    // DEFENSIVE FIX: If provider.source is an object (corrupted cache), fix it
+    if (out.provider && out.provider.source && typeof out.provider.source === 'object') {
+      // Try to extract a valid source string, otherwise set to null
+      const srcObj = out.provider.source;
+      out.provider.source = (typeof srcObj.source === 'string' ? srcObj.source : 
+                              (typeof srcObj.provider === 'string' ? srcObj.provider : null));
+    }
+    
     out.title = out.title || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
   out.seriesTitle = entry.seriesTitle || (entry.extraGuess && entry.extraGuess.seriesTitle) || out.seriesTitle || out.title || null;
   out.seriesTitleExact = entry.seriesTitleExact || (entry.extraGuess && (entry.extraGuess.seriesTitleExact || entry.extraGuess.originalSeriesTitle)) || out.seriesTitleExact || null;
