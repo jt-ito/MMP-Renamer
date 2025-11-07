@@ -2453,15 +2453,28 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   if (anidbCreds.hasCredentials && realPath && fs.existsSync(realPath)) {
     try {
       console.log('[Server] Attempting AniDB lookup for:', realPath);
+      appendLog(`ANIDB_LOOKUP_START path=${realPath} title=${seriesLookupTitle}`);
       res = await lookupMetadataWithAniDB(realPath, seriesLookupTitle, metaLookupOpts);
+      appendLog(`ANIDB_LOOKUP_RESULT found=${!!res} hasName=${res && res.name ? 'yes' : 'no'}`);
+      if (res) {
+        console.log('[Server] AniDB lookup succeeded:', res.name || 'no-name');
+      }
     } catch (anidbErr) {
-      console.log('[Server] AniDB lookup failed, will try fallback:', anidbErr.message);
+      console.error('[Server] AniDB lookup failed:', anidbErr);
+      appendLog(`ANIDB_LOOKUP_ERROR error=${anidbErr.message || String(anidbErr)}`);
     }
   }
   
   // If AniDB didn't find anything, use the existing metaLookup
   if (!res) {
-    res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts);
+    try {
+      appendLog(`ANIDB_FALLBACK_TO_METALOOKUP title=${seriesLookupTitle}`);
+      res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts);
+      appendLog(`METALOOKUP_RESULT found=${!!res} hasName=${res && res.name ? 'yes' : 'no'}`);
+    } catch (metaErr) {
+      console.error('[Server] metaLookup failed:', metaErr);
+      appendLog(`METALOOKUP_ERROR error=${metaErr.message || String(metaErr)}`);
+    }
   }
   try { console.log('DEBUG: externalEnrich metaLookup returned res=', !!res); } catch (e) {}
   // Diagnostic: log a trimmed version of the metaLookup response so we can
