@@ -2492,7 +2492,14 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
         console.error('[Server] Failed to log ANIDB_LOOKUP_START:', logErr.message);
       }
       
-      res = await lookupMetadataWithAniDB(realPath, seriesLookupTitle, metaLookupOpts);
+      // Add timeout wrapper to prevent hanging (max 10 seconds)
+      const timeoutMs = 10000;
+      const anidbPromise = lookupMetadataWithAniDB(realPath, seriesLookupTitle, metaLookupOpts);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error(`AniDB lookup timeout after ${timeoutMs}ms`)), timeoutMs)
+      );
+      
+      res = await Promise.race([anidbPromise, timeoutPromise]);
       
       try {
         appendLog(`ANIDB_LOOKUP_RESULT found=${!!res} hasName=${res && res.name ? 'yes' : 'no'}`);
