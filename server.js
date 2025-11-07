@@ -2492,8 +2492,8 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
         console.error('[Server] Failed to log ANIDB_LOOKUP_START:', logErr.message);
       }
       
-      // Add timeout wrapper to prevent hanging (max 10 seconds)
-      const timeoutMs = 10000;
+      // Add timeout wrapper to prevent hanging (max 60 seconds for initial hash computation)
+      const timeoutMs = 60000;
       const anidbPromise = lookupMetadataWithAniDB(realPath, seriesLookupTitle, metaLookupOpts);
       const timeoutPromise = new Promise((_, reject) => 
         setTimeout(() => reject(new Error(`AniDB lookup timeout after ${timeoutMs}ms`)), timeoutMs)
