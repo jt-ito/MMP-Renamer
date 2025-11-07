@@ -2441,6 +2441,12 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   
   // Try AniDB first if credentials are available and we have a real file path
   let res = null;
+  
+  // Debug logging for AniDB conditions
+  try {
+    appendLog(`ANIDB_CHECK hasCredentials=${anidbCreds.hasCredentials} realPath=${!!realPath} fileExists=${realPath ? fs.existsSync(realPath) : false} username=${anidbCreds.anidb_username ? 'set' : 'missing'}`);
+  } catch (e) {}
+  
   if (anidbCreds.hasCredentials && realPath && fs.existsSync(realPath)) {
     try {
       console.log('[Server] Attempting AniDB lookup for:', realPath);
