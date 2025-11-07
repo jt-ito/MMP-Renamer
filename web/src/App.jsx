@@ -2205,9 +2205,9 @@ function LogsPanel({ logs, refresh, pushToast }) {
         <span style={{ 
           display: 'inline-block', 
           transition: 'transform 200ms ease',
-          transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-          fontSize: '0.8em'
-        }}>▼</span>
+          transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+          fontSize: '0.9em'
+        }}>›</span>
         Logs
       </h3>
       {isExpanded && (
