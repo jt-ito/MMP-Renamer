@@ -59,6 +59,37 @@ function Spinner(){
   )
 }
 
+function LoadingIndicator({ status, stage }) {
+  const getMessage = () => {
+    if (typeof status === 'string') return status
+    if (stage === 'init') return 'Starting rescan...'
+    if (stage === 'fetching') return 'Computing hash & fetching metadata...'
+    return 'Processing...'
+  }
+  
+  return (
+    <div className="loading-pulse" style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '4px 10px',
+      background: 'var(--bg-700)',
+      borderRadius: '6px',
+      fontSize: '12px',
+      color: 'var(--accent)',
+      border: '1px solid var(--bg-600)'
+    }}>
+      <svg className="icon spinner" viewBox="0 0 50 50" width="14" height="14">
+        <circle cx="25" cy="25" r="20" stroke="currentColor" strokeWidth="4" strokeOpacity="0.18" fill="none"/>
+        <path d="M45 25a20 20 0 0 1-20 20" stroke="var(--accent-cta)" strokeWidth="4" strokeLinecap="round" fill="none">
+          <animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25" dur="0.8s" repeatCount="indefinite"/>
+        </path>
+      </svg>
+      <span style={{ opacity: 0.9, fontWeight: 500 }}>{getMessage()}</span>
+    </div>
+  )
+}
+
 export default function App() {
   const [libraries, setLibraries] = useState([])
   const [scanId, setScanId] = useState(null)
@@ -888,7 +919,7 @@ export default function App() {
     if (!item) return
     const key = item.canonicalPath
     try {
-  if (force) safeSetLoadingEnrich(l => ({ ...l, [key]: true }))
+  if (force) safeSetLoadingEnrich(l => ({ ...l, [key]: { status: 'Starting rescan...', stage: 'init' } }))
 
       // If not forcing and we already have a cache entry, return it
       if (!force && enrichCache && enrichCache[key]) {
@@ -924,6 +955,7 @@ export default function App() {
       }
 
     // POST to /enrich to generate/update enrichment (force bypasses cache check)
+  if (force) safeSetLoadingEnrich(l => ({ ...l, [key]: { status: 'Computing hash & fetching metadata...', stage: 'fetching' } }))
   const w = await axios.post(API('/enrich'), { path: key, tmdb_api_key: providerKey || undefined, force: force || undefined })
       if (w.data) {
         const norm = normalizeEnrichResponse(w.data.enrichment || w.data)
@@ -2162,14 +2194,30 @@ function LoadingScreen({ mode = 'incremental', total = 0, loaded = 0, scanProgre
 }
 
 function LogsPanel({ logs, refresh, pushToast }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  
   return (
     <div className="logs">
-      <h3>Logs</h3>
-      <pre>{logs}</pre>
-  <div style={{display:'flex',marginTop:8, alignItems:'center'}}>
-        <button className="btn-ghost icon-only" onClick={refresh} title="Refresh logs"><IconRefresh/></button>
-        <button className="btn-ghost icon-only" onClick={() => { navigator.clipboard?.writeText(logs); pushToast && pushToast('Logs', 'Copied to clipboard') }} title="Copy logs"><IconCopy/></button>
-      </div>
+      <h3 
+        onClick={() => setIsExpanded(!isExpanded)} 
+        style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', userSelect: 'none' }}
+      >
+        <span style={{ 
+          display: 'inline-block', 
+          transition: 'transform 200ms ease',
+          transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)'
+        }}>▶</span>
+        Logs
+      </h3>
+      {isExpanded && (
+        <>
+          <pre>{logs}</pre>
+          <div style={{display:'flex',marginTop:8, alignItems:'center'}}>
+            <button className="btn-ghost icon-only" onClick={refresh} title="Refresh logs"><IconRefresh/></button>
+            <button className="btn-ghost icon-only" onClick={() => { navigator.clipboard?.writeText(logs); pushToast && pushToast('Logs', 'Copied to clipboard') }} title="Copy logs"><IconCopy/></button>
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -2230,7 +2278,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const rawEnrichment = it ? enrichCache?.[it.canonicalPath] : null
   const enrichment = normalizeEnrichResponse(rawEnrichment)
   useEffect(() => { if (it && !rawEnrichment) enrichOne && enrichOne(it) }, [it?.canonicalPath, rawEnrichment, enrichOne])
-  const loading = it && Boolean(loadingEnrich[it.canonicalPath])
+  const loadingState = it && loadingEnrich[it.canonicalPath]
+  const loading = Boolean(loadingState)
   const isSelected = !!(selectMode && it && selected?.[it.canonicalPath])
 
   // Only use the two canonical outputs: parsed and provider
@@ -2361,8 +2410,16 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               pushToast && pushToast('Rescan','Refreshing metadata...')
               await enrichOne(it, true)
             }}
+            style={{ minWidth: loading ? '200px' : 'auto' }}
           >
-            {loading ? <Spinner/> : <><IconRefresh/> <span>Rescan</span></>}
+            {loading ? (
+              <LoadingIndicator 
+                status={typeof loadingState === 'object' ? loadingState.status : undefined}
+                stage={typeof loadingState === 'object' ? loadingState.stage : undefined}
+              />
+            ) : (
+              <><IconRefresh/> <span>Rescan</span></>
+            )}
           </button>
           <button
             title="Hide this item"

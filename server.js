@@ -2494,7 +2494,7 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
       
       // Add timeout wrapper to prevent hanging (max 60 seconds for initial hash computation)
       const timeoutMs = 60000;
-      const anidbPromise = lookupMetadataWithAniDB(realPath, seriesLookupTitle, metaLookupOpts, opts.forceHash);
+      const anidbPromise = lookupMetadataWithAniDB(realPath, seriesLookupTitle, metaLookupOpts, opts.forceHash || opts.force);
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => {
           console.error(`[Server] AniDB lookup TIMEOUT after ${timeoutMs}ms`);
@@ -3809,7 +3809,7 @@ app.post('/api/enrich', async (req, res) => {
     const tvdbOverride = (tvdb_override_v4_api_key || tvdb_override_v4_user_pin)
       ? { v4ApiKey: tvdb_override_v4_api_key || '', v4UserPin: tvdb_override_v4_user_pin || null }
       : null;
-    const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username, tvdbOverride, forceHash });
+    const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username, tvdbOverride, forceHash, force });
     // Use centralized renderer and updater so rendering logic is consistent
     try {
       if (data && data.title) {
