@@ -24,10 +24,11 @@ RUN npm ci || (echo "npm ci failed in repo root, trying npm install without --si
 
 # Build the web UI inside the repo/web directory
 WORKDIR /usr/src/app/repo/web
-# Prefer reproducible install; fall back to `npm install` if needed
-# Add diagnostics before running npm to capture environment info when builds fail in CI.
+# Install web dependencies - use --ignore-scripts to avoid patch-package issues
+# then rebuild to run any necessary build scripts
 RUN node -v && npm -v && pwd && ls -la
-RUN npm ci || (echo "npm ci failed in repo/web, trying npm install without --silent to see errors..." && npm install)
+RUN npm ci --ignore-scripts || npm install --ignore-scripts
+RUN npm rebuild
 RUN npm run build
 
 # Ensure node_modules (including native modules) are built in the builder
