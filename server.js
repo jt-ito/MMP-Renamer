@@ -2489,6 +2489,12 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
         try {
           const raw = res.raw || {}
           analyzeRawForMedia(raw)
+          
+          // Preserve source field from AniDB or other providers
+          if (res.source) {
+            guess.source = res.source;
+          }
+          
           // Title (series/movie)
           // Prefer AniList-provided English title, then romaji, then fallback to provider name fields
           let providerTitleRaw = String(res.name || raw.name || raw.title || '').trim()
@@ -2786,7 +2792,7 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   mediaFormat: guess.mediaFormat || null,
     tmdb: guess.tmdb || null,
     provider: guess.provider || null,
-    source: guess.source || (res && res.source) || null,
+    source: guess.source || null,
     language: 'en',
     timestamp: Date.now(),
     extraGuess: guess
