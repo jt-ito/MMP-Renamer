@@ -18,13 +18,17 @@ RUN git clone --depth 1 --branch ${REPO_REF} ${REPO_URL} repo
 WORKDIR /usr/src/app/repo
 # Install server dependencies (including native modules like better-sqlite3) in the builder
 # so that node_modules copied into the runtime already contain compiled native addons.
-RUN npm ci --silent || npm install --silent
+# Add diagnostics: print node/npm versions and list files to help debug CI failures.
+RUN node -v && npm -v && pwd && ls -la
+RUN npm ci || (echo "npm ci failed in repo root, trying npm install without --silent to see errors..." && npm install)
 
 # Build the web UI inside the repo/web directory
 WORKDIR /usr/src/app/repo/web
 # Prefer reproducible install; fall back to `npm install` if needed
-RUN npm ci --silent || npm install --silent
-RUN npm run build --silent
+# Add diagnostics before running npm to capture environment info when builds fail in CI.
+RUN node -v && npm -v && pwd && ls -la
+RUN npm ci || (echo "npm ci failed in repo/web, trying npm install without --silent to see errors..." && npm install)
+RUN npm run build
 
 # Ensure node_modules (including native modules) are built in the builder
 RUN ls -la node_modules || true
