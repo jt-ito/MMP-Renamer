@@ -2494,10 +2494,16 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
       
       // Add timeout wrapper to prevent hanging (max 60 seconds for initial hash computation)
       const timeoutMs = 60000;
-      const anidbPromise = lookupMetadataWithAniDB(realPath, seriesLookupTitle, metaLookupOpts);
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error(`AniDB lookup timeout after ${timeoutMs}ms`)), timeoutMs)
-      );
+      const anidbPromise = lookupMetadataWithAniDB(realPath, seriesLookupTitle, metaLookupOpts, opts.forceHash);
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          console.error(`[Server] AniDB lookup TIMEOUT after ${timeoutMs}ms`);
+          try {
+            appendLog(`ANIDB_TIMEOUT after ${timeoutMs}ms`);
+          } catch (e) {}
+          reject(new Error(`AniDB lookup timeout after ${timeoutMs}ms`));
+        }, timeoutMs);
+      });
       
       res = await Promise.race([anidbPromise, timeoutPromise]);
       
@@ -3734,9 +3740,9 @@ app.post('/api/scan/force', requireAdmin, (req, res) => {
 app.get('/api/path/exists', (req, res) => { const p = req.query.path || ''; try { const rp = path.resolve(p); const exists = fs.existsSync(rp); const stat = exists ? fs.statSync(rp) : null; res.json({ exists, isDirectory: stat ? stat.isDirectory() : false, resolved: rp }); } catch (err) { res.json({ exists: false, isDirectory: false, error: err.message }); } });
 
 app.post('/api/enrich', async (req, res) => {
-  const { path: p, tmdb_api_key: tmdb_override, force, tvdb_v4_api_key: tvdb_override_v4_api_key, tvdb_v4_user_pin: tvdb_override_v4_user_pin } = req.body;
+  const { path: p, tmdb_api_key: tmdb_override, force, forceHash, tvdb_v4_api_key: tvdb_override_v4_api_key, tvdb_v4_user_pin: tvdb_override_v4_user_pin } = req.body;
   const key = canonicalize(p || '');
-  appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'}`);
+  appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'} forceHash=${forceHash ? 'yes' : 'no'}`);
   try {
     // On forced rescan, clear the entire cache entry except applied/hidden flags
     // so all metadata regenerates with current logic
@@ -3803,7 +3809,7 @@ app.post('/api/enrich', async (req, res) => {
     const tvdbOverride = (tvdb_override_v4_api_key || tvdb_override_v4_user_pin)
       ? { v4ApiKey: tvdb_override_v4_api_key || '', v4UserPin: tvdb_override_v4_user_pin || null }
       : null;
-    const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username, tvdbOverride });
+    const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username, tvdbOverride, forceHash });
     // Use centralized renderer and updater so rendering logic is consistent
     try {
       if (data && data.title) {
