@@ -2486,6 +2486,7 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
   if (anidbCreds.hasCredentials && realPath && fs.existsSync(realPath)) {
     try {
       console.log('[Server] Attempting AniDB lookup for:', realPath);
+      console.log('[Server] AniDB forceHash params - opts.forceHash:', opts.forceHash, 'opts.force:', opts.force, 'combined:', opts.forceHash || opts.force);
       try {
         appendLog(`ANIDB_LOOKUP_START path=${realPath} title=${seriesLookupTitle}`);
       } catch (logErr) {
