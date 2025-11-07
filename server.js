@@ -2453,27 +2453,56 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   if (anidbCreds.hasCredentials && realPath && fs.existsSync(realPath)) {
     try {
       console.log('[Server] Attempting AniDB lookup for:', realPath);
-      appendLog(`ANIDB_LOOKUP_START path=${realPath} title=${seriesLookupTitle}`);
+      try {
+        appendLog(`ANIDB_LOOKUP_START path=${realPath} title=${seriesLookupTitle}`);
+      } catch (logErr) {
+        console.error('[Server] Failed to log ANIDB_LOOKUP_START:', logErr.message);
+      }
+      
       res = await lookupMetadataWithAniDB(realPath, seriesLookupTitle, metaLookupOpts);
-      appendLog(`ANIDB_LOOKUP_RESULT found=${!!res} hasName=${res && res.name ? 'yes' : 'no'}`);
+      
+      try {
+        appendLog(`ANIDB_LOOKUP_RESULT found=${!!res} hasName=${res && res.name ? 'yes' : 'no'}`);
+      } catch (logErr) {
+        console.error('[Server] Failed to log ANIDB_LOOKUP_RESULT:', logErr.message);
+      }
+      
       if (res) {
         console.log('[Server] AniDB lookup succeeded:', res.name || 'no-name');
       }
     } catch (anidbErr) {
       console.error('[Server] AniDB lookup failed:', anidbErr);
-      appendLog(`ANIDB_LOOKUP_ERROR error=${anidbErr.message || String(anidbErr)}`);
+      try {
+        appendLog(`ANIDB_LOOKUP_ERROR error=${anidbErr.message || String(anidbErr)}`);
+      } catch (logErr) {
+        console.error('[Server] Failed to log ANIDB_LOOKUP_ERROR:', logErr.message);
+      }
     }
   }
   
   // If AniDB didn't find anything, use the existing metaLookup
   if (!res) {
     try {
-      appendLog(`ANIDB_FALLBACK_TO_METALOOKUP title=${seriesLookupTitle}`);
+      try {
+        appendLog(`ANIDB_FALLBACK_TO_METALOOKUP title=${seriesLookupTitle}`);
+      } catch (logErr) {
+        console.error('[Server] Failed to log ANIDB_FALLBACK_TO_METALOOKUP:', logErr.message);
+      }
+      
       res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts);
-      appendLog(`METALOOKUP_RESULT found=${!!res} hasName=${res && res.name ? 'yes' : 'no'}`);
+      
+      try {
+        appendLog(`METALOOKUP_RESULT found=${!!res} hasName=${res && res.name ? 'yes' : 'no'}`);
+      } catch (logErr) {
+        console.error('[Server] Failed to log METALOOKUP_RESULT:', logErr.message);
+      }
     } catch (metaErr) {
       console.error('[Server] metaLookup failed:', metaErr);
-      appendLog(`METALOOKUP_ERROR error=${metaErr.message || String(metaErr)}`);
+      try {
+        appendLog(`METALOOKUP_ERROR error=${metaErr.message || String(metaErr)}`);
+      } catch (logErr) {
+        console.error('[Server] Failed to log METALOOKUP_ERROR:', logErr.message);
+      }
     }
   }
   try { console.log('DEBUG: externalEnrich metaLookup returned res=', !!res); } catch (e) {}
@@ -2794,6 +2823,12 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
   }
   if (!guess.seriesLookupTitle) guess.seriesLookupTitle = seriesLookupTitle || null
 
+  // Diagnostic: log the final applied guess before returning
+  try {
+    const _dbg = `META_APPLY_RESULT title=${guess.title || '<none>'} episodeTitle=${guess.episodeTitle || '<none>'} season=${guess.season != null ? guess.season : '<none>'} episode=${guess.episode != null ? guess.episode : '<none>'} provider=${(guess.provider && guess.provider.provider) ? guess.provider.provider : '<none>'}`
+    appendLog(_dbg);
+  } catch (e) { /* ignore logging failure */ }
+
   return {
     sourceId: 'mock:1',
     title: guess.title || base,
@@ -2820,14 +2855,6 @@ async function externalEnrich(canonicalPath, providedKey, opts = {}) {
     extraGuess: guess
   };
 }
-
-// Diagnostic: log the final applied guess when externalEnrich is about to finish
-// (inserted as a lightweight instrumentation - will not affect behavior)
-try {
-  // best-effort: append a short one-line summary to logs
-  const _dbg = (typeof guess !== 'undefined') ? `META_APPLY_RESULT title=${guess.title || '<none>'} episodeTitle=${guess.episodeTitle || '<none>'} season=${guess.season != null ? guess.season : '<none>'} episode=${guess.episode != null ? guess.episode : '<none>'} provider=${(guess.provider && guess.provider.provider) ? guess.provider.provider : '<none>'}` : 'META_APPLY_RESULT guess=<undefined>'
-  try { appendLog(_dbg) } catch (e) { /* ignore logging failure */ }
-} catch (e) { /* ignore */ }
 
 // Normalize path canonicalization (simple lower-case, resolve)
 function canonicalize(p) {
