@@ -2106,7 +2106,40 @@ async function metaLookup(title, apiKey, opts = {}) {
 // ...existing code...
 
 async function externalEnrich(canonicalPath, providedKey, opts = {}) {
-  try { console.log('DEBUG: externalEnrich START path=', canonicalPath, 'providedKeyPresent=', !!providedKey); } catch (e) {}
+  try {
+    console.log('DEBUG: externalEnrich START path=', canonicalPath, 'providedKeyPresent=', !!providedKey);
+  } catch (e) {}
+  
+  try {
+    // Main function body wrapped in try-catch to prevent crashes
+    return await _externalEnrichImpl(canonicalPath, providedKey, opts);
+  } catch (fatalErr) {
+    console.error('[Server] FATAL ERROR in externalEnrich:', fatalErr);
+    try {
+      appendLog(`ENRICH_FATAL_ERROR path=${canonicalPath} error=${fatalErr.message || String(fatalErr)}`);
+    } catch (logErr) {
+      console.error('[Server] Failed to log fatal error:', logErr);
+    }
+    
+    // Return a minimal valid enrichment object to prevent UI crashes
+    const base = require('path').basename(canonicalPath);
+    return {
+      sourceId: 'error:fatal',
+      title: base,
+      seriesTitle: base,
+      parsedName: base,
+      season: null,
+      episode: null,
+      episodeTitle: null,
+      provider: null,
+      source: null,
+      language: 'en',
+      timestamp: Date.now()
+    };
+  }
+}
+
+async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
   
   // Strip the configured scan input path from canonicalPath BEFORE any parsing or parent derivation.
   // This ensures the library root (e.g., "/mnt/Tor") never appears in parsed segments or parent candidates.
