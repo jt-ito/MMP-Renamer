@@ -2475,7 +2475,6 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
   });
   
   // Try AniDB first if credentials are available and we have a real file path
-  let res = null;
   
   // Use canonicalPath as the real file path for AniDB hash lookup
   const realPath = canonicalPath;
