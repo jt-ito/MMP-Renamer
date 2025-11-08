@@ -2585,153 +2585,322 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
     }
   }
       if (res && res.name) {
-        // Map TMDb response into our guess structure explicitly
-        try {
-          const raw = res.raw || {}
-          analyzeRawForMedia(raw)
-          
-          // Preserve source field from AniDB or other providers
-          if (res.source) {
-            guess.source = res.source;
-          }
-          
-          // Title (series/movie)
-          // Prefer AniList-provided English title, then romaji, then fallback to provider name fields
-          let providerTitleRaw = String(res.name || raw.name || raw.title || '').trim()
-          let anilistEnglish = null
-          let anilistRomaji = null
+        if (res.provider === 'anidb') {
           try {
-            if (res && res.title) {
-              if (res.title.english) anilistEnglish = String(res.title.english).trim()
-              if (res.title.romaji) anilistRomaji = String(res.title.romaji).trim()
-            }
-            if (!anilistEnglish && res && res.raw && res.raw.title && res.raw.title.english) anilistEnglish = String(res.raw.title.english).trim()
-            if (!anilistRomaji && res && res.raw && res.raw.title && res.raw.title.romaji) anilistRomaji = String(res.raw.title.romaji).trim()
-          } catch (e) { /* best-effort */ }
-          const providerPreferred = (anilistEnglish && anilistEnglish.length) ? anilistEnglish : ((anilistRomaji && anilistRomaji.length) ? anilistRomaji : providerTitleRaw)
-          if (providerPreferred) {
-            guess.originalSeriesTitle = providerPreferred
-            guess.seriesTitleExact = providerPreferred
-            // store English/romaji separately for later preference logic
-            // Strip "Season X" suffix from stored English title since we use SxxExx notation
-            if (anilistEnglish) {
-              let cleanedEnglish = anilistEnglish.replace(/\s+Season\s+\d{1,2}$/i, '').trim();
-              cleanedEnglish = cleanedEnglish.replace(/\s+\(Season\s+\d{1,2}\)$/i, '').trim();
-              guess.seriesTitleEnglish = cleanedEnglish;
-            }
-            if (anilistRomaji) guess.seriesTitleRomaji = anilistRomaji
-            addSeriesCandidate('provider.original', providerPreferred, { prepend: true })
-          }
-          const mappedTitle = providerPreferred || String(raw.displayName || guess.title || seriesName || base).trim()
-          if (mappedTitle) guess.title = mappedTitle
+            const raw = res.raw || {};
+            analyzeRawForMedia(raw);
 
-          // Episode-level data (when available)
-          if (res.episode) {
-            const ep = res.episode
-            // prefer a TMDb-provided localized_name (from translations), then a Latin/English-looking name,
-            // then fall back to raw provider fields (including native/Japanese). Wikipedia results are
-            // already preferred earlier when available, so here we try to pick the best TMDb name.
-            try {
-              let chosen = null
-              if (ep && ep.localized_name) chosen = String(ep.localized_name).trim()
-              // if no localized_name, prefer ep.name/title that contains Latin letters
-              if (!chosen) {
-                const cand = String(ep.name || ep.title || (ep.attributes && ep.attributes.canonicalTitle) || '').trim()
-                if (cand && /[A-Za-z]/.test(cand)) chosen = cand
+            if (res.source) {
+              guess.source = res.source;
+            }
+
+            seriesSignal = true;
+
+            const primaryTitle = String(res.name || guess.title || seriesName || base || '').trim();
+            if (primaryTitle) {
+              guess.title = primaryTitle;
+              guess.originalSeriesTitle = primaryTitle;
+              guess.seriesTitleExact = primaryTitle;
+              addSeriesCandidate('anidb.primary', primaryTitle, { prepend: true });
+            }
+
+            const altTitles = res.alternateTitles || {};
+            const englishTitle = altTitles.english ? String(altTitles.english).trim() : null;
+            const romajiTitle = altTitles.romaji ? String(altTitles.romaji).trim() : null;
+
+            if (englishTitle) {
+              guess.seriesTitleEnglish = englishTitle;
+              if (!primaryTitle || englishTitle.toLowerCase() !== primaryTitle.toLowerCase()) {
+                addSeriesCandidate('anidb.english', englishTitle);
               }
-              // if still not chosen but ep.name exists (likely native script), keep it as fallback
-              if (!chosen && ep && (ep.name || ep.title)) chosen = String(ep.name || ep.title).trim()
+            }
 
-              if (chosen) {
-                const epTrim = chosen.trim()
-                if (/^episode\s*\d+/i.test(epTrim) || /^(?:e(?:p(?:isode)?)?|ep)\b[\s\.\:\/\-]*\d+/i.test(epTrim)) {
-                  try { appendLog(`PROVIDER_EP_PLACEHOLDER path=${String(canonicalPath).slice(0,200)} epRaw=${epTrim}`) } catch (e) {}
-                  // leave guess.episodeTitle undefined so callers treat it as missing
-                } else {
-                  guess.episodeTitle = normalizeCapitalization(epTrim).trim()
+            if (romajiTitle) {
+              guess.seriesTitleRomaji = romajiTitle;
+              if (!primaryTitle || romajiTitle.toLowerCase() !== primaryTitle.toLowerCase()) {
+                addSeriesCandidate('anidb.romaji', romajiTitle);
+              }
+            }
+
+            const pushAlternate = (label, values) => {
+              if (!values) return;
+              if (Array.isArray(values)) {
+                for (const value of values) {
+                  const trimmed = value && String(value).trim();
+                  if (trimmed) addSeriesCandidate(`anidb.${label}`, trimmed);
                 }
+              } else {
+                const trimmed = String(values).trim();
+                if (trimmed) addSeriesCandidate(`anidb.${label}`, trimmed);
               }
-            } catch (e) {
-              try {
-                const fallbackEp = String(ep && (ep.localized_name || ep.name || ep.title) || '').trim()
-                guess.episodeTitle = normalizeCapitalization(fallbackEp).trim()
-              } catch (ee) { /* ignore */ }
+            };
+
+            pushAlternate('short', altTitles.short);
+            pushAlternate('synonym', altTitles.synonyms);
+            pushAlternate('other', altTitles.other);
+
+            const providerId = res.id || raw.aid || raw.fid || raw.fileId || null;
+            guess.provider = {
+              matched: true,
+              provider: 'anidb',
+              id: providerId,
+              title: primaryTitle || englishTitle || romajiTitle || null,
+              raw: raw
+            };
+            guess.tmdb = { matched: false };
+
+            const rawYear = raw.animeYear || raw.year || raw.animeProductionYear;
+            const animeTypeRaw = res.animeType || raw.animeType || raw.animeSeriesType || null;
+            const animeType = animeTypeRaw ? String(animeTypeRaw).trim() : null;
+            const parsedYear = rawYear != null ? Number(String(rawYear).slice(0, 4)) : NaN;
+            if (!Number.isNaN(parsedYear) && parsedYear > 0) {
+              guess.year = String(parsedYear);
             }
-          }
 
-          // Provider block - set provider name based on raw.source (tmdb or kitsu)
-          const providerName = (raw && raw.source) ? String(raw.source).toLowerCase() : 'tmdb'
-          guess.provider = { matched: true, provider: providerName, id: raw.id || null, title: (guess.seriesTitleExact || providerTitleRaw || mappedTitle) || null, raw: raw }
-
-          // Back-compat: populate tmdb object only when provider is TMDb
-          if (providerName === 'tmdb') {
-            guess.tmdb = { matched: true, id: raw.id || null, raw: raw }
-          } else {
-            guess.tmdb = { matched: false }
-          }
-
-          // IMPORTANT: keep parsed episode/season strictly from filename.
-          // Prevent parent-folder parsing or provider results from overriding
-          // the episode/season numbers that were extracted from the filename.
-          try {
-            guess.season = normSeason;
-            guess.episode = normEpisode;
-          } catch (e) { /* best-effort */ }
-
-          // Year extraction: prefer series-level start/first air date for regular episodes,
-          // but for specials (season 0 or decimal episode numbers) prefer the episode
-          // air_date when available. This avoids using a special's episode air year for
-          // the whole series while still allowing specials to use episode-level dates.
-          let dateStr = null
-          try {
-            if (typeof isSpecialCandidate !== 'undefined' && isSpecialCandidate) {
-              // For specials: prefer episode air_date first
-              if (res && res.episode) {
-                dateStr = res.episode.air_date || res.episode.airDate || (res.episode.attributes && (res.episode.attributes.air_date || res.episode.attributes.airDate)) || null
+            const chooseEpisodeTitle = () => {
+              if (res.episodeTitle) return res.episodeTitle;
+              if (res.episodeTitles) {
+                if (res.episodeTitles.english) return res.episodeTitles.english;
+                if (res.episodeTitles.romaji) return res.episodeTitles.romaji;
+                if (res.episodeTitles.kanji) return res.episodeTitles.kanji;
               }
-              if (!dateStr) {
-                dateStr = raw.seasonAirDate || raw.first_air_date || raw.release_date || raw.firstAirDate || (raw.attributes && (raw.attributes.startDate || raw.attributes.releaseDate))
+              return null;
+            };
+
+            const anidbEpisodeTitle = chooseEpisodeTitle();
+            if (anidbEpisodeTitle) {
+              const normalized = normalizeCapitalization(String(anidbEpisodeTitle).trim()).trim();
+              if (normalized) {
+                guess.episodeTitle = normalized;
+                guess.extraGuess = guess.extraGuess || {};
+                guess.extraGuess.episodeTitle = normalized;
               }
-            } else {
-              // For regular episodes: prefer series/season-level dates first
-              dateStr = raw.seasonAirDate || raw.first_air_date || raw.release_date || raw.firstAirDate || (raw.attributes && (raw.attributes.startDate || raw.attributes.releaseDate)) || null
-              // If AniList-style nested startDate { year: YYYY } is present, prefer it as the series start year
-              if (!dateStr) {
+            }
+
+            let episodeSeason = res.seasonNumber != null ? res.seasonNumber : normSeason;
+            let episodeNumber = null;
+            if (res.episodeNumber != null) {
+              if (typeof res.episodeNumber === 'string') {
+                const trimmed = res.episodeNumber.trim();
+                if (trimmed.startsWith('0.')) {
+                  const parts = trimmed.split('.');
+                  const specialNum = parts.length > 1 ? Number(parts[1]) : NaN;
+                  if (!Number.isNaN(specialNum)) {
+                    episodeSeason = 0;
+                    episodeNumber = specialNum;
+                  }
+                } else {
+                  const parsed = Number(trimmed);
+                  if (!Number.isNaN(parsed)) {
+                    episodeNumber = parsed;
+                  }
+                }
+              } else if (typeof res.episodeNumber === 'number') {
+                episodeNumber = res.episodeNumber;
+              }
+            }
+
+            if (episodeNumber == null && normEpisode != null) {
+              episodeNumber = normEpisode;
+            }
+
+            if (episodeSeason == null && episodeNumber != null) {
+              episodeSeason = 1;
+            }
+
+            if (episodeSeason != null) {
+              guess.season = episodeSeason;
+            }
+
+            if (episodeNumber != null) {
+              guess.episode = episodeNumber;
+            }
+
+            if (res.episodeNumberRaw) {
+              guess.extraGuess = guess.extraGuess || {};
+              guess.extraGuess.anidbEpisodeNumber = res.episodeNumberRaw;
+            }
+
+            if (res.raw && res.raw.animeEnglishName && !guess.seriesTitleEnglish) {
+              const englishFromRaw = String(res.raw.animeEnglishName).trim();
+              if (englishFromRaw) {
+                guess.seriesTitleEnglish = englishFromRaw;
+              }
+            }
+
+            if (res.raw && res.raw.animeRomajiName && !guess.seriesTitleRomaji) {
+              const romajiFromRaw = String(res.raw.animeRomajiName).trim();
+              if (romajiFromRaw) {
+                guess.seriesTitleRomaji = romajiFromRaw;
+              }
+            }
+
+            if (!guess.extraGuess) {
+              guess.extraGuess = {};
+            }
+            guess.extraGuess.anidb = {
+              episodeTitle: anidbEpisodeTitle || null,
+              episodeNumber: res.episodeNumber || null,
+              episodeNumberRaw: res.episodeNumberRaw || null,
+              animeYear: rawYear || null,
+              animeType: animeType || null,
+              titleSource: res.anidbTitleSource || null
+            };
+            if (animeType) {
+              guess.mediaType = animeType;
+            }
+          } catch (mapErr) {
+            guess.tmdb = { matched: false };
+          }
+        } else {
+          // Map TMDb response into our guess structure explicitly
+          try {
+            const raw = res.raw || {}
+            analyzeRawForMedia(raw)
+            
+            // Preserve source field from AniDB or other providers
+            if (res.source) {
+              guess.source = res.source;
+            }
+            
+            // Title (series/movie)
+            // Prefer AniList-provided English title, then romaji, then fallback to provider name fields
+            let providerTitleRaw = String(res.name || raw.name || raw.title || '').trim()
+            let anilistEnglish = null
+            let anilistRomaji = null
+            try {
+              if (res && res.title) {
+                if (res.title.english) anilistEnglish = String(res.title.english).trim()
+                if (res.title.romaji) anilistRomaji = String(res.title.romaji).trim()
+              }
+              if (!anilistEnglish && res && res.raw && res.raw.title && res.raw.title.english) anilistEnglish = String(res.raw.title.english).trim()
+              if (!anilistRomaji && res && res.raw && res.raw.title && res.raw.title.romaji) anilistRomaji = String(res.raw.title.romaji).trim()
+            } catch (e) { /* best-effort */ }
+            const providerPreferred = (anilistEnglish && anilistEnglish.length) ? anilistEnglish : ((anilistRomaji && anilistRomaji.length) ? anilistRomaji : providerTitleRaw)
+            if (providerPreferred) {
+              guess.originalSeriesTitle = providerPreferred
+              guess.seriesTitleExact = providerPreferred
+              // store English/romaji separately for later preference logic
+              // Strip "Season X" suffix from stored English title since we use SxxExx notation
+              if (anilistEnglish) {
+                let cleanedEnglish = anilistEnglish.replace(/\s+Season\s+\d{1,2}$/i, '').trim();
+                cleanedEnglish = cleanedEnglish.replace(/\s+\(Season\s+\d{1,2}\)$/i, '').trim();
+                guess.seriesTitleEnglish = cleanedEnglish;
+              }
+              if (anilistRomaji) guess.seriesTitleRomaji = anilistRomaji
+              addSeriesCandidate('provider.original', providerPreferred, { prepend: true })
+            }
+            const mappedTitle = providerPreferred || String(raw.displayName || guess.title || seriesName || base).trim()
+            if (mappedTitle) guess.title = mappedTitle
+
+            // Episode-level data (when available)
+            if (res.episode) {
+              const ep = res.episode
+              // prefer a TMDb-provided localized_name (from translations), then a Latin/English-looking name,
+              // then fall back to raw provider fields (including native/Japanese). Wikipedia results are
+              // already preferred earlier when available, so here we try to pick the best TMDb name.
+              try {
+                let chosen = null
+                if (ep && ep.localized_name) chosen = String(ep.localized_name).trim()
+                // if no localized_name, prefer ep.name/title that contains Latin letters
+                if (!chosen) {
+                  const cand = String(ep.name || ep.title || (ep.attributes && ep.attributes.canonicalTitle) || '').trim()
+                  if (cand && /[A-Za-z]/.test(cand)) chosen = cand
+                }
+                // if still not chosen but ep.name exists (likely native script), keep it as fallback
+                if (!chosen && ep && (ep.name || ep.title)) chosen = String(ep.name || ep.title).trim()
+
+                if (chosen) {
+                  const epTrim = chosen.trim()
+                  if (/^episode\s*\d+/i.test(epTrim) || /^(?:e(?:p(?:isode)?)?|ep)\b[\s\.\:\/\-]*\d+/i.test(epTrim)) {
+                    try { appendLog(`PROVIDER_EP_PLACEHOLDER path=${String(canonicalPath).slice(0,200)} epRaw=${epTrim}`) } catch (e) {}
+                    // leave guess.episodeTitle undefined so callers treat it as missing
+                  } else {
+                    guess.episodeTitle = normalizeCapitalization(epTrim).trim()
+                  }
+                }
+              } catch (e) {
                 try {
-                  if (raw && raw.startDate && typeof raw.startDate === 'object' && raw.startDate.year) {
-                    // set guess.year directly from the nested year and skip episode fallback
-                    const ry2 = Number(raw.startDate.year)
-                    if (!isNaN(ry2)) {
-                      guess.year = String(ry2)
+                  const fallbackEp = String(ep && (ep.localized_name || ep.name || ep.title) || '').trim()
+                  guess.episodeTitle = normalizeCapitalization(fallbackEp).trim()
+                } catch (ee) { /* ignore */ }
+              }
+            }
+
+            // Provider block - set provider name based on raw.source (tmdb or kitsu)
+            const providerName = (raw && raw.source) ? String(raw.source).toLowerCase() : 'tmdb'
+            guess.provider = { matched: true, provider: providerName, id: raw.id || null, title: (guess.seriesTitleExact || providerTitleRaw || mappedTitle) || null, raw: raw }
+
+            // Back-compat: populate tmdb object only when provider is TMDb
+            if (providerName === 'tmdb') {
+              guess.tmdb = { matched: true, id: raw.id || null, raw: raw }
+            } else {
+              guess.tmdb = { matched: false }
+            }
+
+            // IMPORTANT: keep parsed episode/season strictly from filename.
+            // Prevent parent-folder parsing or provider results from overriding
+            // the episode/season numbers that were extracted from the filename.
+            try {
+              guess.season = normSeason;
+              guess.episode = normEpisode;
+            } catch (e) { /* best-effort */ }
+
+            // Year extraction: prefer series-level start/first air date for regular episodes,
+            // but for specials (season 0 or decimal episode numbers) prefer the episode
+            // air_date when available. This avoids using a special's episode air year for
+            // the whole series while still allowing specials to use episode-level dates.
+            let dateStr = null
+            try {
+              if (typeof isSpecialCandidate !== 'undefined' && isSpecialCandidate) {
+                // For specials: prefer episode air_date first
+                if (res && res.episode) {
+                  dateStr = res.episode.air_date || res.episode.airDate || (res.episode.attributes && (res.episode.attributes.air_date || res.episode.attributes.airDate)) || null
+                }
+                if (!dateStr) {
+                  dateStr = raw.seasonAirDate || raw.first_air_date || raw.release_date || raw.firstAirDate || (raw.attributes && (raw.attributes.startDate || raw.attributes.releaseDate))
+                }
+              } else {
+                // For regular episodes: prefer series/season-level dates first
+                dateStr = raw.seasonAirDate || raw.first_air_date || raw.release_date || raw.firstAirDate || (raw.attributes && (raw.attributes.startDate || raw.attributes.releaseDate)) || null
+                // If AniList-style nested startDate { year: YYYY } is present, prefer it as the series start year
+                if (!dateStr) {
+                  try {
+                    if (raw && raw.startDate && typeof raw.startDate === 'object' && raw.startDate.year) {
+                      // set guess.year directly from the nested year and skip episode fallback
+                      const ry2 = Number(raw.startDate.year)
+                      if (!isNaN(ry2)) {
+                        guess.year = String(ry2)
+                      }
+                    }
+                  } catch (e) {}
+                }
+                // If we didn't get a year yet, fall back to episode air_date when available
+                if (!guess.year) {
+                  if (!dateStr) {
+                    if (res && res.episode) {
+                      dateStr = res.episode.air_date || res.episode.airDate || (res.episode.attributes && (res.episode.attributes.air_date || res.episode.attributes.airDate)) || null
                     }
                   }
-                } catch (e) {}
-              }
-              // If we didn't get a year yet, fall back to episode air_date when available
-              if (!guess.year) {
-                if (!dateStr) {
-                  if (res && res.episode) {
-                    dateStr = res.episode.air_date || res.episode.airDate || (res.episode.attributes && (res.episode.attributes.air_date || res.episode.attributes.airDate)) || null
-                  }
                 }
               }
+            } catch (e) { /* ignore */ }
+            if (dateStr) {
+              const y = new Date(String(dateStr)).getFullYear()
+              if (!isNaN(y)) guess.year = String(y)
+            } else {
+              // Some providers (AniList) return nested startDate objects like { year: 2010 }
+              try {
+                if (raw && raw.startDate && typeof raw.startDate === 'object' && raw.startDate.year) {
+                  const ry = Number(raw.startDate.year)
+                  if (!isNaN(ry)) guess.year = String(ry)
+                }
+              } catch (e) {}
             }
-          } catch (e) { /* ignore */ }
-          if (dateStr) {
-            const y = new Date(String(dateStr)).getFullYear()
-            if (!isNaN(y)) guess.year = String(y)
-          } else {
-            // Some providers (AniList) return nested startDate objects like { year: 2010 }
-            try {
-              if (raw && raw.startDate && typeof raw.startDate === 'object' && raw.startDate.year) {
-                const ry = Number(raw.startDate.year)
-                if (!isNaN(ry)) guess.year = String(ry)
-              }
-            } catch (e) {}
+          } catch (mapErr) {
+            // Map error -> keep guess as-is but note tmdb not matched
+            guess.tmdb = { matched: false }
           }
-        } catch (mapErr) {
-          // Map error -> keep guess as-is but note tmdb not matched
-          guess.tmdb = { matched: false }
         }
       } else {
   guess.tmdb = { matched: false }
