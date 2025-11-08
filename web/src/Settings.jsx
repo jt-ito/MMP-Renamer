@@ -285,10 +285,26 @@ export default function Settings({ pushToast }){
             />
             <button className="btn-ghost" onClick={() => setShowAnidbPassword(s => !s)}>{showAnidbPassword ? 'Hide' : 'Show'}</button>
           </div>
-          <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>
-            AniDB uses <strong>ED2K file hashing</strong> to identify anime episodes with 99% accuracy, even with bad filenames. 
-            Get a free account at <a href="https://anidb.net/" target="_blank" rel="noopener noreferrer" style={{color:'var(--accent)'}}>anidb.net</a>. 
-            Rate-limited to respect AniDB guidelines (2.5s between requests). Falls back to AniList/TVDb if file not found.
+          <div style={{fontSize:12, color:'var(--muted)', marginTop:8, lineHeight:'1.6'}}>
+            <div style={{marginBottom:8}}>
+              <strong>Setup Instructions:</strong>
+            </div>
+            <ol style={{marginLeft:20, marginBottom:8, paddingLeft:0}}>
+              <li>Create a free account at <a href="https://anidb.net/user/register" target="_blank" rel="noopener noreferrer" style={{color:'var(--accent)'}}>anidb.net</a></li>
+              <li>Register this client at <a href="https://anidb.net/software/add" target="_blank" rel="noopener noreferrer" style={{color:'var(--accent)'}}>AniDB Software Registration</a>
+                <ul style={{marginLeft:20, marginTop:4, fontSize:11, opacity:0.9}}>
+                  <li>Client name: <code style={{background:'var(--bg-700)', padding:'2px 6px', borderRadius:4}}>mmprename</code></li>
+                  <li>Version: <code style={{background:'var(--bg-700)', padding:'2px 6px', borderRadius:4}}>1</code></li>
+                  <li>Purpose: "Anime file renaming and metadata lookup"</li>
+                </ul>
+              </li>
+              <li>Wait for moderator approval (usually 1-2 days)</li>
+              <li>Enter your AniDB username and password above</li>
+            </ol>
+            <div style={{marginTop:8, padding:8, background:'var(--bg-700)', borderRadius:6, fontSize:11}}>
+              <strong>How it works:</strong> AniDB uses <strong>ED2K file hashing</strong> to identify anime episodes with 99% accuracy, even with bad filenames. 
+              Rate-limited to respect AniDB guidelines (2.5s between requests). Falls back to AniList/TVDb if file not found or client not registered yet.
+            </div>
           </div>
         </div>
 
