@@ -2912,11 +2912,10 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
     providerResult = res;
   }
 
-    // Only apply TVDb episode override if we don't already have an episode title from AniDB
-    // AniDB uses file hashes for precise identification, so it should take precedence
-    const hasAniDBEpisodeTitle = providerResult && providerResult.provider === 'anidb' && providerResult.episodeTitle;
-    
-    if (tvdbCredentials && normSeason != null && normEpisode != null && !hasAniDBEpisodeTitle) {
+  // Only apply TVDb episode override when AniDB did not provide a match
+  const providerIsAniDB = providerResult && providerResult.provider === 'anidb';
+
+  if (tvdbCredentials && normSeason != null && normEpisode != null && !providerIsAniDB) {
       try {
         let tvdbHit = null
         if (providerResult && providerResult.tvdb && providerResult.tvdb.episodeTitle) {
@@ -2982,8 +2981,10 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
       } catch (e) {
         try { appendLog(`META_TVDB_OVERRIDE_FAIL path=${canonicalPath} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
       }
-    } else if (hasAniDBEpisodeTitle) {
-      try { appendLog(`META_TVDB_OVERRIDE_SKIP path=${canonicalPath} reason=anidb-episode-title-present title=${providerResult.episodeTitle}`) } catch (e) {}
+    } else if (providerIsAniDB) {
+      try {
+        appendLog(`META_TVDB_OVERRIDE_SKIP path=${canonicalPath} reason=anidb-provider title=${providerResult && providerResult.episodeTitle ? providerResult.episodeTitle : '<none>'}`)
+      } catch (e) {}
     }
 
   if (attemptedProvider) {
