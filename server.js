@@ -2749,6 +2749,9 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
             if (animeType) {
               guess.mediaType = animeType;
             }
+            
+            // Set providerResult so TVDB skip logic works
+            providerResult = res;
           } catch (mapErr) {
             guess.tmdb = { matched: false };
           }
