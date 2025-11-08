@@ -2914,6 +2914,10 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
 
   // Only apply TVDb episode override when AniDB did not provide a match
   const providerIsAniDB = providerResult && providerResult.provider === 'anidb';
+  
+  try {
+    appendLog(`TVDB_SKIP_CHECK providerResult=${!!providerResult} provider=${providerResult?.provider || '<none>'} isAniDB=${providerIsAniDB} willSkipTVDB=${providerIsAniDB}`);
+  } catch (e) {}
 
   if (tvdbCredentials && normSeason != null && normEpisode != null && !providerIsAniDB) {
       try {
