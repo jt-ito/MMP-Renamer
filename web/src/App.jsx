@@ -2225,6 +2225,8 @@ function LogsPanel({ logs, refresh, pushToast }) {
 
 function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false }) {
   const listRef = useRef(null)
+  const containerRef = useRef(null)
+  const [listHeight, setListHeight] = useState(700)
   const [isDragging, setIsDragging] = useState(false)
   const [dragStartIndex, setDragStartIndex] = useState(null)
   const [dragCurrentIndex, setDragCurrentIndex] = useState(null)
@@ -2273,6 +2275,21 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     if (!selectMode || !isDragging) return
     setDragCurrentIndex(index)
   }
+
+  // Measure container height dynamically
+  useEffect(() => {
+    if (!containerRef.current) return
+    const updateHeight = () => {
+      if (containerRef.current) {
+        const height = containerRef.current.clientHeight
+        if (height > 0) setListHeight(height)
+      }
+    }
+    updateHeight()
+    const resizeObserver = new ResizeObserver(updateHeight)
+    resizeObserver.observe(containerRef.current)
+    return () => resizeObserver.disconnect()
+  }, [])
   
   const Row = ({ index, style }) => {
   const it = items[index]
@@ -2445,10 +2462,10 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   }
 
   return (
-    <>
-      <List ref={listRef} height={'100%'} itemCount={items.length} itemSize={80} width={'100%'} onItemsRendered={onItemsRendered}>
+    <div ref={containerRef} style={{ flex: 1, minHeight: 0 }}>
+      <List ref={listRef} height={listHeight} itemCount={items.length} itemSize={80} width={'100%'} onItemsRendered={onItemsRendered}>
       {Row}
     </List>
-    </>
+    </div>
   )
 }

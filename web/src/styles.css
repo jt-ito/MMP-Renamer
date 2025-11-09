@@ -228,7 +228,7 @@ select.form-input:focus {
 /* Light-mode: make ghost buttons have black borders for header/top-right controls */
 .light .btn-ghost { border-color: #000 }
 
-.app main { display:flex; gap:16px; padding:18px; height: calc(100vh - 98px); }
+.app main { display:flex; gap:16px; padding:18px; height: calc(100vh - 108px); }
 .list { flex:1; background: var(--bg-800); padding:12px; border-radius: var(--radius); box-shadow: 0 6px 20px rgba(0,0,0,0.6); min-width:0; display: flex; flex-direction: column; }
 .side { width:360px }
 
