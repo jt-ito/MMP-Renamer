@@ -294,9 +294,40 @@ button:active { transform: translateY(1px) }
 .modal-overlay { position:fixed; inset:0; background:rgba(8,10,14,0.72); backdrop-filter: blur(8px); display:flex; align-items:center; justify-content:center; padding:24px; z-index:1100 }
 .modal-card { background: var(--bg-800); border-radius:18px; padding:28px; max-width:420px; width: min(420px, 90vw); box-shadow: 0 28px 60px rgba(2,6,23,0.7); display:flex; flex-direction:column; gap:18px; border:1px solid var(--bg-600) }
 .modal-card h2 { margin:0; font-size:1.3rem; color: var(--accent) }
+.modal-card h3 { margin:0; font-size:1.2rem; color: var(--accent) }
 .modal-card p { margin:0; color: var(--muted); line-height:1.6; font-size:0.95rem }
 .modal-actions { display:flex; justify-content:flex-end; gap: var(--header-button-gap) }
 .modal-actions .btn-ghost, .modal-actions .btn-save { min-width:120px; justify-content:center }
+
+/* Folder selector modal */
+.folder-selector-modal { max-width: 600px; width: min(600px, 90vw) }
+.folder-list { display: flex; flex-direction: column; gap: 12px; max-height: 400px; overflow-y: auto; margin: 8px 0 }
+.folder-option { 
+  background: var(--bg-700); 
+  border: 2px solid var(--bg-600); 
+  border-radius: 12px; 
+  padding: 16px; 
+  cursor: pointer; 
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.folder-option:hover { 
+  border-color: var(--accent-cta); 
+  background: var(--bg-650); 
+  transform: translateX(4px);
+}
+.folder-option .folder-name { 
+  font-size: 15px; 
+  font-weight: 600; 
+  color: var(--accent);
+}
+.folder-option .folder-path { 
+  font-size: 13px; 
+  color: var(--muted); 
+  font-family: 'Courier New', monospace;
+}
 
 /* Toasts */
 .toast { background: var(--bg-700); padding:12px; border-radius:10px; color:var(--accent); min-width:220px; box-shadow:0 10px 30px rgba(2,6,23,0.6); border:1px solid var(--bg-600); animation: toast-in 300ms cubic-bezier(.2,.8,.2,1) }

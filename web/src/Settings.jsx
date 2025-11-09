@@ -91,6 +91,7 @@ export default function Settings({ pushToast }){
   const [showTvdbV4UserPin, setShowTvdbV4UserPin] = useState(false)
   const [inputPath, setInputPath] = useState('')
   const [outputPath, setOutputPath] = useState('')
+  const [outputFolders, setOutputFolders] = useState([])
   const [dirty, setDirty] = useState(false)
 
   useEffect(() => {
@@ -111,6 +112,7 @@ export default function Settings({ pushToast }){
           setRenameTemplate(user.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}')
           setInputPath(user.scan_input_path || '')
           setOutputPath(user.scan_output_path || '')
+          setOutputFolders(Array.isArray(user.output_folders) ? user.output_folders : [])
           return
         }
       } catch (e) {}
@@ -199,6 +201,7 @@ export default function Settings({ pushToast }){
       localStorage.setItem('rename_template', renameTemplate)
       localStorage.setItem('scan_input_path', inputPath)
       localStorage.setItem('scan_output_path', outputPath)
+      try { localStorage.setItem('output_folders', JSON.stringify(outputFolders)) } catch (e) {}
       const firstProvider = providerOrder[0] || 'tmdb'
       // persist server-side as per-user settings by default
       axios.post(API('/settings'), {
@@ -214,6 +217,7 @@ export default function Settings({ pushToast }){
         metadata_provider_order: providerOrder,
         scan_input_path: inputPath,
         scan_output_path: outputPath,
+        output_folders: outputFolders,
         rename_template: renameTemplate
       })
         .then(() => { pushToast && pushToast('Settings', 'Saved'); setDirty(false) })
@@ -514,6 +518,61 @@ export default function Settings({ pushToast }){
           <div style={{fontSize:12, color: outputExists === false ? '#ffb4b4' : 'var(--muted)', marginTop:6}}>
             {outputExists === false ? 'Output path does not exist — hardlink operations will fail until this is fixed.' : 'When a rename/hardlink operation is applied the tool will create hardlinks under this output path using a naming scheme compatible with Jellyfin. Example layout: '}<code>Show Title (Year)/Season 01/Show Title (Year) - S01E01 - Episode Title.ext</code>.
           </div>
+        </div>
+
+        <div style={{marginTop:18}}>
+          <label style={{fontSize:13, color:'var(--muted)'}}>Alternative Output Folders</label>
+          <div style={{fontSize:12, color:'var(--muted)', marginTop:4, marginBottom:10}}>
+            Add multiple output destinations. When applying items, you'll be prompted to choose which folder to use.
+          </div>
+          {outputFolders.map((folder, index) => (
+            <div key={index} style={{display:'flex', gap:8, marginBottom:10, alignItems:'flex-start'}}>
+              <div style={{flex:1}}>
+                <input 
+                  value={folder.name || ''} 
+                  onChange={e => {
+                    const updated = [...outputFolders];
+                    updated[index] = { ...updated[index], name: e.target.value };
+                    setOutputFolders(updated);
+                    setDirty(true);
+                  }} 
+                  placeholder="Folder name (e.g., Anime Library)" 
+                  style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)', marginBottom:6}}
+                />
+                <input 
+                  value={folder.path || ''} 
+                  onChange={e => {
+                    const updated = [...outputFolders];
+                    updated[index] = { ...updated[index], path: e.target.value };
+                    setOutputFolders(updated);
+                    setDirty(true);
+                  }} 
+                  placeholder="Path (e.g., D:\\Media\\Anime)" 
+                  style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
+                />
+              </div>
+              <button 
+                className='btn-ghost' 
+                onClick={() => {
+                  setOutputFolders(outputFolders.filter((_, i) => i !== index));
+                  setDirty(true);
+                }}
+                style={{padding:'10px 14px', marginTop:0, height:'44px', alignSelf:'flex-start'}}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+          <button 
+            className='btn-ghost' 
+            onClick={() => {
+              setOutputFolders([...outputFolders, { name: '', path: '' }]);
+              setDirty(true);
+            }}
+            style={{padding:'10px 14px'}}
+          >
+            + Add Output Folder
+          </button>
         </div>
 
         <div style={{marginTop:12}}>

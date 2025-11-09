@@ -108,6 +108,9 @@ export default function App() {
   const [scanReady, setScanReady] = useState(true)
   const [activeScanKind, setActiveScanKind] = useState(null)
   const [confirmFullScanOpen, setConfirmFullScanOpen] = useState(false)
+  const [folderSelectorOpen, setFolderSelectorOpen] = useState(false)
+  const [folderSelectorCallback, setFolderSelectorCallback] = useState(null)
+  const [folderSelectorPaths, setFolderSelectorPaths] = useState([])
   const [scanLoaded, setScanLoaded] = useState(0)
   const [scanProgress, setScanProgress] = useState(0)
   const [metaPhase, setMetaPhase] = useState(false)
@@ -1256,6 +1259,7 @@ export default function App() {
   async function previewRename(selected, template) {
   // include configured output path from local storage (client preference), server will also accept its persisted setting
   const outputPath = (() => { try { return localStorage.getItem('scan_output_path') || '' } catch { return '' } })()
+  const outputFolders = (() => { try { const stored = localStorage.getItem('output_folders'); return stored ? JSON.parse(stored) : [] } catch { return [] } })()
   const effectiveTemplate = template || (() => { try { return localStorage.getItem('rename_template') || renameTemplate } catch { return renameTemplate } })()
   // Only send canonicalPath to reduce payload size (server looks up enrichment from cache)
   const itemPaths = selected.map(it => ({ canonicalPath: it.canonicalPath }))
@@ -1442,10 +1446,22 @@ export default function App() {
     }
   }
 
-  async function applyRename(plans, dryRun = false) {
+  // Show folder selector modal and wait for user selection
+  async function selectOutputFolder(paths = []) {
+    return new Promise((resolve) => {
+      setFolderSelectorPaths(paths);
+      setFolderSelectorCallback(() => (selectedFolder) => {
+        setFolderSelectorOpen(false);
+        resolve(selectedFolder);
+      });
+      setFolderSelectorOpen(true);
+    });
+  }
+
+  async function applyRename(plans, dryRun = false, outputFolder = null) {
     // send plans to server; server will consult its configured scan_output_path to decide hardlink behavior
     try {
-      const r = await axios.post(API('/rename/apply'), { plans, dryRun })
+      const r = await axios.post(API('/rename/apply'), { plans, dryRun, outputFolder })
       // After apply, refresh enrichment for each plan.fromPath so the UI reflects applied/hidden state immediately
       try {
         const paths = (plans || []).map(p => p.fromPath).filter(Boolean)
@@ -1861,6 +1877,58 @@ export default function App() {
           </div>
         </div>
       ) : null}
+      {folderSelectorOpen ? (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => {
+            setFolderSelectorOpen(false);
+            if (folderSelectorCallback) folderSelectorCallback(null);
+          }}
+        >
+          <div className="modal-card folder-selector-modal" onClick={ev => ev.stopPropagation()}>
+            <h3>Select Output Folder</h3>
+            <p>Choose where to apply the rename{folderSelectorPaths && folderSelectorPaths.length > 1 ? 's' : ''}:</p>
+            <div className="folder-list">
+              {/* Default output path as first option */}
+              <div 
+                className="folder-option"
+                onClick={() => {
+                  setFolderSelectorOpen(false);
+                  if (folderSelectorCallback) folderSelectorCallback(null);
+                }}
+              >
+                <div className="folder-name">Default Output Path</div>
+                <div className="folder-path">{outputPath || '(not configured)'}</div>
+              </div>
+              {/* Alternative folders */}
+              {outputFolders && outputFolders.map((folder, idx) => (
+                <div 
+                  key={idx}
+                  className="folder-option"
+                  onClick={() => {
+                    setFolderSelectorOpen(false);
+                    if (folderSelectorCallback) folderSelectorCallback(folder.path);
+                  }}
+                >
+                  <div className="folder-name">{folder.name || `Folder ${idx + 1}`}</div>
+                  <div className="folder-path">{folder.path}</div>
+                </div>
+              ))}
+            </div>
+            <div className="modal-actions">
+              <button
+                className="btn-ghost"
+                onClick={() => {
+                  setFolderSelectorOpen(false);
+                  if (folderSelectorCallback) folderSelectorCallback(null);
+                }}
+              >Cancel</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <header>
         <h1 
           style={{cursor:'pointer'}} 
@@ -1939,9 +2007,20 @@ export default function App() {
                         if (!selectedPaths.length) return
                         const selItems = items.filter(it => selectedPaths.includes(it.canonicalPath))
                         if (!selItems.length) return
+                        
+                        // Show folder selector if alternative folders are configured
+                        let selectedFolder = null;
+                        if (outputFolders && outputFolders.length > 0) {
+                          selectedFolder = await selectOutputFolder(selectedPaths);
+                          if (selectedFolder === null) {
+                            // User cancelled
+                            return;
+                          }
+                        }
+                        
                         pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
                         const plans = await previewRename(selItems)
-                        await applyRename(plans)
+                        await applyRename(plans, false, selectedFolder)
                         setSelected(prev => {
                           if (!prev) return {}
                           const next = { ...prev }
@@ -2390,8 +2469,20 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               try {
                 safeSetLoadingEnrich(prev => ({ ...prev, [it.canonicalPath]: true }))
                 const plans = await previewRename([it])
+                
+                // Show folder selector if alternative folders are configured
+                let selectedFolder = null;
+                if (outputFolders && outputFolders.length > 0) {
+                  selectedFolder = await selectOutputFolder([it.canonicalPath]);
+                  if (selectedFolder === null) {
+                    // User cancelled
+                    safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[it.canonicalPath]; return n })
+                    return;
+                  }
+                }
+                
                 pushToast && pushToast('Preview ready', 'Rename plan generated — applying now')
-                const res = await applyRename(plans)
+                const res = await applyRename(plans, false, selectedFolder)
                 try {
                   const first = (Array.isArray(res) && res.length) ? res[0] : null
                   const status = first && (first.status || first.result || '')

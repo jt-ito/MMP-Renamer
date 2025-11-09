@@ -5702,7 +5702,7 @@ function extractYear(meta, fromPath) {
 
 // Apply rename plans (safe execution)
 app.post('/api/rename/apply', requireAuth, async (req, res) => {
-  const { plans, dryRun } = req.body || {};
+  const { plans, dryRun, outputFolder } = req.body || {};
   if (!plans || !Array.isArray(plans)) return res.status(400).json({ error: 'plans required' });
   // Ensure cached movie/english flags are healed before applying rename plans so folder/year logic is correct
   try { healCachedEnglishAndMovieFlags(); } catch (e) { /* non-fatal */ }
@@ -5717,17 +5717,30 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
         results.push({ itemId: p.itemId, status: 'noop' });
         continue;
       }
-      // Prefer per-user configured output path, else server-wide setting
+      // Prefer outputFolder from request (alternative folders feature), then per-user configured output path, else server-wide setting
       let configuredOut = null;
       // Also determine configured input root (to prevent linking back into the input folders)
       let configuredInput = null;
       try {
         const username = req.session && req.session.username;
-        if (username && users[username] && users[username].settings && users[username].settings.scan_output_path) configuredOut = canonicalize(users[username].settings.scan_output_path);
-        else if (serverSettings && serverSettings.scan_output_path) configuredOut = canonicalize(serverSettings.scan_output_path);
+        // If outputFolder explicitly provided, use it (alternative folders feature)
+        if (outputFolder) {
+          configuredOut = canonicalize(outputFolder);
+        } else if (username && users[username] && users[username].settings && users[username].settings.scan_output_path) {
+          configuredOut = canonicalize(users[username].settings.scan_output_path);
+        } else if (serverSettings && serverSettings.scan_output_path) {
+          configuredOut = canonicalize(serverSettings.scan_output_path);
+        }
         if (username && users[username] && users[username].settings && users[username].settings.scan_input_path) configuredInput = canonicalize(users[username].settings.scan_input_path);
         else if (serverSettings && serverSettings.scan_input_path) configuredInput = canonicalize(serverSettings.scan_input_path);
-      } catch (e) { configuredOut = serverSettings && serverSettings.scan_output_path ? canonicalize(serverSettings.scan_output_path) : null; configuredInput = serverSettings && serverSettings.scan_input_path ? canonicalize(serverSettings.scan_input_path) : null }
+      } catch (e) { 
+        if (outputFolder) {
+          configuredOut = canonicalize(outputFolder);
+        } else {
+          configuredOut = serverSettings && serverSettings.scan_output_path ? canonicalize(serverSettings.scan_output_path) : null; 
+        }
+        configuredInput = serverSettings && serverSettings.scan_input_path ? canonicalize(serverSettings.scan_input_path) : null;
+      }
       const toResolved = path.resolve(to);
       const resultsItem = { itemId: p.itemId };
 
