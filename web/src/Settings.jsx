@@ -399,15 +399,16 @@ export default function Settings({ pushToast }){
           <div style={{marginTop:8}}>
             <label style={{fontSize:13, color:'var(--muted)'}}>Metadata providers</label>
             <div style={{fontSize:12, color:'var(--muted)', marginTop:4, marginBottom:8}}>
-              Click to enable/disable (green = active, grey = disabled). Drag active providers to reorder priority.
+              Click to enable/disable. Drag active providers to reorder priority (leftmost = #1).
             </div>
             <div style={{display:'flex', flexWrap:'wrap', gap:8, marginBottom:12}}>
               {PROVIDERS.map((provider) => {
                 const isActive = providerOrder.includes(provider.id)
                 const activeIndex = providerOrder.indexOf(provider.id)
                 return (
-                  <div
+                  <button
                     key={provider.id}
+                    className={isActive ? "btn-primary" : "btn-ghost"}
                     draggable={isActive}
                     onDragStart={() => isActive && setDragProvider(provider.id)}
                     onDragOver={(e) => {
@@ -435,24 +436,13 @@ export default function Settings({ pushToast }){
                       setDirty(true)
                     }}
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      padding: '8px 12px',
-                      borderRadius: 20,
-                      background: isActive ? 'var(--success)' : 'var(--bg-600)',
-                      color: isActive ? '#fff' : 'var(--muted)',
-                      border: isActive ? '1px solid var(--success-dark)' : '1px solid var(--bg-500)',
                       cursor: isActive ? 'grab' : 'pointer',
-                      userSelect: 'none',
-                      transition: 'all 0.2s ease'
+                      userSelect: 'none'
                     }}
                   >
-                    <span style={{ fontWeight: 500 }}>{provider.label}</span>
-                    {isActive && (
-                      <span style={{ fontSize: 11, opacity: 0.8 }}>#{activeIndex + 1}</span>
-                    )}
-                  </div>
+                    {provider.label}
+                    {isActive && <span style={{ fontSize: 11, marginLeft: 4 }}>#{activeIndex + 1}</span>}
+                  </button>
                 )
               })}
             </div>
