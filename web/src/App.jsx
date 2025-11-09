@@ -2446,7 +2446,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
 
   return (
     <>
-      <List ref={listRef} height={600} itemCount={items.length} itemSize={80} width={'100%'} onItemsRendered={onItemsRendered}>
+      <List ref={listRef} height={'100%'} itemCount={items.length} itemSize={80} width={'100%'} onItemsRendered={onItemsRendered}>
       {Row}
     </List>
     </>
