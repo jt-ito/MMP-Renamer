@@ -410,6 +410,11 @@ export default function Settings({ pushToast }){
             <div style={{fontSize:12, color:'var(--muted)', marginTop:4, marginBottom:8}}>
               Drag and drop to reorder providers. The first provider in the list is used first.
             </div>
+            <div style={{display:'flex', gap:8, marginBottom:8}}>
+              {providerOrder.map((id, index) => (
+                <div key={`label-${id}`} className="slot-label">Slot {index + 1}</div>
+              ))}
+            </div>
             <div className="provider-slots-container">
               {providerOrder.map((id, index) => {
                 const provider = providerDetails.get(id)
@@ -439,7 +444,6 @@ export default function Settings({ pushToast }){
                       setDragOverIndex(null)
                     }}
                   >
-                    <div className="slot-label">Slot {index + 1}</div>
                     <button
                       className="provider-button active"
                       onClick={() => {
