@@ -4133,7 +4133,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-      const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders'];
       for (const k of allowed) {
         if (body[k] === undefined) continue;
         if (k === 'metadata_provider_order') {
@@ -4145,6 +4145,8 @@ app.post('/api/settings', requireAuth, (req, res) => {
         } else if (k === 'default_meta_provider') {
           const first = String(body[k] || '').trim() || 'tmdb';
           serverSettings.default_meta_provider = first;
+        } else if (k === 'output_folders') {
+          serverSettings.output_folders = Array.isArray(body[k]) ? body[k] : [];
         } else {
           serverSettings[k] = body[k];
         }
@@ -4164,7 +4166,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-    const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders'];
     
     // Check if scan_input_path changed to update watcher
     const oldScanPath = users[username].settings.scan_input_path;
@@ -4179,6 +4181,8 @@ app.post('/api/settings', requireAuth, (req, res) => {
       } else if (k === 'default_meta_provider') {
         const first = String(body[k] || '').trim() || 'tmdb';
         users[username].settings.default_meta_provider = first;
+      } else if (k === 'output_folders') {
+        users[username].settings.output_folders = Array.isArray(body[k]) ? body[k] : [];
       } else {
         users[username].settings[k] = body[k];
       }

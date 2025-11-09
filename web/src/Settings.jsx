@@ -540,7 +540,7 @@ export default function Settings({ pushToast }){
             <strong>Docker users:</strong> Mount a common parent directory containing both input and output paths. Docker treats each volume mount as a separate filesystem, preventing hardlinks between separately mounted paths even if they're on the same physical drive.
           </div>
           {outputFolders.map((folder, index) => (
-            <div key={index} style={{display:'flex', gap:12, marginBottom:10}}>
+            <div key={index} style={{display:'flex', gap:16, marginBottom:12}}>
               <div style={{flex:1}}>
                 <input 
                   value={folder.name || ''} 
@@ -571,7 +571,7 @@ export default function Settings({ pushToast }){
                   setOutputFolders(outputFolders.filter((_, i) => i !== index));
                   setDirty(true);
                 }}
-                style={{padding:'10px 14px', height:'44px', flexShrink:0, marginTop:'19px'}}
+                style={{padding:'10px 16px', height:'44px', flexShrink:0, marginTop:'19px'}}
               >
                 Remove
               </button>
