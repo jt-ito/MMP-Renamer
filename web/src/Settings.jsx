@@ -267,6 +267,14 @@ export default function Settings({ pushToast }){
     return map
   }, [])
 
+  const orderedProviders = useMemo(() => {
+    const active = providerOrder
+      .map(id => providerDetails.get(id))
+      .filter(Boolean)
+    const inactive = PROVIDERS.filter(p => !providerOrder.includes(p.id))
+    return [...active, ...inactive]
+  }, [providerDetails, providerOrder])
+
   return (
     <div style={{padding:16}}>
       <h2>Settings</h2>
@@ -399,16 +407,17 @@ export default function Settings({ pushToast }){
           <div style={{marginTop:8}}>
             <label style={{fontSize:13, color:'var(--muted)'}}>Metadata providers</label>
             <div style={{fontSize:12, color:'var(--muted)', marginTop:4, marginBottom:8}}>
-              Click to enable/disable. Drag active providers to reorder priority (leftmost = #1).
+              Click to enable/disable. Active buttons glow green and stay on the left (slot 1 is the far-left position).
             </div>
             <div style={{display:'flex', flexWrap:'wrap', gap:8, marginBottom:12}}>
-              {PROVIDERS.map((provider) => {
-                const isActive = providerOrder.includes(provider.id)
+              {orderedProviders.map((provider) => {
                 const activeIndex = providerOrder.indexOf(provider.id)
+                const isActive = activeIndex !== -1
+                const slotNumber = isActive ? activeIndex + 1 : null
                 return (
                   <button
                     key={provider.id}
-                    className={isActive ? "btn-primary" : "btn-ghost"}
+                    className={`provider-button ${isActive ? 'active' : 'inactive'}`}
                     draggable={isActive}
                     onDragStart={() => isActive && setDragProvider(provider.id)}
                     onDragOver={(e) => {
@@ -435,13 +444,11 @@ export default function Settings({ pushToast }){
                       }
                       setDirty(true)
                     }}
-                    style={{
-                      cursor: isActive ? 'grab' : 'pointer',
-                      userSelect: 'none'
-                    }}
+                    type="button"
+                    aria-pressed={isActive}
                   >
-                    {provider.label}
-                    {isActive && <span style={{ fontSize: 11, marginLeft: 4 }}>#{activeIndex + 1}</span>}
+                    {isActive && <span className="provider-slot">Slot {slotNumber}</span>}
+                    <span>{provider.label}</span>
                   </button>
                 )
               })}
