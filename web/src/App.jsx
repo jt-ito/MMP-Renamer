@@ -111,6 +111,17 @@ export default function App() {
   const [folderSelectorOpen, setFolderSelectorOpen] = useState(false)
   const [folderSelectorCallback, setFolderSelectorCallback] = useState(null)
   const [folderSelectorPaths, setFolderSelectorPaths] = useState([])
+  const [defaultOutputPath, setDefaultOutputPath] = useState(() => {
+    try { return localStorage.getItem('scan_output_path') || '' } catch (e) { return '' }
+  })
+  const [alternativeOutputFolders, setAlternativeOutputFolders] = useState(() => {
+    try {
+      const stored = localStorage.getItem('output_folders')
+      if (!stored) return []
+      const parsed = JSON.parse(stored)
+      return Array.isArray(parsed) ? parsed : []
+    } catch (e) { return [] }
+  })
   const [scanLoaded, setScanLoaded] = useState(0)
   const [scanProgress, setScanProgress] = useState(0)
   const [metaPhase, setMetaPhase] = useState(false)
@@ -134,6 +145,45 @@ export default function App() {
   // last seen hide event timestamp (ms)
   const lastHideEventTsRef = useRef( Number(localStorage.getItem('lastHideEventTs') || '0') || 0 )
   const isMountedRef = useRef(true)
+
+  const refreshOutputDestinations = React.useCallback((detail = {}) => {
+    let nextOutputPath = ''
+    try {
+      if (Object.prototype.hasOwnProperty.call(detail, 'outputPath')) {
+        nextOutputPath = detail.outputPath || ''
+      } else {
+        nextOutputPath = localStorage.getItem('scan_output_path') || ''
+      }
+    } catch (e) { nextOutputPath = '' }
+    setDefaultOutputPath(nextOutputPath)
+
+    let nextOutputFolders = []
+    try {
+      if (Object.prototype.hasOwnProperty.call(detail, 'outputFolders')) {
+        nextOutputFolders = Array.isArray(detail.outputFolders) ? detail.outputFolders : []
+      } else {
+        const storedFolders = localStorage.getItem('output_folders')
+        if (storedFolders) {
+          const parsed = JSON.parse(storedFolders)
+          nextOutputFolders = Array.isArray(parsed) ? parsed : []
+        }
+      }
+    } catch (e) { nextOutputFolders = [] }
+    setAlternativeOutputFolders(nextOutputFolders)
+    return { outputPath: nextOutputPath, outputFolders: nextOutputFolders }
+  }, [])
+
+  useEffect(() => {
+    const handleStorage = () => refreshOutputDestinations()
+    const handleCustom = (event) => refreshOutputDestinations(event && event.detail ? event.detail : {})
+    window.addEventListener('storage', handleStorage)
+    window.addEventListener('renamer:settings-output-folders', handleCustom)
+    refreshOutputDestinations()
+    return () => {
+      window.removeEventListener('storage', handleStorage)
+      window.removeEventListener('renamer:settings-output-folders', handleCustom)
+    }
+  }, [refreshOutputDestinations])
 
   // Debug flag: enable verbose debug logs by setting window.__RENAMER_DEBUG__ = true
   const DEBUG = (typeof window !== 'undefined' && !!window.__RENAMER_DEBUG__) || false
@@ -1448,14 +1498,28 @@ export default function App() {
 
   // Show folder selector modal and wait for user selection
   async function selectOutputFolder(paths = []) {
+    const refreshed = refreshOutputDestinations()
+    const activeAlternatives = (() => {
+      if (refreshed && Array.isArray(refreshed.outputFolders) && refreshed.outputFolders.length) return refreshed.outputFolders
+      if (Array.isArray(alternativeOutputFolders) && alternativeOutputFolders.length) return alternativeOutputFolders
+      return []
+    })()
+    if (!activeAlternatives.length) {
+      return { cancelled: false, path: null }
+    }
     return new Promise((resolve) => {
-      setFolderSelectorPaths(paths);
-      setFolderSelectorCallback(() => (selectedFolder) => {
-        setFolderSelectorOpen(false);
-        resolve(selectedFolder);
-      });
-      setFolderSelectorOpen(true);
-    });
+      setFolderSelectorPaths(paths)
+      setFolderSelectorCallback(() => (selection) => {
+        setFolderSelectorOpen(false)
+        setFolderSelectorCallback(null)
+        if (selection && typeof selection === 'object') {
+          resolve(selection)
+        } else {
+          resolve({ cancelled: true })
+        }
+      })
+      setFolderSelectorOpen(true)
+    })
   }
 
   async function applyRename(plans, dryRun = false, outputFolder = null) {
@@ -1883,46 +1947,75 @@ export default function App() {
           role="dialog"
           aria-modal="true"
           onClick={() => {
-            setFolderSelectorOpen(false);
-            if (folderSelectorCallback) folderSelectorCallback(null);
+            setFolderSelectorOpen(false)
+            if (folderSelectorCallback) {
+              folderSelectorCallback({ cancelled: true })
+            }
           }}
         >
           <div className="modal-card folder-selector-modal" onClick={ev => ev.stopPropagation()}>
             <h3>Select Output Folder</h3>
-            <p>Choose where to apply the rename{folderSelectorPaths && folderSelectorPaths.length > 1 ? 's' : ''}:</p>
+            <p className="folder-selector-subtitle">Choose where to apply the rename{folderSelectorPaths && folderSelectorPaths.length > 1 ? 's' : ''}.</p>
+            {folderSelectorPaths && folderSelectorPaths.length ? (
+              <div className="folder-selector-context">
+                {folderSelectorPaths.slice(0, 3).map(p => (
+                  <span key={p} className="folder-chip" title={p}>{p.split(/[\\/]/).pop() || p}</span>
+                ))}
+                {folderSelectorPaths.length > 3 ? (
+                  <span className="folder-chip more">+{folderSelectorPaths.length - 3}</span>
+                ) : null}
+              </div>
+            ) : null}
             <div className="folder-list">
-              {/* Default output path as first option */}
-              <div 
+              <button
+                type="button"
                 className="folder-option"
                 onClick={() => {
-                  setFolderSelectorOpen(false);
-                  if (folderSelectorCallback) folderSelectorCallback(null);
+                  setFolderSelectorOpen(false)
+                  if (folderSelectorCallback) {
+                    folderSelectorCallback({ cancelled: false, path: null })
+                  }
                 }}
               >
-                <div className="folder-name">Default Output Path</div>
-                <div className="folder-path">{outputPath || '(not configured)'}</div>
-              </div>
-              {/* Alternative folders */}
-              {outputFolders && outputFolders.map((folder, idx) => (
-                <div 
-                  key={idx}
+                <div className="folder-option-body">
+                  <div>
+                    <div className="folder-name">Default Output Path</div>
+                    <div className="folder-path">{defaultOutputPath || '(not configured)'}</div>
+                  </div>
+                  <span className="folder-option-icon" aria-hidden="true">&gt;</span>
+                </div>
+              </button>
+              {alternativeOutputFolders && alternativeOutputFolders.map((folder, idx) => (
+                <button
+                  type="button"
+                  key={`${folder.path || 'alt'}-${idx}`}
                   className="folder-option"
                   onClick={() => {
-                    setFolderSelectorOpen(false);
-                    if (folderSelectorCallback) folderSelectorCallback(folder.path);
+                    setFolderSelectorOpen(false)
+                    if (folderSelectorCallback) {
+                      folderSelectorCallback({ cancelled: false, path: folder.path || '' })
+                    }
                   }}
                 >
-                  <div className="folder-name">{folder.name || `Folder ${idx + 1}`}</div>
-                  <div className="folder-path">{folder.path}</div>
-                </div>
+                  <div className="folder-option-body">
+                    <div>
+                      <div className="folder-name">{folder.name || `Folder ${idx + 1}`}</div>
+                      <div className="folder-path">{folder.path || '(no path set)'}</div>
+                    </div>
+                    <span className="folder-option-icon" aria-hidden="true">&gt;</span>
+                  </div>
+                </button>
               ))}
             </div>
             <div className="modal-actions">
               <button
+                type="button"
                 className="btn-ghost"
                 onClick={() => {
-                  setFolderSelectorOpen(false);
-                  if (folderSelectorCallback) folderSelectorCallback(null);
+                  setFolderSelectorOpen(false)
+                  if (folderSelectorCallback) {
+                    folderSelectorCallback({ cancelled: true })
+                  }
                 }}
               >Cancel</button>
             </div>
@@ -2009,18 +2102,15 @@ export default function App() {
                         if (!selItems.length) return
                         
                         // Show folder selector if alternative folders are configured
-                        let selectedFolder = null;
-                        if (outputFolders && outputFolders.length > 0) {
-                          selectedFolder = await selectOutputFolder(selectedPaths);
-                          if (selectedFolder === null) {
-                            // User cancelled
-                            return;
-                          }
+                        const selection = await selectOutputFolder(selectedPaths)
+                        if (!selection || selection.cancelled) {
+                          return
                         }
+                        const selectedFolderPath = selection.path ?? null
                         
                         pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
                         const plans = await previewRename(selItems)
-                        await applyRename(plans, false, selectedFolder)
+                        await applyRename(plans, false, selectedFolderPath)
                         setSelected(prev => {
                           if (!prev) return {}
                           const next = { ...prev }
@@ -2470,19 +2560,15 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 safeSetLoadingEnrich(prev => ({ ...prev, [it.canonicalPath]: true }))
                 const plans = await previewRename([it])
                 
-                // Show folder selector if alternative folders are configured
-                let selectedFolder = null;
-                if (outputFolders && outputFolders.length > 0) {
-                  selectedFolder = await selectOutputFolder([it.canonicalPath]);
-                  if (selectedFolder === null) {
-                    // User cancelled
-                    safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[it.canonicalPath]; return n })
-                    return;
-                  }
+                const selection = await selectOutputFolder([it.canonicalPath])
+                if (!selection || selection.cancelled) {
+                  safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[it.canonicalPath]; return n })
+                  return
                 }
+                const selectedFolderPath = selection.path ?? null
                 
                 pushToast && pushToast('Preview ready', 'Rename plan generated — applying now')
-                const res = await applyRename(plans, false, selectedFolder)
+                const res = await applyRename(plans, false, selectedFolderPath)
                 try {
                   const first = (Array.isArray(res) && res.length) ? res[0] : null
                   const status = first && (first.status || first.result || '')

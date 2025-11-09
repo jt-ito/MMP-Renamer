@@ -301,32 +301,38 @@ button:active { transform: translateY(1px) }
 
 /* Folder selector modal */
 .folder-selector-modal { max-width: 600px; width: min(600px, 90vw) }
+.folder-selector-subtitle { color: var(--muted); font-size: 0.9rem }
+.folder-selector-context { display: flex; flex-wrap: wrap; gap: 10px; padding: 8px 0 4px }
+.folder-chip { background: rgba(96,165,250,0.12); color: var(--accent); padding: 6px 10px; border-radius: 999px; font-size: 12px; letter-spacing: 0.2px }
+.folder-chip.more { background: rgba(255,255,255,0.05); color: var(--muted) }
 .folder-list { display: flex; flex-direction: column; gap: 12px; max-height: 400px; overflow-y: auto; margin: 8px 0 }
-.folder-option { 
-  background: var(--bg-700); 
-  border: 2px solid var(--bg-600); 
-  border-radius: 12px; 
-  padding: 16px; 
-  cursor: pointer; 
-  transition: all 0.2s ease;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+button.folder-option { 
+	background: var(--bg-700); 
+	border: 1px solid var(--bg-600); 
+	border-radius: 14px; 
+	padding: 16px; 
+	cursor: pointer; 
+	transition: transform 160ms ease, border-color 160ms ease, box-shadow 180ms ease, background-color 160ms ease;
+	display: block;
+	text-align: left;
+	color: inherit;
 }
-.folder-option:hover { 
-  border-color: var(--accent-cta); 
-  background: var(--bg-650); 
-  transform: translateX(4px);
+button.folder-option:hover { 
+	border-color: rgba(96,165,250,0.45); 
+	background: rgba(96,165,250,0.12); 
+	transform: translateX(6px);
+	box-shadow: 0 10px 28px rgba(15,25,35,0.35);
 }
-.folder-option .folder-name { 
-  font-size: 15px; 
-  font-weight: 600; 
-  color: var(--accent);
-}
-.folder-option .folder-path { 
-  font-size: 13px; 
-  color: var(--muted); 
-  font-family: 'Courier New', monospace;
+.folder-option:focus-visible { outline: 2px solid rgba(96,165,250,0.4); outline-offset: 2px }
+.folder-option-body { display: flex; align-items: center; justify-content: space-between; gap: 24px }
+.folder-option .folder-name { font-size: 15px; font-weight: 600; color: var(--accent) }
+.folder-option .folder-path { font-size: 13px; color: var(--muted); font-family: 'Courier New', monospace; opacity: 0.8 }
+.folder-option-icon { font-size: 18px; opacity: 0.4 }
+.folder-option:hover .folder-option-icon { opacity: 0.75 }
+
+@media (prefers-reduced-motion: reduce) {
+	button.folder-option { transition: none }
+	button.folder-option:hover { transform: none; box-shadow: none }
 }
 
 /* Toasts */
