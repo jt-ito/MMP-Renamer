@@ -1497,17 +1497,18 @@ export default function App() {
   }
 
   // Show folder selector modal and wait for user selection
-  async function selectOutputFolder(paths = []) {
+  const selectOutputFolder = React.useCallback(async (paths = []) => {
     const refreshed = refreshOutputDestinations()
-    const activeAlternatives = (() => {
-      if (refreshed && Array.isArray(refreshed.outputFolders) && refreshed.outputFolders.length) return refreshed.outputFolders
-      if (Array.isArray(alternativeOutputFolders) && alternativeOutputFolders.length) return alternativeOutputFolders
-      return []
-    })()
+    const refreshedFolders = refreshed && Array.isArray(refreshed.outputFolders) ? refreshed.outputFolders : null
+    const activeAlternatives = Array.isArray(refreshedFolders) && refreshedFolders.length
+      ? refreshedFolders
+      : (Array.isArray(alternativeOutputFolders) ? alternativeOutputFolders : [])
+
     if (!activeAlternatives.length) {
       return { cancelled: false, path: null }
     }
-    return new Promise((resolve) => {
+
+    return await new Promise((resolve) => {
       setFolderSelectorPaths(paths)
       setFolderSelectorCallback(() => (selection) => {
         setFolderSelectorOpen(false)
@@ -1520,7 +1521,7 @@ export default function App() {
       })
       setFolderSelectorOpen(true)
     })
-  }
+  }, [alternativeOutputFolders, refreshOutputDestinations])
 
   async function applyRename(plans, dryRun = false, outputFolder = null) {
     // send plans to server; server will consult its configured scan_output_path to decide hardlink behavior
