@@ -4280,12 +4280,13 @@ app.post('/api/enrich', async (req, res) => {
         };
         try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
         // Merge entire data object to preserve seriesTitleEnglish, seriesTitleRomaji, etc.
-        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+        // updateEnrichCache will preserve applied/hidden flags from enrichCache[key]
+        updateEnrichCache(key, Object.assign({}, data, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
       } else {
-        updateEnrichCache(key, Object.assign({}, { ...data, cachedAt: Date.now() }));
+        updateEnrichCache(key, Object.assign({}, data, { cachedAt: Date.now() }));
       }
     } catch (e) {
-      updateEnrichCache(key, Object.assign({}, { ...data, cachedAt: Date.now() }));
+      updateEnrichCache(key, Object.assign({}, data, { cachedAt: Date.now() }));
     }
             // if provider returned authoritative title/parsedName, persist into parsedCache so subsequent scans use it
     try {
