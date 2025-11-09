@@ -12,6 +12,9 @@ const { lookupMetadataWithAniDB, getAniDBCredentials } = require('./lib/meta-pro
 // below is a no-op stub that returns null so the rest of the server continues
 // to operate without external provider lookups.
 
+const METADATA_PROVIDER_IDS = ['anidb', 'anilist', 'tvdb', 'tmdb'];
+const DEFAULT_METADATA_PROVIDER_ORDER = ['anidb', 'anilist', 'tvdb', 'tmdb'];
+
 const app = express();
 // Enable CORS but allow credentials so cookies can be sent from the browser (echo origin)
 app.use(cors({ origin: true, credentials: true }));
@@ -226,7 +229,6 @@ if (!db) {
   try { parsedCache = JSON.parse(fs.readFileSync(parsedCacheFile, 'utf8') || '{}'); } catch (e) { parsedCache = {}; }
   try { renderedIndex = JSON.parse(fs.readFileSync(renderedIndexFile, 'utf8') || '{}'); } catch (e) { renderedIndex = {}; }
   try { scans = JSON.parse(fs.readFileSync(scanStoreFile, 'utf8') || '{}'); } catch (e) { scans = {}; }
-  if (!title) return null;
 }
 
 try { healCachedEnglishAndMovieFlags(); } catch (e) { try { appendLog(`ENRICH_CACHE_HEAL_INIT_FAIL err=${e && e.message ? e.message : String(e)}`); } catch (ee) {} }
@@ -659,6 +661,18 @@ async function metaLookup(title, apiKey, opts = {}) {
   if (!title) return Promise.resolve(null)
 
   const tvdbCreds = resolveTvdbCredentials(opts && opts.username ? opts.username : null, opts && opts.tvdbOverride ? opts.tvdbOverride : null)
+  const providerOrderRaw = Array.isArray(opts.providerOrder) ? opts.providerOrder : (typeof opts.providerOrder === 'string' ? [opts.providerOrder] : null)
+  const providerOrder = sanitizeMetadataProviderOrder(providerOrderRaw || DEFAULT_METADATA_PROVIDER_ORDER)
+  const metaProvidersOrder = providerOrder.filter(id => id !== 'anidb')
+  const metaProviderSet = new Set(metaProvidersOrder)
+  const allowAniList = metaProviderSet.has('anilist')
+  const allowTvdb = metaProviderSet.has('tvdb')
+  const allowTmdb = metaProviderSet.has('tmdb')
+  const indexInOrder = (id) => metaProvidersOrder.indexOf(id)
+  const aniListIndex = indexInOrder('anilist')
+  const tvdbIndex = indexInOrder('tvdb')
+  const tmdbIndex = indexInOrder('tmdb')
+  const hasEpisodeProviderAfterAniList = aniListIndex !== -1 && metaProvidersOrder.slice(aniListIndex + 1).some(p => p === 'tvdb' || p === 'tmdb')
 
   // Minimal per-host pacing to avoid hammering external APIs
   const hostPace = { 'graphql.anilist.co': 250, 'kitsu.io': 250, 'api.themoviedb.org': 300 } // ms
@@ -733,6 +747,9 @@ async function metaLookup(title, apiKey, opts = {}) {
     title,
     opts && opts.parentCandidate ? opts.parentCandidate : null
   ])
+
+  let storedAniListResult = null
+  let storedAniListVariants = null
 
   function evaluateAniListCandidate(res, expectationList, queryVariant, contextLabel) {
     const candidates = gatherAniListCandidateNames(res)
@@ -1654,12 +1671,22 @@ async function metaLookup(title, apiKey, opts = {}) {
   }
 
   // Try AniList variants, then parent, then TMDb fallback
-  try {
-    // normalize search title to avoid SxxEyy noise
-    const variants = makeVariants(normalizeSearchQuery(title || ''))
-    // try filename-derived variants first
-    let aniListResult = null
-    for (let i=0;i<Math.min(variants.length,3);i++) {
+  const variants = makeVariants(normalizeSearchQuery(title || ''))
+  let parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
+  if (!parentCandidate && opts && opts.parentPath) {
+    try {
+      const pp = require('./lib/filename-parser')(path.basename(opts.parentPath))
+      if (pp && pp.title) parentCandidate = pp.title
+    } catch (e) {}
+  }
+
+  async function attemptAniList() {
+    if (!allowAniList) return null
+    try {
+      // normalize search title to avoid SxxEyy noise
+      // try filename-derived variants first
+      let aniListResult = null
+      for (let i=0;i<Math.min(variants.length,3);i++) {
       const v = variants[i]
       const a = await searchAniList(v)
       try { appendLog(`META_ANILIST_SEARCH q=${v} found=${a ? 'yes' : 'no'}`) } catch (e) {}
@@ -1852,16 +1879,15 @@ async function metaLookup(title, apiKey, opts = {}) {
       }
       break
     }
-    if (aniListResult) return aniListResult
+    if (aniListResult) {
+      storedAniListResult = Object.assign({}, aniListResult, { titleVariants: uniqueTitleVariants })
+      storedAniListVariants = uniqueTitleVariants
+      if (!hasEpisodeProviderAfterAniList || (aniListResult && aniListResult.episode && (aniListResult.episode.name || aniListResult.episode.title))) {
+        return aniListResult
+      }
+    }
 
     // try parent-derived candidate if provided or derivable
-    let parentCandidate = opts && opts.parentCandidate ? String(opts.parentCandidate).trim() : null
-    if (!parentCandidate && opts && opts.parentPath) {
-      try {
-        const pp = require('./lib/filename-parser')(path.basename(opts.parentPath))
-        if (pp && pp.title) parentCandidate = pp.title
-      } catch (e) {}
-    }
     if (parentCandidate) {
       const pvars = makeVariants(parentCandidate)
       for (let i = 0; i < Math.min(pvars.length, 3); i++) {
@@ -2033,73 +2059,139 @@ async function metaLookup(title, apiKey, opts = {}) {
         if (tvdbInfoParent) {
           try { parentRes.tvdb = tvdbInfoParent } catch (e) {}
         }
-        return parentRes
-      }
-    }
-
-    // When AniList lookups fail entirely, attempt a direct TVDB lookup before falling back to TMDb.
-    if (tvdbCreds && opts && opts.season != null && opts.episode != null) {
-      try {
-        const fallbackCandidates = [...new Set(variants.concat(parentCandidate ? [parentCandidate] : []).map(s => String(s || '').trim()).filter(Boolean))]
-        if (fallbackCandidates.length) {
-          const tvdbFallback = await tvdb.fetchEpisode(tvdbCreds, fallbackCandidates, opts.season, opts.episode, {
-            log: (line) => {
-              try { appendLog(line) } catch (e) {}
-            }
-          })
-          if (tvdbFallback && tvdbFallback.episodeTitle) {
-            const providerRaw = { source: 'tvdb', id: tvdbFallback.seriesId, seriesName: tvdbFallback.seriesName, raw: tvdbFallback.raw }
-            const episodeObj = {
-              name: tvdbFallback.episodeTitle,
-              title: tvdbFallback.episodeTitle,
-              localized_name: tvdbFallback.episodeTitle,
-              source: 'tvdb',
-              raw: tvdbFallback.raw && tvdbFallback.raw.episode ? tvdbFallback.raw.episode : tvdbFallback.raw
-            }
-            const tvdbRes = { name: tvdbFallback.seriesName || fallbackCandidates[0], raw: providerRaw, episode: episodeObj, tvdb: tvdbFallback }
-            try { appendLog(`META_TVDB_FALLBACK q=${fallbackCandidates[0]} epName=${String(tvdbFallback.episodeTitle).slice(0,120)}`) } catch (e) {}
-            return tvdbRes
-          } else {
-            try { appendLog(`META_TVDB_FALLBACK_NONE candidates=${fallbackCandidates.slice(0,3).join('|')}`) } catch (e) {}
-          }
-        }
-      } catch (e) {
-        try { appendLog(`META_TVDB_FALLBACK_ERROR err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
-      }
-    }
-
-    // AniList didn't find anything; try TMDb fallback (filename then parent)
-    if (apiKey) {
-      for (let i=0;i<Math.min(variants.length,3);i++) {
-        const t = await searchTmdbAndEpisode(variants[i], apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-        try { appendLog(`META_TMDB_SEARCH q=${variants[i]} found=${t ? 'yes' : 'no'}`) } catch (e) {}
-        if (t) {
-          // Attempt a Wikipedia lookup for the episode title and prefer it when meaningful.
-          try {
-            const wikiTryTitles = []
-            if (t.name) wikiTryTitles.push(t.name)
-            if (variants[i]) wikiTryTitles.push(variants[i])
-            const wikiEp = await lookupWikipediaEpisode(wikiTryTitles.length ? wikiTryTitles : t.name, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { tmdbKey: apiKey, force: false })
-            if (wikiEp && wikiEp.name) {
-              try { appendLog(`META_WIKIPEDIA_PREFERRED_AFTER_TMDB q=${t.name || variants[i]} wiki=${wikiEp.name}`) } catch (e) {}
-              return { name: t.name, raw: Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' }), episode: { name: wikiEp.name } }
-            }
-          } catch (e) { /* ignore wiki lookup errors and fall back to TMDb episode */ }
-          return { name: t.name, raw: Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' }), episode: t.episode || null }
-        }
-      }
-      if (parentCandidate) {
-        for (let i=0;i<Math.min(makeVariants(parentCandidate).length,3);i++) {
-          const pv = makeVariants(parentCandidate)[i]
-          const t = await searchTmdbAndEpisode(pv, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
-          try { appendLog(`META_TMDB_PARENT_SEARCH q=${pv} found=${t ? 'yes' : 'no'}`) } catch (e) {}
-          if (t) return { name: t.name, raw: Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' }), episode: t.episode || null }
+        storedAniListResult = Object.assign({}, parentRes, { titleVariants: uniqueTitleVariantsP })
+        storedAniListVariants = uniqueTitleVariantsP
+        if (!hasEpisodeProviderAfterAniList || (parentRes && parentRes.episode && (parentRes.episode.name || parentRes.episode.title))) {
+          return parentRes
         }
       }
     }
-  } catch (e) {
-    try { appendLog(`META_LOOKUP_ERROR title=${String(title).slice(0,100)} err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+    } catch (e) {
+      try { appendLog(`META_ANILIST_SEGMENT_ERROR err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+    }
+    return null
   }
+
+  async function attemptTvdb(baseResult = null) {
+    if (!allowTvdb || !tvdbCreds || !(opts && opts.season != null && opts.episode != null)) return null
+    try {
+      const candidatePool = []
+      candidatePool.push(...variants)
+      if (parentCandidate) candidatePool.push(parentCandidate)
+      if (storedAniListVariants && storedAniListVariants.length) candidatePool.push(...storedAniListVariants)
+      if (baseResult && baseResult.name) candidatePool.push(baseResult.name)
+      const fallbackCandidates = [...new Set(candidatePool.map(s => String(s || '').trim()).filter(Boolean))]
+      if (!fallbackCandidates.length) return null
+      const tvdbFallback = await tvdb.fetchEpisode(tvdbCreds, fallbackCandidates, opts.season, opts.episode, {
+        log: (line) => {
+          try { appendLog(line) } catch (e) {}
+        }
+      })
+      if (tvdbFallback && tvdbFallback.episodeTitle) {
+        const providerRaw = { source: 'tvdb', id: tvdbFallback.seriesId, seriesName: tvdbFallback.seriesName, raw: tvdbFallback.raw }
+        const episodeObj = {
+          name: tvdbFallback.episodeTitle,
+          title: tvdbFallback.episodeTitle,
+          localized_name: tvdbFallback.episodeTitle,
+          source: 'tvdb',
+          raw: tvdbFallback.raw && tvdbFallback.raw.episode ? tvdbFallback.raw.episode : tvdbFallback.raw
+        }
+        try { appendLog(`META_TVDB_FALLBACK q=${fallbackCandidates[0]} epName=${String(tvdbFallback.episodeTitle).slice(0,120)}`) } catch (e) {}
+        if (baseResult) {
+          const merged = Object.assign({}, baseResult, { episode: episodeObj })
+          try {
+            if (merged.raw && typeof merged.raw === 'object') {
+              merged.raw.tvdb = { seriesId: tvdbFallback.seriesId, seriesName: tvdbFallback.seriesName }
+            }
+          } catch (e) { /* best-effort */ }
+        try { merged.tvdb = tvdbFallback } catch (e) {}
+          return merged
+        }
+        return { name: tvdbFallback.seriesName || fallbackCandidates[0], raw: providerRaw, episode: episodeObj, tvdb: tvdbFallback }
+      }
+      try { appendLog(`META_TVDB_FALLBACK_NONE candidates=${fallbackCandidates.slice(0,3).join('|')}`) } catch (e) {}
+    } catch (e) {
+      try { appendLog(`META_TVDB_FALLBACK_ERROR err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
+    }
+    return null
+  }
+
+  async function attemptTmdb(baseResult = null) {
+    if (!allowTmdb || !apiKey) return null
+    const attemptLookup = async (query) => {
+      if (!query) return null
+      const t = await searchTmdbAndEpisode(query, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
+      try { appendLog(`META_TMDB_SEARCH q=${query} found=${t ? 'yes' : 'no'}`) } catch (e) {}
+      if (!t) return null
+      let episodePayload = t.episode || null
+      if (episodePayload && baseResult && episodePayload.name && !isMeaningfulTitle(episodePayload.name)) {
+        episodePayload = null
+      }
+      // Attempt a Wikipedia lookup for the episode title and prefer it when meaningful.
+      try {
+        const wikiTryTitles = []
+        if (t.name) wikiTryTitles.push(t.name)
+        if (query) wikiTryTitles.push(query)
+        const wikiEp = await lookupWikipediaEpisode(wikiTryTitles.length ? wikiTryTitles : t.name, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { tmdbKey: apiKey, force: false })
+        if (wikiEp && wikiEp.name) {
+          try { appendLog(`META_WIKIPEDIA_PREFERRED_AFTER_TMDB q=${t.name || query} wiki=${wikiEp.name}`) } catch (e) {}
+          episodePayload = { name: wikiEp.name }
+        }
+      } catch (e) { /* ignore wiki lookup errors and fall back to TMDb episode */ }
+
+      const providerRaw = Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' })
+      if (baseResult) {
+        const merged = Object.assign({}, baseResult, { episode: episodePayload })
+        if (merged.raw && typeof merged.raw === 'object') {
+          try { merged.raw.tmdb = { id: t.id, name: t.name } } catch (e) {}
+        }
+        try { merged.tmdb = Object.assign({}, t, { raw: providerRaw }) } catch (e) {}
+        return merged
+      }
+      return { name: t.name, raw: providerRaw, episode: episodePayload, tmdb: Object.assign({}, t, { raw: providerRaw }) }
+    }
+
+    for (let i = 0; i < Math.min(variants.length, 3); i++) {
+      const res = await attemptLookup(variants[i])
+      if (res) return res
+    }
+    if (parentCandidate) {
+      const parentVariants = makeVariants(parentCandidate)
+      for (let i = 0; i < Math.min(parentVariants.length, 3); i++) {
+        const res = await attemptLookup(parentVariants[i])
+        if (res) return res
+      }
+    }
+    if (storedAniListVariants && storedAniListVariants.length) {
+      for (let i = 0; i < Math.min(storedAniListVariants.length, 3); i++) {
+        const res = await attemptLookup(storedAniListVariants[i])
+        if (res) return res
+      }
+    }
+    return null
+  }
+
+  let partialResult = null
+  for (const providerId of metaProvidersOrder) {
+    if (providerId === 'anilist') {
+      const res = await attemptAniList()
+      if (res) return res
+      if (storedAniListResult) partialResult = storedAniListResult
+      continue
+    }
+    if (providerId === 'tvdb') {
+      const res = await attemptTvdb(partialResult || storedAniListResult || null)
+      if (res) return res
+      continue
+    }
+    if (providerId === 'tmdb') {
+      const res = await attemptTmdb(partialResult || storedAniListResult || null)
+      if (res) return res
+      continue
+    }
+  }
+
+  if (storedAniListResult) return storedAniListResult
   return null
 }
 
@@ -2388,15 +2480,8 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
   let seriesLookupTitle = seriesName
   // determine username (if provided) so we can honor per-user default provider and track fallback counts
   const username = opts && opts.username ? opts.username : null
-  // determine preferred provider: per-user -> server -> default to 'tmdb'
-  let preferredProvider = 'tmdb'
-  try {
-    if (username && users[username] && users[username].settings && users[username].settings.default_meta_provider) preferredProvider = users[username].settings.default_meta_provider
-    else if (serverSettings && serverSettings.default_meta_provider) preferredProvider = serverSettings.default_meta_provider
-  } catch (e) { preferredProvider = 'tmdb' }
-  // normalize preferred provider to tmdb (kitsu removed)
-  preferredProvider = 'tmdb'
-  if (tmdbKey || preferredProvider) {
+  const providerOrder = resolveMetadataProviderOrder(username)
+  if (providerOrder && providerOrder.length) {
     attemptedProvider = true;
     let res = null;
     try {
@@ -2451,7 +2536,7 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
   // perform name-based matching against TMDb's season-0 specials list. However
   // keep the parsed episode/season locally so the UI and hardlink names still
   // reflect the filename-derived numbers.
-  const metaOpts = { year: parsed.year, preferredProvider, parsedEpisodeTitle: episodeTitle, parentCandidate: parentCandidate, parentPath, force: (opts && opts.force) ? true : false };
+  const metaOpts = { year: parsed.year, parsedEpisodeTitle: episodeTitle, parentCandidate: parentCandidate, parentPath, force: (opts && opts.force) ? true : false };
   if (opts && opts.tvdbOverride) metaOpts.tvdbOverride = opts.tvdbOverride;
   // include requesting username so metaLookup may use per-user keys
   if (opts && opts.username) metaOpts.username = opts.username
@@ -2460,96 +2545,91 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
     metaOpts.episode = normEpisode;
   }
   
-  // Perform metadata lookup with AniDB first, then fallback to existing chain
-  // Get AniDB credentials
+  // Prepare AniDB credentials for segments
   const anidbCreds = getAniDBCredentials(opts && opts.username ? opts.username : null, serverSettings, users);
-  
-  // Prepare options for AniDB-enhanced lookup
   const metaLookupOpts = Object.assign({}, metaOpts, {
     anidb_username: anidbCreds.anidb_username,
     anidb_password: anidbCreds.anidb_password,
     anidb_client_name: anidbCreds.anidb_client_name,
     anidb_client_version: anidbCreds.anidb_client_version,
-    fallbackMetaLookup: metaLookup,
     tmdbApiKey: tmdbKey
   });
-  
-  // Try AniDB first if credentials are available and we have a real file path
-  
-  // Use canonicalPath as the real file path for AniDB hash lookup
-  const realPath = canonicalPath;
-  
-  // Debug logging for AniDB conditions
-  try {
-    appendLog(`ANIDB_CHECK hasCredentials=${anidbCreds.hasCredentials} realPath=${!!realPath} fileExists=${realPath ? fs.existsSync(realPath) : false} username=${anidbCreds.anidb_username ? 'set' : 'missing'}`);
-  } catch (e) {}
-  
-  if (anidbCreds.hasCredentials && realPath && fs.existsSync(realPath)) {
-    try {
-      console.log('[Server] Attempting AniDB lookup for:', realPath);
-      console.log('[Server] AniDB forceHash params - opts.forceHash:', opts.forceHash, 'opts.force:', opts.force, 'combined:', opts.forceHash || opts.force);
-      try {
-        appendLog(`ANIDB_LOOKUP_START path=${realPath} title=${seriesLookupTitle}`);
-      } catch (logErr) {
-        console.error('[Server] Failed to log ANIDB_LOOKUP_START:', logErr.message);
+
+  const sanitizedOrder = Array.isArray(providerOrder) ? providerOrder.filter(id => METADATA_PROVIDER_IDS.includes(id)) : [];
+  const segments = [];
+  let pendingMetaProviders = [];
+  for (const providerId of sanitizedOrder) {
+    if (providerId === 'anidb') {
+      if (pendingMetaProviders.length) {
+        segments.push({ type: 'meta', providers: pendingMetaProviders.slice() });
+        pendingMetaProviders = [];
       }
-      
-      // Add timeout wrapper to prevent hanging (max 60 seconds for initial hash computation)
-      const timeoutMs = 60000;
-      const anidbPromise = lookupMetadataWithAniDB(realPath, seriesLookupTitle, metaLookupOpts, opts.forceHash || opts.force);
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => {
-          console.error(`[Server] AniDB lookup TIMEOUT after ${timeoutMs}ms`);
-          try {
-            appendLog(`ANIDB_TIMEOUT after ${timeoutMs}ms`);
-          } catch (e) {}
-          reject(new Error(`AniDB lookup timeout after ${timeoutMs}ms`));
-        }, timeoutMs);
-      });
-      
-      res = await Promise.race([anidbPromise, timeoutPromise]);
-      
-      try {
-        appendLog(`ANIDB_LOOKUP_RESULT found=${!!res} hasName=${res && res.name ? 'yes' : 'no'}`);
-      } catch (logErr) {
-        console.error('[Server] Failed to log ANIDB_LOOKUP_RESULT:', logErr.message);
-      }
-      
-      if (res) {
-        console.log('[Server] AniDB lookup succeeded:', res.name || 'no-name');
-      }
-    } catch (anidbErr) {
-      console.error('[Server] AniDB lookup failed:', anidbErr);
-      try {
-        appendLog(`ANIDB_LOOKUP_ERROR error=${anidbErr.message || String(anidbErr)}`);
-      } catch (logErr) {
-        console.error('[Server] Failed to log ANIDB_LOOKUP_ERROR:', logErr.message);
-      }
+      segments.push({ type: 'anidb' });
+    } else {
+      pendingMetaProviders.push(providerId);
     }
   }
-  
-  // If AniDB didn't find anything, use the existing metaLookup
-  if (!res) {
-    try {
+  if (pendingMetaProviders.length) {
+    segments.push({ type: 'meta', providers: pendingMetaProviders.slice() });
+  }
+
+  const combinedMetaProviders = sanitizedOrder.filter(id => id !== 'anidb');
+  const realPath = canonicalPath;
+  const anidbAvailable = anidbCreds.hasCredentials && realPath && fs.existsSync(realPath);
+  let anidbAttempted = false;
+
+  for (const segment of segments) {
+    if (segment.type === 'anidb') {
+      if (anidbAttempted) continue;
+      anidbAttempted = true;
       try {
-        appendLog(`ANIDB_FALLBACK_TO_METALOOKUP title=${seriesLookupTitle}`);
-      } catch (logErr) {
-        console.error('[Server] Failed to log ANIDB_FALLBACK_TO_METALOOKUP:', logErr.message);
+        appendLog(`ANIDB_CHECK hasCredentials=${anidbCreds.hasCredentials} realPath=${!!realPath} fileExists=${realPath ? fs.existsSync(realPath) : false} username=${anidbCreds.anidb_username ? 'set' : 'missing'}`);
+      } catch (e) {}
+      if (!anidbAvailable) {
+        try { appendLog('ANIDB_SKIP reason=missing-credentials-or-file'); } catch (e) {}
+        continue;
       }
-      
-      res = await metaLookup(seriesLookupTitle, tmdbKey, metaOpts);
-      
       try {
-        appendLog(`METALOOKUP_RESULT found=${!!res} hasName=${res && res.name ? 'yes' : 'no'}`);
-      } catch (logErr) {
-        console.error('[Server] Failed to log METALOOKUP_RESULT:', logErr.message);
+        console.log('[Server] Attempting AniDB lookup for:', realPath);
+        console.log('[Server] AniDB forceHash params - opts.forceHash:', opts.forceHash, 'opts.force:', opts.force, 'combined:', opts.forceHash || opts.force);
+        try { appendLog(`ANIDB_LOOKUP_START path=${realPath} title=${seriesLookupTitle}`); } catch (logErr) {
+          console.error('[Server] Failed to log ANIDB_LOOKUP_START:', logErr.message);
+        }
+        const timeoutMs = 60000;
+        const anidbPromise = lookupMetadataWithAniDB(realPath, seriesLookupTitle, metaLookupOpts, opts.forceHash || opts.force);
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => {
+            console.error(`[Server] AniDB lookup TIMEOUT after ${timeoutMs}ms`);
+            try { appendLog(`ANIDB_TIMEOUT after ${timeoutMs}ms`); } catch (e) {}
+            reject(new Error(`AniDB lookup timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
+        });
+        res = await Promise.race([anidbPromise, timeoutPromise]);
+        try { appendLog(`ANIDB_LOOKUP_RESULT found=${!!res} hasName=${res && res.name ? 'yes' : 'no'}`); } catch (logErr) {
+          console.error('[Server] Failed to log ANIDB_LOOKUP_RESULT:', logErr.message);
+        }
+        if (res) {
+          console.log('[Server] AniDB lookup succeeded:', res.name || 'no-name');
+          break;
+        }
+      } catch (anidbErr) {
+        console.error('[Server] AniDB lookup failed:', anidbErr);
+        try { appendLog(`ANIDB_LOOKUP_ERROR error=${anidbErr.message || String(anidbErr)}`); } catch (logErr) {
+          console.error('[Server] Failed to log ANIDB_LOOKUP_ERROR:', logErr.message);
+        }
       }
-    } catch (metaErr) {
-      console.error('[Server] metaLookup failed:', metaErr);
+    } else if (segment.type === 'meta') {
+      const metaProviders = segment.providers.filter(p => p !== 'anidb');
+      if (!metaProviders.length) continue;
+      try { appendLog(`METALOOKUP_SEGMENT_START providers=${metaProviders.join('|')} title=${seriesLookupTitle}`); } catch (e) {}
       try {
-        appendLog(`METALOOKUP_ERROR error=${metaErr.message || String(metaErr)}`);
-      } catch (logErr) {
-        console.error('[Server] Failed to log METALOOKUP_ERROR:', logErr.message);
+        const segmentOpts = Object.assign({}, metaOpts, { providerOrder: metaProviders });
+        res = await metaLookup(seriesLookupTitle, tmdbKey, segmentOpts);
+        try { appendLog(`METALOOKUP_SEGMENT_RESULT providers=${metaProviders.join('|')} found=${!!res}`); } catch (e) {}
+        if (res) break;
+      } catch (metaErr) {
+        console.error('[Server] metaLookup segment failed:', metaErr);
+        try { appendLog(`METALOOKUP_SEGMENT_ERROR providers=${metaProviders.join('|')} error=${metaErr.message || String(metaErr)}`); } catch (e) {}
       }
     }
   }
@@ -2570,7 +2650,7 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
     try {
       // Ensure we explicitly pass season/episode when invoking parent-based lookup
       // so TMDb will perform an episode-level lookup once the series is matched.
-      const parentMetaOpts = Object.assign({}, metaOpts || {}, { season: normSeason, episode: normEpisode, parentCandidate: parentCandidate, parentPath: parentPath, _parentDirect: true });
+  const parentMetaOpts = Object.assign({}, metaOpts || {}, { season: normSeason, episode: normEpisode, parentCandidate: parentCandidate, parentPath: parentPath, _parentDirect: true, providerOrder: combinedMetaProviders });
       try { appendLog(`META_PARENT_FALLBACK invoking metaLookup parentCandidate=${parentCandidate} optsSeason=${parentMetaOpts.season != null ? parentMetaOpts.season : '<none>'} optsEpisode=${parentMetaOpts.episode != null ? parentMetaOpts.episode : '<none>'}`) } catch (e) {}
       const pRes = await metaLookup(parentCandidate, tmdbKey, parentMetaOpts)
       if (pRes) {
@@ -3139,6 +3219,58 @@ function renderProviderName(data, key, session) {
 }
 
 // Centralized parsed item processing used by scans: parse filename, update parsedCache & enrichCache
+function sanitizeMetadataProviderOrder(value) {
+  try {
+    if (value == null) return [...DEFAULT_METADATA_PROVIDER_ORDER];
+    let arr = [];
+    if (Array.isArray(value)) {
+      arr = value;
+    } else if (typeof value === 'string') {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(value);
+      } catch (e) {
+        parsed = null;
+      }
+      if (Array.isArray(parsed)) arr = parsed;
+      else if (typeof parsed === 'string') arr = parsed.split(',');
+      else arr = String(value).split(',');
+    } else {
+      arr = [];
+    }
+    const seen = new Set();
+    const out = [];
+    for (const raw of arr) {
+      const id = String(raw || '').trim().toLowerCase();
+      if (!id || !METADATA_PROVIDER_IDS.includes(id)) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    return out.length ? out : [...DEFAULT_METADATA_PROVIDER_ORDER];
+  } catch (e) {
+    return [...DEFAULT_METADATA_PROVIDER_ORDER];
+  }
+}
+
+function resolveMetadataProviderOrder(username) {
+  const tryLoad = (source) => {
+    if (!source) return null;
+    if (source.metadata_provider_order != null) return sanitizeMetadataProviderOrder(source.metadata_provider_order);
+    if (source.default_meta_provider != null) return sanitizeMetadataProviderOrder([source.default_meta_provider]);
+    return null;
+  };
+  try {
+    if (username && users[username] && users[username].settings) {
+      const userOrder = tryLoad(users[username].settings);
+      if (userOrder && userOrder.length) return userOrder;
+    }
+    const serverOrder = tryLoad(serverSettings);
+    if (serverOrder && serverOrder.length) return serverOrder;
+  } catch (e) { /* ignore */ }
+  return [...DEFAULT_METADATA_PROVIDER_ORDER];
+}
+
 function resolveTvdbCredentials(username, override) {
   const hasValue = (value) => value !== undefined && value !== null && String(value).trim().length > 0;
   const normalize = (value) => String(value || '').trim();
@@ -3877,8 +4009,28 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'tvdb_v4_api_key', 'tvdb_v4_user_pin'];
-      for (const k of allowed) if (body[k] !== undefined) serverSettings[k] = body[k];
+      const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin'];
+      for (const k of allowed) {
+        if (body[k] === undefined) continue;
+        if (k === 'metadata_provider_order') {
+          const order = sanitizeMetadataProviderOrder(body[k]);
+          serverSettings.metadata_provider_order = order;
+          if (!body.default_meta_provider && order.length) {
+            serverSettings.default_meta_provider = order[0];
+          }
+        } else if (k === 'default_meta_provider') {
+          const first = String(body[k] || '').trim() || 'tmdb';
+          serverSettings.default_meta_provider = first;
+        } else {
+          serverSettings[k] = body[k];
+        }
+      }
+      if (!serverSettings.metadata_provider_order || !serverSettings.metadata_provider_order.length) {
+        serverSettings.metadata_provider_order = sanitizeMetadataProviderOrder(serverSettings.metadata_provider_order);
+      }
+      if (!serverSettings.default_meta_provider && serverSettings.metadata_provider_order.length) {
+        serverSettings.default_meta_provider = serverSettings.metadata_provider_order[0];
+      }
       writeJson(settingsFile, serverSettings);
       appendLog(`SETTINGS_SAVED_GLOBAL by=${username} keys=${Object.keys(body).join(',')}`);
       return res.json({ ok: true, settings: serverSettings });
@@ -3888,13 +4040,31 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'tvdb_v4_api_key', 'tvdb_v4_user_pin'];
+    const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin'];
     
     // Check if scan_input_path changed to update watcher
     const oldScanPath = users[username].settings.scan_input_path;
     const newScanPath = body.scan_input_path;
     
-    for (const k of allowed) { if (body[k] !== undefined) users[username].settings[k] = body[k]; }
+    for (const k of allowed) {
+      if (body[k] === undefined) continue;
+      if (k === 'metadata_provider_order') {
+        const order = sanitizeMetadataProviderOrder(body[k]);
+        users[username].settings.metadata_provider_order = order;
+        if (!body.default_meta_provider && order.length) users[username].settings.default_meta_provider = order[0];
+      } else if (k === 'default_meta_provider') {
+        const first = String(body[k] || '').trim() || 'tmdb';
+        users[username].settings.default_meta_provider = first;
+      } else {
+        users[username].settings[k] = body[k];
+      }
+    }
+    if (!users[username].settings.metadata_provider_order || !users[username].settings.metadata_provider_order.length) {
+      users[username].settings.metadata_provider_order = sanitizeMetadataProviderOrder(users[username].settings.metadata_provider_order);
+    }
+    if (!users[username].settings.default_meta_provider && users[username].settings.metadata_provider_order.length) {
+      users[username].settings.default_meta_provider = users[username].settings.metadata_provider_order[0];
+    }
     writeJson(usersFile, users);
     appendLog(`SETTINGS_SAVED_USER user=${username} keys=${Object.keys(body).join(',')}`);
     
