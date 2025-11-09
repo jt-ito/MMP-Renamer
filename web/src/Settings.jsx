@@ -559,65 +559,66 @@ export default function Settings({ pushToast }){
           </div>
           {outputFolders.map((folder, index) => {
             const folderDirty = !!outputFoldersDirty[index]
+            const handleNameChange = (value) => {
+              setOutputFolders(prev => {
+                const updated = [...prev]
+                updated[index] = { ...updated[index], name: value }
+                return updated
+              })
+              setOutputFoldersDirty(prev => {
+                const next = [...prev]
+                next[index] = true
+                return next
+              })
+              setDirty(true)
+            }
+            const handlePathChange = (value) => {
+              setOutputFolders(prev => {
+                const updated = [...prev]
+                updated[index] = { ...updated[index], path: value }
+                return updated
+              })
+              setOutputFoldersDirty(prev => {
+                const next = [...prev]
+                next[index] = true
+                return next
+              })
+              setDirty(true)
+            }
+            const removeFolder = () => {
+              setOutputFolders(prev => prev.filter((_, i) => i !== index))
+              setOutputFoldersDirty(prev => prev.filter((_, i) => i !== index))
+              setDirty(true)
+            }
             return (
-              <div key={index} style={{display:'flex', gap:20, marginBottom:14, alignItems:'flex-start'}}>
-                <div style={{flex:1}}>
-                  <input 
-                    value={folder.name || ''} 
-                    onChange={e => {
-                      const value = e.target.value
-                      setOutputFolders(prev => {
-                        const updated = [...prev]
-                        updated[index] = { ...updated[index], name: value }
-                        return updated
-                      })
-                      setOutputFoldersDirty(prev => {
-                        const next = [...prev]
-                        next[index] = true
-                        return next
-                      })
-                      setDirty(true)
-                    }} 
-                    placeholder="Folder name (e.g., Anime Library)" 
-                    style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)', marginBottom:6}}
+              <div key={index} style={{display:'flex', flexDirection:'column', gap:10, marginBottom:16}}>
+                <div style={{display:'flex', gap:12, alignItems:'center'}}>
+                  <input
+                    value={folder.name || ''}
+                    onChange={e => handleNameChange(e.target.value)}
+                    placeholder="Folder name (e.g., Anime Library)"
+                    style={{flex:1, padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
                   />
-                  <input 
-                    value={folder.path || ''} 
-                    onChange={e => {
-                      const value = e.target.value
-                      setOutputFolders(prev => {
-                        const updated = [...prev]
-                        updated[index] = { ...updated[index], path: value }
-                        return updated
-                      })
-                      setOutputFoldersDirty(prev => {
-                        const next = [...prev]
-                        next[index] = true
-                        return next
-                      })
-                      setDirty(true)
-                    }} 
-                    placeholder="Path (e.g., D:\\Media\\Anime)" 
-                    style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
-                  />
-                </div>
-                <div style={{display:'flex', flexDirection:'column', gap:8, flexShrink:0, minWidth:'118px', marginLeft:2}}>
                   <button
                     className={'btn-save' + (folderDirty ? '' : ' disabled')}
                     onClick={async () => { if (!folderDirty) return; await save(); }}
                     disabled={!folderDirty}
-                    style={{padding:'8px 16px', height:'36px'}}
+                    style={{padding:'8px 16px', height:'34px'}}
                   >
                     Save
                   </button>
-                  <button 
-                    className='btn-ghost' 
-                    onClick={() => {
-                      setOutputFolders(prev => prev.filter((_, i) => i !== index))
-                      setOutputFoldersDirty(prev => prev.filter((_, i) => i !== index))
-                      setDirty(true)
-                    }}
-                    style={{padding:'8px 16px', height:'36px', marginTop:50}}
+                </div>
+                <div style={{display:'flex', gap:12, alignItems:'center'}}>
+                  <input
+                    value={folder.path || ''}
+                    onChange={e => handlePathChange(e.target.value)}
+                    placeholder="Path (e.g., D:\\Media\\Anime)"
+                    style={{flex:1, padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
+                  />
+                  <button
+                    className='btn-ghost'
+                    onClick={removeFolder}
+                    style={{padding:'8px 16px', height:'34px'}}
                   >
                     Remove
                   </button>
