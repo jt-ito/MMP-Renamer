@@ -129,6 +129,7 @@ export default function Settings({ pushToast }){
         const inp = localStorage.getItem('scan_input_path') || ''
         const out = localStorage.getItem('scan_output_path') || ''
         const storedOrder = localStorage.getItem('metadata_provider_order') || localStorage.getItem('default_meta_provider')
+        const storedFolders = localStorage.getItem('output_folders')
         setTmdbKey(v)
         setAnilistKey(a)
         setAnidbUsername(anidbUser)
@@ -140,6 +141,11 @@ export default function Settings({ pushToast }){
         setInputPath(inp)
         setOutputPath(out)
         setProviderOrder(sanitizeProviderOrder(storedOrder))
+        try {
+          setOutputFolders(storedFolders ? JSON.parse(storedFolders) : [])
+        } catch (e) {
+          setOutputFolders([])
+        }
       } catch (e) {}
     }).catch(()=>{
       try {
@@ -154,6 +160,7 @@ export default function Settings({ pushToast }){
         const inp = localStorage.getItem('scan_input_path') || ''
         const out = localStorage.getItem('scan_output_path') || ''
         const storedOrder = localStorage.getItem('metadata_provider_order') || localStorage.getItem('default_meta_provider')
+        const storedFolders = localStorage.getItem('output_folders')
         setTmdbKey(v)
         setAnilistKey(a)
         setAnidbUsername(anidbUser)
@@ -165,6 +172,11 @@ export default function Settings({ pushToast }){
         setInputPath(inp)
         setOutputPath(out)
         setProviderOrder(sanitizeProviderOrder(storedOrder))
+        try {
+          setOutputFolders(storedFolders ? JSON.parse(storedFolders) : [])
+        } catch (e) {
+          setOutputFolders([])
+        }
       } catch (e) {}
     }).finally(() => { setDirty(false) })
   }, [])
@@ -528,7 +540,7 @@ export default function Settings({ pushToast }){
             <strong>Docker users:</strong> Mount a common parent directory containing both input and output paths. Docker treats each volume mount as a separate filesystem, preventing hardlinks between separately mounted paths even if they're on the same physical drive.
           </div>
           {outputFolders.map((folder, index) => (
-            <div key={index} style={{display:'flex', gap:8, marginBottom:10, alignItems:'center'}}>
+            <div key={index} style={{display:'flex', gap:12, marginBottom:10}}>
               <div style={{flex:1}}>
                 <input 
                   value={folder.name || ''} 
@@ -559,7 +571,7 @@ export default function Settings({ pushToast }){
                   setOutputFolders(outputFolders.filter((_, i) => i !== index));
                   setDirty(true);
                 }}
-                style={{padding:'10px 14px', height:'44px', flexShrink:0}}
+                style={{padding:'10px 14px', height:'44px', flexShrink:0, marginTop:'19px'}}
               >
                 Remove
               </button>
