@@ -232,8 +232,8 @@ select.form-input:focus {
 .list { flex:1; background: var(--bg-800); padding:12px; border-radius: var(--radius); box-shadow: 0 6px 20px rgba(0,0,0,0.6); min-width:0; display: flex; flex-direction: column; }
 .side { width:360px }
 
-/* Row styling matches the fixed itemSize in the virtualized list (80px) */
-.row { display:flex; justify-content:space-between; align-items:center; padding:14px; height:80px; box-sizing:border-box; border-bottom:1px solid var(--bg-600); background: var(--bg-700) }
+/* Row styling matches the fixed itemSize in the virtualized list (90px) */
+.row { display:flex; justify-content:space-between; align-items:center; padding:16px; height:90px; box-sizing:border-box; border-bottom:1px solid var(--bg-600); background: var(--bg-700) }
 .row:nth-child(even) { background: var(--bg-800) }
 .row.row-select-mode { cursor: pointer; transition: background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease }
 .row.row-select-mode:hover { background: rgba(96,165,250,0.08) }
@@ -243,8 +243,8 @@ select.form-input:focus {
 .row .meta { flex:1; min-width:0 }
 .row input[type="checkbox"],
 .hidden-list input[type="checkbox"] {
-	width:18px;
-	height:18px;
+	width:20px;
+	height:20px;
 	appearance:none;
 	-webkit-appearance:none;
 	border:2px solid rgba(255,255,255,0.07);
@@ -266,17 +266,17 @@ select.form-input:focus {
 	content: '\2713';
 	position:absolute;
 	color: #ffffff;
-	font-size:12px;
+	font-size:14px;
 	left: 50%;
 	top: 50%;
 	transform: translate(-50%, -54%);
 }
-.row .path { font-size:13px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-.row .title { font-weight:600; color:var(--accent); margin-top:6px }
+.row .path { font-size:14px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.row .title { font-weight:600; font-size:15px; color:var(--accent); margin-top:6px }
 .row .title,.row .path { display:block }
 
 .actions { display:flex; gap:8px; align-items:center }
-.actions button { padding:8px 12px; border-radius:12px; background:var(--bg-700); color:var(--accent); border:1px solid var(--bg-600); cursor:pointer }
+.actions button { padding:10px 14px; font-size:14px; border-radius:12px; background:var(--bg-700); color:var(--accent); border:1px solid var(--bg-600); cursor:pointer }
 .actions button.btn-apply { background: var(--accent-cta); color:#021014; border:none; box-shadow: 0 8px 20px rgba(16,24,40,0.25) }
 .actions button.btn-plain { background:var(--bg-700) }
 .actions button:hover { background: var(--bg-600); transform: translateY(-1px) }
