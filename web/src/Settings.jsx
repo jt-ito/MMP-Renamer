@@ -92,6 +92,7 @@ export default function Settings({ pushToast }){
   const [inputPath, setInputPath] = useState('')
   const [outputPath, setOutputPath] = useState('')
   const [outputFolders, setOutputFolders] = useState([])
+  const [outputFoldersDirty, setOutputFoldersDirty] = useState([])
   const [dirty, setDirty] = useState(false)
 
   useEffect(() => {
@@ -112,7 +113,9 @@ export default function Settings({ pushToast }){
           setRenameTemplate(user.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}')
           setInputPath(user.scan_input_path || '')
           setOutputPath(user.scan_output_path || '')
-          setOutputFolders(Array.isArray(user.output_folders) ? user.output_folders : [])
+          const folders = Array.isArray(user.output_folders) ? user.output_folders : []
+          setOutputFolders(folders)
+          setOutputFoldersDirty(new Array(folders.length).fill(false))
           return
         }
       } catch (e) {}
@@ -142,9 +145,13 @@ export default function Settings({ pushToast }){
         setOutputPath(out)
         setProviderOrder(sanitizeProviderOrder(storedOrder))
         try {
-          setOutputFolders(storedFolders ? JSON.parse(storedFolders) : [])
+          const parsedFolders = storedFolders ? JSON.parse(storedFolders) : []
+          const normalizedFolders = Array.isArray(parsedFolders) ? parsedFolders : []
+          setOutputFolders(normalizedFolders)
+          setOutputFoldersDirty(new Array(normalizedFolders.length).fill(false))
         } catch (e) {
           setOutputFolders([])
+          setOutputFoldersDirty([])
         }
       } catch (e) {}
     }).catch(()=>{
@@ -173,9 +180,13 @@ export default function Settings({ pushToast }){
         setOutputPath(out)
         setProviderOrder(sanitizeProviderOrder(storedOrder))
         try {
-          setOutputFolders(storedFolders ? JSON.parse(storedFolders) : [])
+          const parsedFolders = storedFolders ? JSON.parse(storedFolders) : []
+          const normalizedFolders = Array.isArray(parsedFolders) ? parsedFolders : []
+          setOutputFolders(normalizedFolders)
+          setOutputFoldersDirty(new Array(normalizedFolders.length).fill(false))
         } catch (e) {
           setOutputFolders([])
+          setOutputFoldersDirty([])
         }
       } catch (e) {}
     }).finally(() => { setDirty(false) })
@@ -197,7 +208,7 @@ export default function Settings({ pushToast }){
     })()
   }, [])
 
-  function save(){
+  async function save(){
     try {
       // save locally as fallback (tmdb)
       try { localStorage.setItem('tmdb_api_key', tmdbKey); localStorage.setItem('tvdb_api_key', tmdbKey) } catch (e) {}
@@ -215,26 +226,30 @@ export default function Settings({ pushToast }){
       localStorage.setItem('scan_output_path', outputPath)
       try { localStorage.setItem('output_folders', JSON.stringify(outputFolders)) } catch (e) {}
       const firstProvider = providerOrder[0] || 'tmdb'
-      // persist server-side as per-user settings by default
-      axios.post(API('/settings'), {
-        tmdb_api_key: tmdbKey,
-        anilist_api_key: anilistKey,
-        anidb_username: anidbUsername,
-        anidb_password: anidbPassword,
-        anidb_client_name: anidbClientName,
-        anidb_client_version: anidbClientVersion,
-        tvdb_v4_api_key: tvdbV4ApiKey,
-        tvdb_v4_user_pin: tvdbV4UserPin,
-        default_meta_provider: firstProvider,
-        metadata_provider_order: providerOrder,
-        scan_input_path: inputPath,
-        scan_output_path: outputPath,
-        output_folders: outputFolders,
-        rename_template: renameTemplate
-      })
-        .then(() => { pushToast && pushToast('Settings', 'Saved'); setDirty(false) })
-        .catch(() => pushToast && pushToast('Settings', 'Saved locally; failed to save server-side'))
-    } catch (e) { pushToast && pushToast('Error', 'Failed to save') }
+      try {
+        await axios.post(API('/settings'), {
+          tmdb_api_key: tmdbKey,
+          anilist_api_key: anilistKey,
+          anidb_username: anidbUsername,
+          anidb_password: anidbPassword,
+          anidb_client_name: anidbClientName,
+          anidb_client_version: anidbClientVersion,
+          tvdb_v4_api_key: tvdbV4ApiKey,
+          tvdb_v4_user_pin: tvdbV4UserPin,
+          default_meta_provider: firstProvider,
+          metadata_provider_order: providerOrder,
+          scan_input_path: inputPath,
+          scan_output_path: outputPath,
+          output_folders: outputFolders,
+          rename_template: renameTemplate
+        })
+        pushToast && pushToast('Settings', 'Saved')
+        setDirty(false)
+        setOutputFoldersDirty(new Array(outputFolders.length).fill(false))
+      } catch (err) {
+        pushToast && pushToast('Settings', 'Saved locally; failed to save server-side')
+      }
+    } catch (e) { if (pushToast) pushToast('Error', 'Failed to save') }
   }
 
   function clearAll(){
@@ -251,6 +266,8 @@ export default function Settings({ pushToast }){
       setRenameTemplate('{title} - {epLabel} - {episodeTitle}')
       setInputPath('')
       setOutputPath('')
+  setOutputFolders([])
+  setOutputFoldersDirty([])
       localStorage.removeItem('tmdb_api_key')
       localStorage.removeItem('anilist_api_key')
       localStorage.removeItem('anidb_username')
@@ -262,8 +279,9 @@ export default function Settings({ pushToast }){
       localStorage.removeItem('metadata_provider_order')
       localStorage.removeItem('scan_input_path')
       localStorage.removeItem('scan_output_path')
+  localStorage.removeItem('output_folders')
       localStorage.setItem('rename_template', '{title} - {epLabel} - {episodeTitle}')
-      axios.post(API('/settings'), { tmdb_api_key: '', anilist_api_key: '', anidb_username: '', anidb_password: '', default_meta_provider: 'tmdb', metadata_provider_order: DEFAULT_PROVIDER_ORDER, tvdb_v4_api_key: '', tvdb_v4_user_pin: '', scan_input_path: '', scan_output_path: '', rename_template: '{title} - {epLabel} - {episodeTitle}' }).catch(()=>{})
+  axios.post(API('/settings'), { tmdb_api_key: '', anilist_api_key: '', anidb_username: '', anidb_password: '', default_meta_provider: 'tmdb', metadata_provider_order: DEFAULT_PROVIDER_ORDER, tvdb_v4_api_key: '', tvdb_v4_user_pin: '', scan_input_path: '', scan_output_path: '', rename_template: '{title} - {epLabel} - {episodeTitle}', output_folders: [] }).catch(()=>{})
       setDirty(false)
       pushToast && pushToast('Settings', 'Cleared')
     } catch (e) { pushToast && pushToast('Error', 'Failed to clear') }
@@ -539,58 +557,79 @@ export default function Settings({ pushToast }){
             <br/>
             <strong>Docker users:</strong> Mount a common parent directory containing both input and output paths. Docker treats each volume mount as a separate filesystem, preventing hardlinks between separately mounted paths even if they're on the same physical drive.
           </div>
-          {outputFolders.map((folder, index) => (
-            <div key={index} style={{display:'flex', gap:20, marginBottom:14, alignItems:'stretch'}}>
-              <div style={{flex:1}}>
-                <input 
-                  value={folder.name || ''} 
-                  onChange={e => {
-                    const updated = [...outputFolders];
-                    updated[index] = { ...updated[index], name: e.target.value };
-                    setOutputFolders(updated);
-                    setDirty(true);
-                  }} 
-                  placeholder="Folder name (e.g., Anime Library)" 
-                  style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)', marginBottom:6}}
-                />
-                <input 
-                  value={folder.path || ''} 
-                  onChange={e => {
-                    const updated = [...outputFolders];
-                    updated[index] = { ...updated[index], path: e.target.value };
-                    setOutputFolders(updated);
-                    setDirty(true);
-                  }} 
-                  placeholder="Path (e.g., D:\\Media\\Anime)" 
-                  style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
-                />
+          {outputFolders.map((folder, index) => {
+            const folderDirty = !!outputFoldersDirty[index]
+            return (
+              <div key={index} style={{display:'flex', gap:20, marginBottom:14, alignItems:'flex-start'}}>
+                <div style={{flex:1}}>
+                  <input 
+                    value={folder.name || ''} 
+                    onChange={e => {
+                      const value = e.target.value
+                      setOutputFolders(prev => {
+                        const updated = [...prev]
+                        updated[index] = { ...updated[index], name: value }
+                        return updated
+                      })
+                      setOutputFoldersDirty(prev => {
+                        const next = [...prev]
+                        next[index] = true
+                        return next
+                      })
+                      setDirty(true)
+                    }} 
+                    placeholder="Folder name (e.g., Anime Library)" 
+                    style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)', marginBottom:6}}
+                  />
+                  <input 
+                    value={folder.path || ''} 
+                    onChange={e => {
+                      const value = e.target.value
+                      setOutputFolders(prev => {
+                        const updated = [...prev]
+                        updated[index] = { ...updated[index], path: value }
+                        return updated
+                      })
+                      setOutputFoldersDirty(prev => {
+                        const next = [...prev]
+                        next[index] = true
+                        return next
+                      })
+                      setDirty(true)
+                    }} 
+                    placeholder="Path (e.g., D:\\Media\\Anime)" 
+                    style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
+                  />
+                </div>
+                <div style={{display:'flex', flexDirection:'column', gap:8, flexShrink:0, minWidth:'118px', marginLeft:2}}>
+                  <button
+                    className={'btn-save' + (folderDirty ? '' : ' disabled')}
+                    onClick={async () => { if (!folderDirty) return; await save(); }}
+                    disabled={!folderDirty}
+                    style={{padding:'8px 16px', height:'36px'}}
+                  >
+                    Save
+                  </button>
+                  <button 
+                    className='btn-ghost' 
+                    onClick={() => {
+                      setOutputFolders(prev => prev.filter((_, i) => i !== index))
+                      setOutputFoldersDirty(prev => prev.filter((_, i) => i !== index))
+                      setDirty(true)
+                    }}
+                    style={{padding:'8px 16px', height:'36px', marginTop:50}}
+                  >
+                    Remove
+                  </button>
+                </div>
               </div>
-              <div style={{display:'flex', flexDirection:'column', gap:10, flexShrink:0, minWidth:'120px'}}>
-                <button
-                  className={'btn-save' + (dirty ? '' : ' disabled')}
-                  onClick={() => { if (dirty) save(); }}
-                  disabled={!dirty}
-                  style={{padding:'10px 18px', height:'44px'}}
-                >
-                  Save
-                </button>
-                <button 
-                  className='btn-ghost' 
-                  onClick={() => {
-                    setOutputFolders(outputFolders.filter((_, i) => i !== index));
-                    setDirty(true);
-                  }}
-                  style={{padding:'10px 16px', height:'44px', marginTop:'auto'}}
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          ))}
+            )
+          })}
           <button 
             className='btn-ghost' 
             onClick={() => {
-              setOutputFolders([...outputFolders, { name: '', path: '' }]);
+              setOutputFolders(prev => [...prev, { name: '', path: '' }])
+              setOutputFoldersDirty(prev => [...prev, true])
               setDirty(true);
             }}
             style={{padding:'10px 14px'}}
