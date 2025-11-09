@@ -392,11 +392,99 @@ function writeJson(filePath, obj) {
   }
 }
 
+function safeCloneJson(value, context) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'object') return value;
+  try {
+    return JSON.parse(JSON.stringify(value, (_key, val) => (typeof val === 'bigint' ? String(val) : val)));
+  } catch (e) {
+    if (context) {
+      try { appendLog(`JSON_CLONE_FAIL context=${context} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
+    }
+    return null;
+  }
+}
+
+function sanitizeExtraGuess(extraGuess, fallback) {
+  try {
+    const safe = {};
+    const skipKeys = new Set(['provider', 'parsed', 'extraGuess', 'raw', 'cachedAt', 'sourceId', 'renderedName', 'metadataFilename', 'applied', 'hidden']);
+    if (extraGuess && typeof extraGuess === 'object') {
+      for (const key of Object.keys(extraGuess)) {
+        if (!Object.prototype.hasOwnProperty.call(extraGuess, key)) continue;
+        if (skipKeys.has(key)) continue;
+        const val = extraGuess[key];
+        if (typeof val === 'function') continue;
+        if (val && typeof val === 'object') {
+          const cloned = safeCloneJson(val, `extraGuess.${key}`);
+          if (cloned !== null) safe[key] = cloned;
+        } else if (val !== undefined) {
+          safe[key] = val;
+        }
+      }
+    }
+    if (fallback && typeof fallback === 'object') {
+      const fallbackFields = [
+        'seriesTitle',
+        'seriesTitleExact',
+        'seriesTitleEnglish',
+        'seriesTitleRomaji',
+        'originalSeriesTitle',
+        'seriesLookupTitle',
+        'parentCandidate',
+        'mediaFormat',
+        'episodeTitle',
+        'episodeRange',
+        'episode',
+        'season',
+        'title',
+        'year'
+      ];
+      for (const field of fallbackFields) {
+        if (Object.prototype.hasOwnProperty.call(safe, field)) continue;
+        const value = fallback[field];
+        if (value !== undefined && value !== null) safe[field] = value;
+      }
+      if (typeof safe.isMovie === 'undefined' && typeof fallback.isMovie === 'boolean') {
+        safe.isMovie = fallback.isMovie;
+      }
+    }
+    return Object.keys(safe).length ? safe : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function buildExtraGuessSnapshot(source) {
+  if (!source || typeof source !== 'object') return null;
+  const base = (source.extraGuess && typeof source.extraGuess === 'object') ? source.extraGuess : null;
+  return sanitizeExtraGuess(base, source);
+}
+
+function extractProviderRaw(data) {
+  try {
+    if (!data || typeof data !== 'object') return null;
+    if (data.provider && data.provider.raw) return data.provider.raw;
+    if (data.raw) return data.raw;
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function cloneProviderRaw(raw) {
+  if (!raw || typeof raw !== 'object') return raw || null;
+  return safeCloneJson(raw, 'providerRaw');
+}
+
 // Normalizer to ensure enrich entries have consistent shape used by the UI
 function normalizeEnrichEntry(entry) {
   try {
     entry = entry || {};
     const out = Object.assign({}, entry);
+    const extraSnapshot = buildExtraGuessSnapshot(entry);
+    const extraSource = extraSnapshot || (entry.extraGuess && typeof entry.extraGuess === 'object' ? entry.extraGuess : null);
+    out.extraGuess = extraSnapshot;
     out.parsed = entry.parsed || (entry.parsedName || entry.title ? { title: entry.title || null, parsedName: entry.parsedName || null, season: entry.season != null ? entry.season : null, episode: entry.episode != null ? entry.episode : null } : null);
     out.provider = entry.provider || null;
     
@@ -409,19 +497,19 @@ function normalizeEnrichEntry(entry) {
     }
     
     out.title = out.title || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
-  out.seriesTitle = entry.seriesTitle || (entry.extraGuess && entry.extraGuess.seriesTitle) || out.seriesTitle || out.title || null;
-  out.seriesTitleExact = entry.seriesTitleExact || (entry.extraGuess && (entry.extraGuess.seriesTitleExact || entry.extraGuess.originalSeriesTitle)) || out.seriesTitleExact || null;
-  out.seriesTitleEnglish = entry.seriesTitleEnglish || (entry.extraGuess && entry.extraGuess.seriesTitleEnglish) || (entry.provider && entry.provider.seriesTitleEnglish) || out.seriesTitleEnglish || null;
-  out.seriesTitleRomaji = entry.seriesTitleRomaji || (entry.extraGuess && entry.extraGuess.seriesTitleRomaji) || (entry.provider && entry.provider.seriesTitleRomaji) || out.seriesTitleRomaji || null;
+  out.seriesTitle = entry.seriesTitle || (extraSource && extraSource.seriesTitle) || out.seriesTitle || out.title || null;
+  out.seriesTitleExact = entry.seriesTitleExact || (extraSource && (extraSource.seriesTitleExact || extraSource.originalSeriesTitle)) || out.seriesTitleExact || null;
+  out.seriesTitleEnglish = entry.seriesTitleEnglish || (extraSource && extraSource.seriesTitleEnglish) || (entry.provider && entry.provider.seriesTitleEnglish) || out.seriesTitleEnglish || null;
+  out.seriesTitleRomaji = entry.seriesTitleRomaji || (extraSource && extraSource.seriesTitleRomaji) || (entry.provider && entry.provider.seriesTitleRomaji) || out.seriesTitleRomaji || null;
   if (typeof entry.isMovie === 'boolean') out.isMovie = entry.isMovie;
-  else if (entry.extraGuess && typeof entry.extraGuess.isMovie === 'boolean') out.isMovie = entry.extraGuess.isMovie;
+  else if (extraSource && typeof extraSource.isMovie === 'boolean') out.isMovie = extraSource.isMovie;
   if (!out.mediaFormat && entry.mediaFormat) out.mediaFormat = entry.mediaFormat;
-  if (!out.mediaFormat && entry.extraGuess && entry.extraGuess.mediaFormat) out.mediaFormat = entry.extraGuess.mediaFormat;
-    out.originalSeriesTitle = entry.originalSeriesTitle || (entry.extraGuess && entry.extraGuess.originalSeriesTitle) || out.originalSeriesTitle || null;
+  if (!out.mediaFormat && extraSource && extraSource.mediaFormat) out.mediaFormat = extraSource.mediaFormat;
+    out.originalSeriesTitle = entry.originalSeriesTitle || (extraSource && extraSource.originalSeriesTitle) || out.originalSeriesTitle || null;
     if (!out.title && out.seriesTitle) out.title = out.seriesTitle;
-    out.seriesLookupTitle = entry.seriesLookupTitle || (entry.extraGuess && entry.extraGuess.seriesLookupTitle) || out.seriesLookupTitle || null;
+    out.seriesLookupTitle = entry.seriesLookupTitle || (extraSource && extraSource.seriesLookupTitle) || out.seriesLookupTitle || null;
     if (typeof out.parentCandidate === 'undefined') {
-      const parentGuess = entry.parentCandidate || (entry.extraGuess && entry.extraGuess.parentCandidate) || null;
+      const parentGuess = entry.parentCandidate || (extraSource && extraSource.parentCandidate) || null;
       if (parentGuess) out.parentCandidate = parentGuess;
     }
     out.parsedName = out.parsedName || (out.parsed && out.parsed.parsedName) || null;
@@ -3163,7 +3251,7 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
     source: guess.source || null,
     language: 'en',
     timestamp: Date.now(),
-    extraGuess: guess
+    extraGuess: buildExtraGuessSnapshot(guess)
   };
 }
 
@@ -3376,16 +3464,21 @@ async function backgroundEnrichFirstN(scanId, enrichCandidates, session, libPath
         if (!data) { continue; }
         try {
           const providerRendered = renderProviderName(data, key, session);
+          const providerRaw = cloneProviderRaw(extractProviderRaw(data));
           const providerBlock = { 
             title: data.title, 
             year: data.year, 
             season: data.season, 
             episode: data.episode, 
             episodeTitle: data.episodeTitle || '', 
-            raw: data.raw || data, 
+            raw: providerRaw, 
             renderedName: providerRendered, 
             matched: !!data.title,
-            source: data.source || null
+            source: data.source || (data.provider && data.provider.source) || null,
+            seriesTitleEnglish: data.seriesTitleEnglish || null,
+            seriesTitleRomaji: data.seriesTitleRomaji || null,
+            seriesTitleExact: data.seriesTitleExact || null,
+            originalSeriesTitle: data.originalSeriesTitle || null
           };
           try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
           // Merge entire data object to preserve seriesTitleEnglish, seriesTitleRomaji, etc.
@@ -4169,16 +4262,21 @@ app.post('/api/enrich', async (req, res) => {
     try {
       if (data && data.title) {
         const providerRendered = renderProviderName(data, key, req.session);
+        const providerRaw = cloneProviderRaw(extractProviderRaw(data));
         const providerBlock = { 
           title: data.title, 
           year: data.year, 
           season: data.season, 
           episode: data.episode, 
           episodeTitle: data.episodeTitle || '', 
-          raw: data.raw || data, 
+          raw: providerRaw, 
           renderedName: providerRendered, 
           matched: !!data.title,
-          source: data.source || null
+          source: data.source || (data.provider && data.provider.source) || null,
+          seriesTitleEnglish: data.seriesTitleEnglish || null,
+          seriesTitleRomaji: data.seriesTitleRomaji || null,
+          seriesTitleExact: data.seriesTitleExact || null,
+          originalSeriesTitle: data.originalSeriesTitle || null
         };
         try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
         // Merge entire data object to preserve seriesTitleEnglish, seriesTitleRomaji, etc.
@@ -4384,13 +4482,14 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
             if (lookup && lookup.title) {
               if (lookup.provider) {
                 const providerRendered = renderProviderName(lookup, key, req.session);
+                const providerRaw = cloneProviderRaw(extractProviderRaw(lookup));
                 const providerBlock = {
                   title: lookup.title,
                   year: lookup.year,
                   season: lookup.season,
                   episode: lookup.episode,
                   episodeTitle: lookup.episodeTitle || '',
-                  raw: (lookup.provider && lookup.provider.raw) || lookup.raw || lookup.provider,
+                  raw: providerRaw,
                   renderedName: providerRendered || (lookup.provider && lookup.provider.renderedName) || '',
                   matched: lookup.provider && typeof lookup.provider.matched !== 'undefined' ? lookup.provider.matched : !!lookup.title,
                   source: lookup.source || (lookup.provider && lookup.provider.source) || null,
@@ -4667,16 +4766,17 @@ app.post('/api/rename/preview', async (req, res) => {
         const data = await externalEnrich(fromPath, tmdbKey, { username });
         if (data) {
           const providerRendered = renderProviderName(data, fromPath, req.session);
+          const providerRaw = cloneProviderRaw(extractProviderRaw(data));
           const providerBlock = {
             title: data.title,
             year: data.year,
             season: data.season,
             episode: data.episode,
             episodeTitle: data.episodeTitle || '',
-            raw: data.raw || data,
+            raw: providerRaw,
             renderedName: providerRendered,
             matched: !!data.title,
-            source: data.source || null,
+            source: data.source || (data.provider && data.provider.source) || null,
             seriesTitleEnglish: data.seriesTitleEnglish || null,
             seriesTitleRomaji: data.seriesTitleRomaji || null,
             seriesTitleExact: data.seriesTitleExact || null,
