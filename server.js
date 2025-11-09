@@ -6358,8 +6358,16 @@ app.get('/api/tmdb/status', (req, res) => {
   return app._router.handle(req, res, () => {}, 'GET', '/api/meta/status')
 })
 
-// Serve web app static if built
-app.use('/', express.static(path.join(__dirname, 'web', 'dist')));
+// Serve web app static if built (with no-cache for HTML to avoid stale JS references)
+app.use('/', express.static(path.join(__dirname, 'web', 'dist'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
 
 const PORT = process.env.PORT || 5173;
 // export helpers for test harnesses
