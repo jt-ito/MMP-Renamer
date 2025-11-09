@@ -267,60 +267,6 @@ export default function Settings({ pushToast }){
     return map
   }, [])
 
-  const availableProviders = PROVIDERS.filter(p => !providerOrder.includes(p.id))
-
-  const activeProviderElements = providerOrder.map((id, index) => {
-    const info = providerDetails.get(id)
-    if (!info) return null
-    return (
-      <div
-        key={id}
-        draggable
-        onDragStart={() => setDragProvider(id)}
-        onDragOver={(e) => {
-          e.preventDefault()
-          if (!dragProvider || dragProvider === id) return
-          setProviderOrder(current => {
-            const from = current.indexOf(dragProvider)
-            const to = current.indexOf(id)
-            if (from === -1 || to === -1 || from === to) return current
-            const updated = [...current]
-            const [moved] = updated.splice(from, 1)
-            updated.splice(to, 0, moved)
-            return updated
-          })
-          setDirty(true)
-        }}
-        onDrop={(e) => { e.preventDefault(); setDragProvider(null) }}
-        onDragEnd={() => setDragProvider(null)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          padding: '8px 12px',
-          borderRadius: 20,
-          background: 'var(--bg-700)',
-          border: '1px solid var(--bg-600)',
-          cursor: 'grab'
-        }}
-      >
-        <span style={{ fontWeight: 500 }}>{info.label}</span>
-        <span style={{ fontSize: 11, color: 'var(--muted)' }}>#{index + 1}</span>
-        <button
-          className="btn-ghost"
-          style={{ padding: '4px 8px', fontSize: 11 }}
-          onClick={(e) => {
-            e.preventDefault()
-            setProviderOrder(current => current.filter(pid => pid !== id))
-            setDirty(true)
-          }}
-        >
-          Remove
-        </button>
-      </div>
-    )
-  })
-
   return (
     <div style={{padding:16}}>
       <h2>Settings</h2>
@@ -451,50 +397,64 @@ export default function Settings({ pushToast }){
         <div>
           <label style={{fontSize:13, color:'var(--muted)'}}>Default rename template</label>
           <div style={{marginTop:8}}>
-            <label style={{fontSize:13, color:'var(--muted)'}}>Metadata providers (drag to reorder, left runs first)</label>
-            <div
-              style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: 8,
-                marginTop: 6,
-                padding: 8,
-                borderRadius: 8,
-                border: '1px solid var(--bg-600)',
-                minHeight: 52
-              }}
-              onDragOver={(e) => {
-                if (!dragProvider) return
-                e.preventDefault()
-                setProviderOrder(current => {
-                  if (!current.includes(dragProvider)) return current
-                  return current
-                })
-              }}
-              onDrop={(e) => { e.preventDefault(); setDragProvider(null) }}
-            >
-              {activeProviderElements.length ? activeProviderElements : (
-                <div style={{ fontSize: 12, color: 'var(--muted)' }}>No providers selected — metadata lookup will be skipped.</div>
-              )}
+            <label style={{fontSize:13, color:'var(--muted)'}}>Metadata providers</label>
+            <div style={{fontSize:12, color:'var(--muted)', marginTop:4, marginBottom:8}}>
+              Click to enable/disable (green = active, grey = disabled). Drag active providers to reorder priority.
             </div>
-            <div style={{fontSize:12, color:'var(--muted)', marginTop:6}}>Click to add providers. Drag active items to change priority.</div>
-            <div style={{display:'flex', flexWrap:'wrap', gap:8, marginTop:8}}>
-              {availableProviders.map(p => (
-                <button
-                  key={p.id}
-                  className="btn-ghost"
-                  style={{padding:'6px 10px', fontSize:12}}
-                  onClick={() => {
-                    setProviderOrder(current => current.concat(p.id))
-                    setDirty(true)
-                  }}
-                >
-                  Add {p.label}
-                </button>
-              ))}
-              {!availableProviders.length && (
-                <div style={{fontSize:12, color:'var(--muted)'}}>All providers are in use.</div>
-              )}
+            <div style={{display:'flex', flexWrap:'wrap', gap:8, marginBottom:12}}>
+              {PROVIDERS.map((provider) => {
+                const isActive = providerOrder.includes(provider.id)
+                const activeIndex = providerOrder.indexOf(provider.id)
+                return (
+                  <div
+                    key={provider.id}
+                    draggable={isActive}
+                    onDragStart={() => isActive && setDragProvider(provider.id)}
+                    onDragOver={(e) => {
+                      if (!isActive || !dragProvider || dragProvider === provider.id) return
+                      e.preventDefault()
+                      setProviderOrder(current => {
+                        const from = current.indexOf(dragProvider)
+                        const to = current.indexOf(provider.id)
+                        if (from === -1 || to === -1 || from === to) return current
+                        const updated = [...current]
+                        const [moved] = updated.splice(from, 1)
+                        updated.splice(to, 0, moved)
+                        return updated
+                      })
+                      setDirty(true)
+                    }}
+                    onDrop={(e) => { e.preventDefault(); setDragProvider(null) }}
+                    onDragEnd={() => setDragProvider(null)}
+                    onClick={() => {
+                      if (isActive) {
+                        setProviderOrder(current => current.filter(id => id !== provider.id))
+                      } else {
+                        setProviderOrder(current => [...current, provider.id])
+                      }
+                      setDirty(true)
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '8px 12px',
+                      borderRadius: 20,
+                      background: isActive ? 'var(--success)' : 'var(--bg-600)',
+                      color: isActive ? '#fff' : 'var(--muted)',
+                      border: isActive ? '1px solid var(--success-dark)' : '1px solid var(--bg-500)',
+                      cursor: isActive ? 'grab' : 'pointer',
+                      userSelect: 'none',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <span style={{ fontWeight: 500 }}>{provider.label}</span>
+                    {isActive && (
+                      <span style={{ fontSize: 11, opacity: 0.8 }}>#{activeIndex + 1}</span>
+                    )}
+                  </div>
+                )
+              })}
             </div>
             {providerOrder.length === 1 && providerOrder[0] === 'anilist' && (
               <div style={{marginTop:8, padding:8, borderRadius:8, background:'var(--bg-700)', color:'#ffc371', fontSize:12}}>
