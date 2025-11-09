@@ -233,6 +233,37 @@ if (!db) {
 
 try { healCachedEnglishAndMovieFlags(); } catch (e) { try { appendLog(`ENRICH_CACHE_HEAL_INIT_FAIL err=${e && e.message ? e.message : String(e)}`); } catch (ee) {} }
 
+// Filter out applied/hidden items from loaded scans on startup
+// (scans may have been persisted before items were applied/hidden)
+try {
+  let filteredCount = 0;
+  const scanIds = Object.keys(scans || {});
+  for (const sid of scanIds) {
+    try {
+      const scan = scans[sid];
+      if (!scan || !Array.isArray(scan.items)) continue;
+      const before = scan.items.length;
+      scan.items = scan.items.filter(it => {
+        try {
+          const k = canonicalize(it.canonicalPath);
+          const e = enrichCache[k] || null;
+          if (e && (e.hidden || e.applied)) return false;
+          return true;
+        } catch (e) { return true; }
+      });
+      const removed = before - scan.items.length;
+      if (removed > 0) {
+        scan.totalCount = scan.items.length;
+        filteredCount += removed;
+      }
+    } catch (e) { /* ignore per-scan errors */ }
+  }
+  if (filteredCount > 0) {
+    try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); } catch (e) {}
+    appendLog(`STARTUP_SCAN_FILTER removed=${filteredCount} applied/hidden items from persisted scans`);
+  }
+} catch (e) { appendLog(`STARTUP_SCAN_FILTER_FAIL err=${e && e.message ? e.message : String(e)}`); }
+
 // Initialize DB for scans if available
 // (DB was initialized above; this later duplicate block removed)
 
