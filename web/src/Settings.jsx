@@ -540,7 +540,7 @@ export default function Settings({ pushToast }){
             <strong>Docker users:</strong> Mount a common parent directory containing both input and output paths. Docker treats each volume mount as a separate filesystem, preventing hardlinks between separately mounted paths even if they're on the same physical drive.
           </div>
           {outputFolders.map((folder, index) => (
-            <div key={index} style={{display:'flex', gap:16, marginBottom:12}}>
+            <div key={index} style={{display:'flex', gap:20, marginBottom:14, alignItems:'stretch'}}>
               <div style={{flex:1}}>
                 <input 
                   value={folder.name || ''} 
@@ -565,16 +565,26 @@ export default function Settings({ pushToast }){
                   style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
                 />
               </div>
-              <button 
-                className='btn-ghost' 
-                onClick={() => {
-                  setOutputFolders(outputFolders.filter((_, i) => i !== index));
-                  setDirty(true);
-                }}
-                style={{padding:'10px 16px', height:'44px', flexShrink:0, marginTop:'19px'}}
-              >
-                Remove
-              </button>
+              <div style={{display:'flex', flexDirection:'column', gap:10, flexShrink:0, minWidth:'120px'}}>
+                <button
+                  className={'btn-save' + (dirty ? '' : ' disabled')}
+                  onClick={() => { if (dirty) save(); }}
+                  disabled={!dirty}
+                  style={{padding:'10px 18px', height:'44px'}}
+                >
+                  Save
+                </button>
+                <button 
+                  className='btn-ghost' 
+                  onClick={() => {
+                    setOutputFolders(outputFolders.filter((_, i) => i !== index));
+                    setDirty(true);
+                  }}
+                  style={{padding:'10px 16px', height:'44px', marginTop:'auto'}}
+                >
+                  Remove
+                </button>
+              </div>
             </div>
           ))}
           <button 
