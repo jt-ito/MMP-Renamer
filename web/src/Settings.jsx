@@ -524,9 +524,11 @@ export default function Settings({ pushToast }){
           <label style={{fontSize:13, color:'var(--muted)'}}>Alternative Output Folders</label>
           <div style={{fontSize:12, color:'var(--muted)', marginTop:4, marginBottom:10}}>
             Add multiple output destinations. When applying items, you'll be prompted to choose which folder to use.
+            <br/>
+            <strong>Docker users:</strong> Mount a common parent directory containing both input and output paths. Docker treats each volume mount as a separate filesystem, preventing hardlinks between separately mounted paths even if they're on the same physical drive.
           </div>
           {outputFolders.map((folder, index) => (
-            <div key={index} style={{display:'flex', gap:8, marginBottom:10, alignItems:'flex-start'}}>
+            <div key={index} style={{display:'flex', gap:8, marginBottom:10, alignItems:'center'}}>
               <div style={{flex:1}}>
                 <input 
                   value={folder.name || ''} 
@@ -557,7 +559,7 @@ export default function Settings({ pushToast }){
                   setOutputFolders(outputFolders.filter((_, i) => i !== index));
                   setDirty(true);
                 }}
-                style={{padding:'10px 14px', marginTop:0, height:'44px', alignSelf:'flex-start'}}
+                style={{padding:'10px 14px', height:'44px', flexShrink:0}}
               >
                 Remove
               </button>
