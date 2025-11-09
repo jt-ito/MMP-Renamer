@@ -81,6 +81,7 @@ export default function Settings({ pushToast }){
   const [tvdbV4UserPin, setTvdbV4UserPin] = useState('')
   const [providerOrder, setProviderOrder] = useState([...DEFAULT_PROVIDER_ORDER])
   const [dragProvider, setDragProvider] = useState(null)
+  const [dragOverIndex, setDragOverIndex] = useState(null)
   const [renameTemplate, setRenameTemplate] = useState('{title} - {epLabel} - {episodeTitle}')
   const [showTmdbKey, setShowTmdbKey] = useState(false)
   const [showAnilistKey, setShowAnilistKey] = useState(false)
@@ -407,52 +408,80 @@ export default function Settings({ pushToast }){
           <div style={{marginTop:8}}>
             <label style={{fontSize:13, color:'var(--muted)'}}>Metadata providers</label>
             <div style={{fontSize:12, color:'var(--muted)', marginTop:4, marginBottom:8}}>
-              Click to enable/disable. Active buttons glow green and stay on the left (slot 1 is the far-left position).
+              Drag and drop to reorder providers. The first provider in the list is used first.
             </div>
-            <div style={{display:'flex', flexWrap:'wrap', gap:8, marginBottom:12}}>
-              {orderedProviders.map((provider) => {
-                const activeIndex = providerOrder.indexOf(provider.id)
-                const isActive = activeIndex !== -1
-                const slotNumber = isActive ? activeIndex + 1 : null
+            <div className="provider-slots-container">
+              {providerOrder.map((id, index) => {
+                const provider = providerDetails.get(id)
+                if (!provider) return null
+                const isDragging = dragProvider === provider.id
                 return (
-                  <button
-                    key={provider.id}
-                    className={`provider-button ${isActive ? 'active' : 'inactive'}`}
-                    draggable={isActive}
-                    onDragStart={() => isActive && setDragProvider(provider.id)}
+                  <div
+                    key={id}
+                    className={`provider-slot-item ${isDragging ? 'dragging' : ''} ${dragOverIndex === index ? 'drag-over' : ''}`}
+                    draggable
+                    onDragStart={() => setDragProvider(provider.id)}
+                    onDragEnd={() => { setDragProvider(null); setDragOverIndex(null) }}
                     onDragOver={(e) => {
-                      if (!isActive || !dragProvider || dragProvider === provider.id) return
                       e.preventDefault()
-                      setProviderOrder(current => {
-                        const from = current.indexOf(dragProvider)
-                        const to = current.indexOf(provider.id)
-                        if (from === -1 || to === -1 || from === to) return current
-                        const updated = [...current]
-                        const [moved] = updated.splice(from, 1)
-                        updated.splice(to, 0, moved)
-                        return updated
-                      })
-                      setDirty(true)
+                      setDragOverIndex(index)
                     }}
-                    onDrop={(e) => { e.preventDefault(); setDragProvider(null) }}
-                    onDragEnd={() => setDragProvider(null)}
-                    onClick={() => {
-                      if (isActive) {
-                        setProviderOrder(current => current.filter(id => id !== provider.id))
-                      } else {
-                        setProviderOrder(current => [...current, provider.id])
+                    onDrop={() => {
+                      if (dragProvider && dragProvider !== provider.id) {
+                        const fromIndex = providerOrder.indexOf(dragProvider)
+                        const toIndex = index
+                        const updated = [...providerOrder]
+                        const [moved] = updated.splice(fromIndex, 1)
+                        updated.splice(toIndex, 0, moved)
+                        setProviderOrder(updated)
+                        setDirty(true)
                       }
-                      setDirty(true)
+                      setDragOverIndex(null)
                     }}
-                    type="button"
-                    aria-pressed={isActive}
                   >
-                    {isActive && <span className="provider-slot">Slot {slotNumber}</span>}
-                    <span>{provider.label}</span>
-                  </button>
+                    <div className="slot-label">Slot {index + 1}</div>
+                    <button
+                      className="provider-button active"
+                      onClick={() => {
+                        setProviderOrder(current => current.filter(pid => pid !== provider.id))
+                        setDirty(true)
+                      }}
+                      type="button"
+                      aria-pressed="true"
+                    >
+                      {provider.label}
+                    </button>
+                  </div>
                 )
               })}
+              {dragOverIndex === providerOrder.length && (
+                <div className="provider-slot-item drag-over" />
+              )}
             </div>
+
+            <div style={{marginTop:16}}>
+              <label style={{fontSize:13, color:'var(--muted)'}}>Inactive providers</label>
+              <div style={{display:'flex', flexWrap:'wrap', gap:8, marginTop:8}}>
+                {orderedProviders.map((provider) => {
+                  if (providerOrder.includes(provider.id)) return null
+                  return (
+                    <button
+                      key={provider.id}
+                      className="provider-button inactive"
+                      onClick={() => {
+                        setProviderOrder(current => [...current, provider.id])
+                        setDirty(true)
+                      }}
+                      type="button"
+                      aria-pressed="false"
+                    >
+                      {provider.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
             {providerOrder.length === 1 && providerOrder[0] === 'anilist' && (
               <div style={{marginTop:8, padding:8, borderRadius:8, background:'var(--bg-700)', color:'#ffc371', fontSize:12}}>
                 AniList does not provide episode titles. Add another provider (e.g., TVDB or TMDb) if you need episode names.
