@@ -2308,6 +2308,7 @@ export default function App() {
                   {scanMeta ? (
             <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
               previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
+              selectOutputFolder={selectOutputFolder}
               selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
               providerKey={providerKey} hideOne={hideOnePath}
               searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching} />
@@ -2393,7 +2394,7 @@ function LogsPanel({ logs, refresh, pushToast }) {
   )
 }
 
-function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false }) {
+function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null }) {
   const listRef = useRef(null)
   const containerRef = useRef(null)
   const [listHeight, setListHeight] = useState(700)
@@ -2560,13 +2561,16 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               try {
                 safeSetLoadingEnrich(prev => ({ ...prev, [it.canonicalPath]: true }))
                 const plans = await previewRename([it])
-                
-                const selection = await selectOutputFolder([it.canonicalPath])
-                if (!selection || selection.cancelled) {
-                  safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[it.canonicalPath]; return n })
-                  return
+
+                let selectedFolderPath = null
+                if (selectOutputFolder) {
+                  const selection = await selectOutputFolder([it.canonicalPath])
+                  if (!selection || selection.cancelled) {
+                    safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[it.canonicalPath]; return n })
+                    return
+                  }
+                  selectedFolderPath = selection.path ?? null
                 }
-                const selectedFolderPath = selection.path ?? null
                 
                 pushToast && pushToast('Preview ready', 'Rename plan generated — applying now')
                 const res = await applyRename(plans, false, selectedFolderPath)
