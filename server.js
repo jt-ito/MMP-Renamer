@@ -2975,6 +2975,26 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
             pushAlternate('synonym', altTitles.synonyms);
             pushAlternate('other', altTitles.other);
 
+            const chooseEpisodeTitle = () => {
+              if (res.episodeTitle) return res.episodeTitle;
+              if (res.episodeTitles) {
+                if (res.episodeTitles.english) return res.episodeTitles.english;
+                if (res.episodeTitles.romaji) return res.episodeTitles.romaji;
+                if (res.episodeTitles.kanji) return res.episodeTitles.kanji;
+              }
+              return null;
+            };
+
+            const anidbEpisodeTitle = chooseEpisodeTitle();
+            if (anidbEpisodeTitle) {
+              const normalized = normalizeCapitalization(String(anidbEpisodeTitle).trim()).trim();
+              if (normalized) {
+                guess.episodeTitle = normalized;
+                guess.extraGuess = guess.extraGuess || {};
+                guess.extraGuess.episodeTitle = normalized;
+              }
+            }
+
             const providerId = res.id || raw.aid || raw.fid || raw.fileId || null;
             guess.provider = {
               matched: true,
@@ -2995,26 +3015,6 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
             const parsedYear = rawYear != null ? Number(String(rawYear).slice(0, 4)) : NaN;
             if (!Number.isNaN(parsedYear) && parsedYear > 0) {
               guess.year = String(parsedYear);
-            }
-
-            const chooseEpisodeTitle = () => {
-              if (res.episodeTitle) return res.episodeTitle;
-              if (res.episodeTitles) {
-                if (res.episodeTitles.english) return res.episodeTitles.english;
-                if (res.episodeTitles.romaji) return res.episodeTitles.romaji;
-                if (res.episodeTitles.kanji) return res.episodeTitles.kanji;
-              }
-              return null;
-            };
-
-            const anidbEpisodeTitle = chooseEpisodeTitle();
-            if (anidbEpisodeTitle) {
-              const normalized = normalizeCapitalization(String(anidbEpisodeTitle).trim()).trim();
-              if (normalized) {
-                guess.episodeTitle = normalized;
-                guess.extraGuess = guess.extraGuess || {};
-                guess.extraGuess.episodeTitle = normalized;
-              }
             }
 
             let episodeSeason = res.seasonNumber != null ? res.seasonNumber : normSeason;
