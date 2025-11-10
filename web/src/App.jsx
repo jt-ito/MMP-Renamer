@@ -2212,14 +2212,9 @@ export default function App() {
                           // clear loading flags (guard in case enrichOne did not remove them)
                           safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
 
-                          // Selected paths already refreshed individually above; no global refresh needed
+                          // Keep items selected after rescan so user can immediately apply
+                          // Enrichment cache has already been refreshed by enrichOne calls above
 
-                          setSelected(prev => {
-                            if (!prev) return {}
-                            const next = { ...prev }
-                            for (const p of selectedPaths) delete next[p]
-                            return next
-                          })
                           const failureCount = failed.length
                           if (failureCount) {
                             pushToast && pushToast('Rescan', `Rescanned ${successCount}/${selectedPaths.length} items (${failureCount} failed).`)
