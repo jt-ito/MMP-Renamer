@@ -452,19 +452,321 @@ button.folder-option:hover {
 	.btn-save, .btn-ghost, .btn-cta { padding:10px 12px; min-width:56px }
 }
 
-/* Light theme overrides */
-.light { --bg-900: #f8fafc; --bg-800: #ffffff; --bg-700: #f1f5f9; --bg-600: #e2e8f0; --muted: #555555; --accent: #0b1220 }
-
-/* Improve contrast for the light theme with modern tokens */
+/* Light theme overrides - Modern, clean design system */
 .light {
-	--bg-900: #F8FAFC;
-	--bg-800: #FFFFFF;
-	--bg-700: #F1F5F9;
-	--bg-600: #E2E8F0;
-	--muted: #475569;
-	--accent: #0F172A;
-	--accent-cta: #0EA5A3;
-	--accent-cta-2: #2563EB;
+	/* Modern light color palette - inspired by clean, professional design systems */
+	--bg-900: #F8FAFB; /* soft off-white background */
+	--bg-800: #FFFFFF; /* pure white cards */
+	--bg-700: #F1F4F9; /* subtle gray surface */
+	--bg-600: #DFE4EA; /* refined border color */
+	--muted: #64748B; /* balanced gray for secondary text */
+	--accent: #0F172A; /* deep slate for primary text */
+	--accent-cta: #0891B2; /* vibrant cyan for primary actions */
+	--accent-cta-2: #6366F1; /* modern indigo for variety */
+	--hunter-green: #059669; /* emerald green for save actions */
+	--danger-dark: #DC2626; /* bright red for destructive actions */
+}
+
+/* Light theme specific adjustments */
+.light body {
+	background: var(--bg-900);
+	color: var(--accent);
+}
+
+.light .app header {
+	background: var(--bg-800);
+	border-bottom: 1px solid var(--bg-600);
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.light .app header button {
+	border: 1px solid var(--bg-600);
+	color: var(--accent);
+}
+
+.light .app header button:hover {
+	background: var(--bg-700);
+	border-color: #CBD5E1;
+}
+
+.light .btn-ghost {
+	border-color: var(--bg-600);
+	color: var(--accent);
+}
+
+.light .btn-ghost:hover {
+	background: var(--bg-700);
+	border-color: #94A3B8;
+}
+
+.light .btn-cta {
+	background: var(--accent-cta);
+	color: #FFFFFF;
+	box-shadow: 0 2px 8px rgba(8, 145, 178, 0.25);
+}
+
+.light .btn-cta:hover {
+	background: #0E7490;
+	box-shadow: 0 4px 12px rgba(8, 145, 178, 0.35);
+}
+
+.light .btn-save {
+	background: var(--hunter-green);
+	color: #FFFFFF;
+	box-shadow: 0 2px 8px rgba(5, 150, 105, 0.25);
+}
+
+.light .btn-save:hover {
+	background: #047857;
+	box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+}
+
+.light .btn-search {
+	background: var(--hunter-green);
+	color: #FFFFFF;
+}
+
+.light .btn-search:hover {
+	background: #047857;
+}
+
+.light .btn-clear {
+	background: var(--danger-dark);
+	color: #FFFFFF;
+}
+
+.light .btn-clear:hover {
+	background: #B91C1C;
+}
+
+.light .list {
+	background: var(--bg-800);
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.light .row {
+	border-bottom: 1px solid var(--bg-600);
+	background: var(--bg-800);
+}
+
+.light .row:nth-child(even) {
+	background: var(--bg-700);
+}
+
+.light .row.row-select-mode:hover {
+	background: rgba(8, 145, 178, 0.08);
+}
+
+.light .row.row-selected {
+	background: rgba(8, 145, 178, 0.12);
+	border-color: rgba(8, 145, 178, 0.3);
+	box-shadow: inset 0 0 0 1px rgba(8, 145, 178, 0.2);
+}
+
+.light .row.row-selected .path {
+	color: var(--muted);
+}
+
+.light .row.row-selected .title {
+	color: var(--accent);
+	font-weight: 700;
+}
+
+.light .row input[type="checkbox"] {
+	border: 2px solid #CBD5E1;
+	background: #FFFFFF;
+	box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.light .row input[type="checkbox"]:hover,
+.light .hidden-list input[type="checkbox"]:hover {
+	border-color: var(--accent-cta);
+}
+
+.light .row input[type="checkbox"]:checked,
+.light .hidden-list input[type="checkbox"]:checked {
+	background: var(--accent-cta);
+	border-color: var(--accent-cta);
+}
+
+.light .provider-button {
+	border-color: var(--bg-600);
+	color: var(--accent);
+	background: var(--bg-800);
+}
+
+.light .provider-button.inactive:hover {
+	background: var(--bg-700);
+	border-color: #94A3B8;
+}
+
+.light .provider-button.active {
+	background: var(--accent-cta);
+	color: #FFFFFF;
+	border-color: var(--accent-cta);
+	box-shadow: 0 4px 12px rgba(8, 145, 178, 0.3);
+}
+
+.light .provider-slot {
+	background: rgba(8, 145, 178, 0.15);
+	color: var(--accent-cta);
+}
+
+.light .provider-slot-item.drag-over {
+	background: rgba(8, 145, 178, 0.1);
+	border: 2px dashed var(--accent-cta);
+}
+
+.light .form-card {
+	background: var(--bg-800);
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.05);
+	border: 1px solid var(--bg-600);
+}
+
+.light .settings-page-content .form-card {
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 8px 16px rgba(0, 0, 0, 0.04);
+}
+
+.light .form-input,
+.light select.form-input {
+	background: var(--bg-800);
+	border-color: var(--bg-600);
+	color: var(--accent);
+}
+
+.light .form-input:focus,
+.light select.form-input:focus {
+	outline: 2px solid rgba(8, 145, 178, 0.3);
+	border-color: var(--accent-cta);
+}
+
+.light .header-search .form-input {
+	background: var(--bg-700);
+	border-color: var(--bg-600);
+}
+
+.light select.form-input option,
+.light select.form-input optgroup {
+	background: var(--bg-800);
+	color: var(--accent);
+}
+
+.light .logs {
+	background: var(--bg-800);
+	border: 1px solid var(--bg-600);
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.light .logs pre {
+	background: var(--bg-700);
+	color: var(--muted);
+	border: 1px solid var(--bg-600);
+}
+
+.light .modal-overlay {
+	background: rgba(15, 23, 42, 0.5);
+	backdrop-filter: blur(8px);
+}
+
+.light .modal-card {
+	background: var(--bg-800);
+	border: 1px solid var(--bg-600);
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+}
+
+.light button.folder-option {
+	background: var(--bg-700);
+	border: 1px solid var(--bg-600);
+}
+
+.light button.folder-option:hover {
+	border-color: var(--accent-cta);
+	background: rgba(8, 145, 178, 0.08);
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.light .toast {
+	background: var(--bg-800);
+	color: var(--accent);
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+	border: 1px solid var(--bg-600);
+}
+
+.light .toast-body {
+	color: var(--muted);
+}
+
+.light .actions button {
+	background: var(--bg-700);
+	border-color: var(--bg-600);
+	color: var(--accent);
+}
+
+.light .actions button:hover {
+	background: var(--bg-600);
+	border-color: #94A3B8;
+}
+
+.light .actions button.btn-apply {
+	background: var(--accent-cta);
+	color: #FFFFFF;
+	border: none;
+	box-shadow: 0 2px 8px rgba(8, 145, 178, 0.3);
+}
+
+.light .actions button.btn-apply:hover {
+	background: #0E7490;
+	box-shadow: 0 4px 12px rgba(8, 145, 178, 0.4);
+}
+
+.light .loading-card {
+	background: var(--bg-800);
+	border: 1px solid var(--bg-600);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+.light .folder-chip {
+	background: rgba(8, 145, 178, 0.12);
+	color: var(--accent);
+}
+
+.light .folder-chip.more {
+	background: var(--bg-600);
+	color: var(--muted);
+}
+
+.light .hidden-page .form-card {
+	border: 1px solid var(--bg-600);
+	background: var(--bg-800);
+}
+
+/* Light theme focus states */
+.light button:focus {
+	outline: 2px solid rgba(8, 145, 178, 0.3);
+}
+
+.light .side {
+	background: var(--bg-800);
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+/* Light theme progress bar */
+.light .progress-bar {
+	background: var(--bg-600);
+}
+
+.light .progress-bar .fill {
+	background: linear-gradient(90deg, var(--accent-cta), var(--accent-cta-2));
+}
+
+/* Light theme animations - adjust pulse for visibility */
+@keyframes light-pulse-border {
+	0%, 100% { border-color: var(--bg-600); }
+	50% { border-color: var(--accent-cta); opacity: 1; }
+}
+
+.light .loading-pulse {
+	animation: light-pulse-border 2s ease-in-out infinite;
 }
 
 /* Dimming for UI controls that are disabled but still visible */
