@@ -311,7 +311,7 @@ export default function Settings({ pushToast }){
   }, [providerDetails, providerOrder])
 
   return (
-    <div style={{padding:16}}>
+    <div className="settings-page" style={{padding:16}}>
       <h2>Settings</h2>
       <div style={{marginTop:12, display:'flex', flexDirection:'column', gap:16}}>
         
