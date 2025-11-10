@@ -302,7 +302,7 @@ Attack on Titan (2013)/Season 01/Attack on Titan (2013) - S01E05 - First Battle.
 
 ---
 
-## ðŸš€ Usage Guide
+## 🚀 Usage Guide
 
 ### Scanning Your Library
 
@@ -373,7 +373,7 @@ Admins can review/unhide items:
 
 ---
 
-## ðŸ“š Advanced Features
+## 📚 Advanced Features
 
 ### Server-Side Search
 
@@ -452,11 +452,11 @@ data/
 â””â”€â”€ wiki-episode-cache.json # Wikipedia episode cache
 ```
 
-**Important**: Do not commit `data/` to version controlâ€”it contains API keys and session secrets.
+**Important**: Do not commit `data/` to version control—it contains API keys and session secrets.
 
 ---
 
-## ðŸ§ª Testing & Development
+## 🧪 Testing & Development
 
 ### Run Tests
 
@@ -492,7 +492,7 @@ npm run test:anidb         # AniDB provider tests
 
 ---
 
-## ðŸ”§ Troubleshooting
+## 🔧 Troubleshooting
 
 ### Common Issues
 
@@ -543,7 +543,7 @@ See [Docker Hardlink Requirements](#-docker-deployment) for detailed examples.
 
 ---
 
-## ðŸ“– API Reference
+## 📖 API Reference
 
 ### Endpoints
 
@@ -580,7 +580,7 @@ curl "http://localhost:5173/api/scan/<scan-id>/search?q=attack&offset=0&limit=50
 
 ---
 
-## ðŸ“„ Additional Documentation
+## 📄 Additional Documentation
 
 - **[AniDB Integration Guide](ANIDB_INTEGRATION.md)**: Detailed AniDB setup, rate limiting, ED2K hashing
 - **[AniDB Migration Guide](ANIDB_MIGRATION_GUIDE.md)**: Migrating from other systems to AniDB-based enrichment
@@ -589,7 +589,7 @@ curl "http://localhost:5173/api/scan/<scan-id>/search?q=attack&offset=0&limit=50
 
 ---
 
-## ðŸ™ Credits
+## 🙏 Credits
 
 - **Built with**: Node.js, Express, React, Vite, react-window
 - **Metadata Providers**: AniDB, AniList, TVDB, TMDb, Wikipedia
@@ -597,13 +597,13 @@ curl "http://localhost:5173/api/scan/<scan-id>/search?q=attack&offset=0&limit=50
 
 ---
 
-## ðŸ“œ License
+## 📜 License
 
 MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-## ðŸ†˜ Support
+## 🆘 Support
 
 - **Issues**: [GitHub Issues](https://github.com/jt-ito/MMP-Renamer/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/jt-ito/MMP-Renamer/discussions)
