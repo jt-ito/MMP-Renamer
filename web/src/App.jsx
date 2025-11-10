@@ -2402,6 +2402,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const [dragStartIndex, setDragStartIndex] = useState(null)
   const [dragCurrentIndex, setDragCurrentIndex] = useState(null)
   const dragInitialSelected = useRef({})
+  const lastClickedIndex = useRef(null)
   
   // Handle drag selection
   useEffect(() => {
@@ -2496,7 +2497,26 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     // ignore clicks originating from action buttons or the checkbox container
     const interactive = ev.target.closest('.actions') || ev.target.closest('button') || ev.target.closest('a') || ev.target.closest('input')
     if (interactive) return
-    toggleSelect(it.canonicalPath, !isSelected)
+    
+    // Handle shift-click for range selection
+    if (ev.shiftKey && lastClickedIndex.current !== null && lastClickedIndex.current !== index) {
+      const start = Math.min(lastClickedIndex.current, index)
+      const end = Math.max(lastClickedIndex.current, index)
+      
+      // Select all items in range
+      for (let i = start; i <= end; i++) {
+        const item = items[i]
+        if (item && item.canonicalPath) {
+          toggleSelect(item.canonicalPath, true)
+        }
+      }
+    } else {
+      // Normal click - toggle selection
+      toggleSelect(it.canonicalPath, !isSelected)
+    }
+    
+    // Update last clicked index for future shift-clicks
+    lastClickedIndex.current = index
   }
 
     return (
@@ -2513,6 +2533,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
           if (ev.key === 'Enter' || ev.key === ' ') {
             ev.preventDefault()
             toggleSelect(it.canonicalPath, !isSelected)
+            lastClickedIndex.current = index
           }
         }}
       >
