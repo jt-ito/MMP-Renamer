@@ -6027,10 +6027,15 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
                 throw linkErrFinal;
               }
             } else {
-              // target already exists
+              // target already exists - check if it's a file or directory
+              try {
+                const stat = fs.statSync(effectiveToResolved);
+                appendLog(`HARDLINK_SKIP_EXISTS to=${effectiveToResolved} isFile=${stat.isFile()} isDir=${stat.isDirectory()} size=${stat.size}`);
+              } catch (e) {
+                appendLog(`HARDLINK_SKIP_EXISTS to=${effectiveToResolved} statErr=${e && e.message ? e.message : String(e)}`);
+              }
               resultsItem.status = 'exists';
               resultsItem.to = effectiveToResolved;
-              appendLog(`HARDLINK_SKIP_EXISTS to=${effectiveToResolved}`);
             }
 
               // mark applied in enrich cache and persist (use canonicalized keys)
