@@ -311,12 +311,12 @@ export default function Settings({ pushToast }){
   }, [providerDetails, providerOrder])
 
   return (
-    <div className="settings-page" style={{padding:16}}>
+    <div className="settings-page-content">
       <h2>Settings</h2>
-      <div style={{marginTop:12, display:'flex', flexDirection:'column', gap:16}}>
+  <div className="settings-section-stack">
         
         {/* API Keys Section */}
-        <div className="form-card">
+  <div className="form-card">
           <h3 style={{marginTop:0, marginBottom:16, fontSize:16, fontWeight:600}}>API Keys</h3>
           <div style={{display:'flex', flexDirection:'column', gap:16}}>
 
@@ -443,7 +443,7 @@ export default function Settings({ pushToast }){
   {/* Input path moved below the template section per UX request */}
 
         {/* Metadata & Paths Section */}
-        <div className="form-card">
+  <div className="form-card">
           <h3 style={{marginTop:0, marginBottom:16, fontSize:16, fontWeight:600}}>Metadata & File Paths</h3>
           <div style={{display:'flex', flexDirection:'column', gap:16}}>
 
@@ -690,15 +690,15 @@ export default function Settings({ pushToast }){
           </div>
         </div>
 
-        {/* Save/Clear Actions */}
-        <div style={{display:'flex', gap:8}}>
+  {/* Save/Clear Actions */}
+  <div className="settings-actions">
           <button className={"btn-save" + (dirty ? '' : ' disabled')} onClick={save} disabled={!dirty}>Save</button>
           <button className="btn-ghost" onClick={clearAll}>Clear</button>
         </div>
 
         {/* Change password section */}
         <div>
-          <h3 style={{marginBottom:8}}>Change password</h3>
+          <h3>Change password</h3>
             <div className="form-card">
               <div style={{display:'flex', flexDirection:'column', gap:10}}>
                 <div>

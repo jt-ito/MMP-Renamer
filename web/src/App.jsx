@@ -2466,6 +2466,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const loadingState = it && loadingEnrich[it.canonicalPath]
   const loading = Boolean(loadingState)
   const isSelected = !!(selectMode && it && selected?.[it.canonicalPath])
+  const isRangeSelecting = isDragging && dragStartIndex !== null && dragCurrentIndex !== null && dragStartIndex !== dragCurrentIndex
 
   // Only use the two canonical outputs: parsed and provider
   const parsed = enrichment?.parsed || null
@@ -2488,7 +2489,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const basename = (it && it.canonicalPath ? it.canonicalPath.split('/').pop() : '')
   const primary = providerRendered || parsedName || basename || ''
   const handleRowClick = (ev) => {
-    if (!selectMode || !it || isDragging) return
+    if (!selectMode || !it || isRangeSelecting) return
     // ignore clicks originating from action buttons or the checkbox container
     const interactive = ev.target.closest('.actions') || ev.target.closest('button') || ev.target.closest('a') || ev.target.closest('input')
     if (interactive) return
@@ -2512,6 +2513,10 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     
     // Update last clicked index for future shift-clicks
     lastClickedIndex.current = index
+    setIsDragging(false)
+    setDragStartIndex(null)
+    setDragCurrentIndex(null)
+    dragInitialSelected.current = {}
   }
 
     return (

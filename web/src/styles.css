@@ -161,8 +161,58 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 /* Form and page centering utilities */
 .centered-page { display:flex; align-items:center; justify-content:center; min-height: calc(100vh - 120px); padding:20px }
 .form-card { background: var(--bg-800); padding:24px; border-radius: calc(var(--radius) + 2px); box-shadow: 0 14px 40px rgba(2,6,23,0.6); max-width:560px; width:100%; }
-/* Remove grey background box on Settings page */
-.settings-page .form-card { background: transparent; box-shadow: none; padding: 0; max-width: 100%; }
+
+/* Settings page layout */
+.list.settings-page {
+	background: transparent;
+	box-shadow: none;
+	border: none;
+	padding: 0;
+}
+
+.settings-page-content {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	width: 100%;
+	padding: 16px 20px;
+	max-width: 960px;
+	margin: 0 auto;
+}
+
+.settings-page-content .form-card {
+	background: var(--bg-800);
+	box-shadow: 0 12px 32px rgba(2,6,23,0.55);
+	border: 1px solid var(--bg-600);
+	max-width: none;
+	width: 100%;
+	padding: 24px;
+}
+
+.settings-page-content h2 {
+	margin: 0;
+	font-size: 1.4rem;
+	font-weight: 600;
+}
+
+.settings-page-content h3 {
+	margin: 0 0 12px 0;
+	font-size: 1rem;
+	font-weight: 600;
+}
+
+.settings-section-stack {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	margin-top: 12px;
+}
+
+.settings-actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
 .form-label { font-size:13px; color:var(--muted); margin-bottom:6px; display:block }
 .form-input { width:100%; padding:12px 14px; border-radius:12px; border:1px solid var(--bg-600); background:transparent; color:var(--accent); box-sizing:border-box }
 .input-group { display:flex; gap:8px; align-items:center }
