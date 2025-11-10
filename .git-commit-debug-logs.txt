@@ -1,3 +1,0 @@
-Commit debug: server and client logs for hide/refresh confirmation
-
-Add server log 'HIDE_UPDATED_SCANS' and client endpoint '/api/debug/client-refreshed' and client calls.

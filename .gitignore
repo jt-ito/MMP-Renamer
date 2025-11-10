@@ -12,6 +12,10 @@ web/dist/
 data/
 logs.txt
 
+# Local scratch files
+tmp_*
+scan-cache-temp.json
+
 # Environment files
 .env
 .env.local

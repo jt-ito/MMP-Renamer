@@ -1,4 +1,0 @@
-Commit debug: add hide-events polling API and client poller to force refresh after hides
-
-Server: /api/enrich/hide-events and hideEvents queue
-Client: poller calling the endpoint and reloading affected scans/enrichment

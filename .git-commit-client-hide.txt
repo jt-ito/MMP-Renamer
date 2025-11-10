@@ -1,3 +1,0 @@
-Commit client: wait for server-confirmation & scan reload before final Hide toast
-
-This placeholder contains the commit message for the client changes applied to web/src/App.jsx.

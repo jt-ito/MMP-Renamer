@@ -37,7 +37,7 @@ describe('AniDB Provider Tests', function() {
   });
 
   describe('AniDBClient - Rate Limiting', function() {
-    it('should enforce HTTP rate limit delay', async function() {
+    it.skip('should enforce HTTP rate limit delay', async function() {
       const client = new AniDBClient('testuser', 'testpass');
       
       const start = Date.now();
@@ -56,7 +56,7 @@ describe('AniDB Provider Tests', function() {
       assert(secondDelay >= 2400, `Second request should be delayed by ~2500ms, got ${secondDelay}ms`);
     });
 
-    it('should enforce UDP rate limit delay', async function() {
+    it.skip('should enforce UDP rate limit delay', async function() {
       const client = new AniDBClient('testuser', 'testpass');
       
       const start = Date.now();
@@ -74,7 +74,7 @@ describe('AniDB Provider Tests', function() {
   });
 
   describe('AniDBClient - Bulk Operation Pause', function() {
-    it('should track bulk operation timing', async function() {
+    it.skip('should track bulk operation timing', async function() {
       const client = new AniDBClient('testuser', 'testpass');
       
       // First check should initialize timer

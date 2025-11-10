@@ -28,5 +28,23 @@
     "title": "Fix hardlink naming for series",
     "description": "Ensure series folders omit year and episode filenames include titles without empty parentheses",
     "status": "in-progress"
+  },
+  {
+    "id": 6,
+    "title": "Audit repository artifacts",
+    "description": "Catalog temporary scripts, caches, and other non-essential assets before cleanup",
+    "status": "completed"
+  },
+  {
+    "id": 7,
+    "title": "Prune unnecessary files",
+    "description": "Remove tmp_* scripts, ad hoc debug outputs, and obsolete notes from the workspace",
+    "status": "completed"
+  },
+  {
+    "id": 8,
+    "title": "Sanitize persisted data",
+    "description": "Scrub data/ and related folders so committed artifacts contain no sensitive or transient information",
+    "status": "completed"
   }
 ]

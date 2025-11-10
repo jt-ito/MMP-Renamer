@@ -1,3 +1,0 @@
-Commit client: always reload affected scans (fallback to current scan) after hide attempt
-
-Ensure that even if the POST to hide fails or doesn't return modifiedScanIds, the client will refresh the current scan so server-side changes are reflected.

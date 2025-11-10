@@ -1,3 +1,0 @@
-Commit server: only enrich new/changed items on incremental scan
-
-Prefer toProcess when deciding which items to call externalEnrich for during backgroundFirstNEnrich.
