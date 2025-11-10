@@ -5761,6 +5761,7 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
         if (requestedHardlink || targetUnderConfiguredOut || explicitOutputFolderRequested) {
           // create directories and attempt to create a hard link; do NOT move the original file
           try {
+            appendLog(`HARDLINK_START from=${from} to=${to} configuredOut=${configuredOut} explicitFolder=${explicitOutputFolderRequested}`);
             // Prepare effective target path (default to provided toResolved). If rendering succeeds we'll replace it.
             let effectiveToResolved = toResolved;
             // If the preview plan already contained a computed toPath under the configured output,
@@ -5885,6 +5886,7 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
               try {
                 const finalBasename2 = `${ensuredNameWithoutExt2}${ext2}`;
                 effectiveToResolved = path.resolve(targetFolder2, finalBasename2);
+                appendLog(`HARDLINK_RERENDER targetFolder=${targetFolder2} basename=${finalBasename2} effective=${effectiveToResolved}`);
               } catch (e) { /* ignore and leave effectiveToResolved as toResolved */ }
             } catch (renderErr) {
               // fallback: keep effectiveToResolved as toResolved
