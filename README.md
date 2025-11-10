@@ -176,7 +176,7 @@ docker-compose up -d
 | `PORT` | No | Override default port 5173 |
 
 ---
-## âš™ï¸ Configuration
+## ⚙️ Configuration
 
 ### Settings Overview
 
@@ -285,7 +285,7 @@ The system tries each provider in order until a match is found. You can disable 
 
 ### Rename Template Tokens
 
-Customize filename format in **Settings â†’ Metadata & File Paths**. Available tokens:
+Customize filename format in **Settings → Metadata & File Paths**. Available tokens:
 
 | Token | Description | Example |
 |-------|-------------|---------|
@@ -321,7 +321,7 @@ Attack on Titan (2013)/Season 01/Attack on Titan (2013) - S01E05 - First Battle.
 2. Click **Scan** in the header to run a full library walk
 3. Or click **Incremental Scan** to detect only new/changed files since last scan
 
-**Folder Watching**: Optionally enable automatic background scans when files are added/modified (configured per-user in `data/users.json` â†’ `scan_input_path`).
+**Folder Watching**: Optionally enable automatic background scans when files are added/modified (configured per-user in `data/users.json` → `scan_input_path`).
 
 ### Enriching Metadata
 
@@ -335,7 +335,7 @@ After scanning, the app automatically:
 
 ### Previewing & Applying Renames
 
-1. **Review parsed items** in the main listâ€”each shows:
+1. **Review parsed items** in the main list—each shows:
    - Original path
    - Parsed/provider metadata
    - Source provider (e.g., "anidb-ed2k", "tmdb")
@@ -362,13 +362,13 @@ After scanning, the app automatically:
 | **Hide selected** | Mark items as hidden (won't appear in future scans) |
 | **Rescan selected** | Force metadata refresh for selected items |
 
-**Selection persistence**: Selections survive rescansâ€”useful workflow is to select items, rescan them with fresh metadata, then immediately approve the updated results.
+**Selection persistence**: Selections survive rescans—useful workflow is to select items, rescan them with fresh metadata, then immediately approve the updated results.
 
 ### Unapproving Items
 
 If you need to undo a rename:
 
-1. Go to **Settings â†’ Metadata & File Paths**
+1. Go to **Settings → Metadata & File Paths**
 2. Under **Unapprove recent applied items**, choose count (Last 1, 5, 10, 20, or All)
 3. Click **Unapprove**
 
@@ -400,7 +400,7 @@ Search across large libraries without loading everything into memory:
 
 Configure multiple destinations (e.g., separate anime and TV libraries):
 
-1. **Settings â†’ Metadata & File Paths â†’ Alternative Output Folders**
+1. **Settings → Metadata & File Paths → Alternative Output Folders**
 2. Click **+ Add Output Folder**
 3. Set name (e.g., "Anime Library") and path (e.g., `D:\Media\Anime`)
 4. Click **Save**
@@ -427,7 +427,7 @@ Useful for quickly selecting non-contiguous items or large blocks.
 
 ### Provider Order Customization
 
-Drag providers in **Settings â†’ Metadata providers** to control lookup order. For example, prioritize TMDb over TVDB for better movie metadata, or put AniDB first for anime-heavy libraries.
+Drag providers in **Settings → Metadata providers** to control lookup order. For example, prioritize TMDb over TVDB for better movie metadata, or put AniDB first for anime-heavy libraries.
 
 Inactive providers appear below active slotsâ€”click to re-add them to the chain.
 
@@ -442,7 +442,7 @@ Inactive providers appear below active slotsâ€”click to re-add them to the 
 **Web UI logs panel**: Real-time log tail displayed in sidebar (click **Refresh** to update).
 
 **Troubleshooting**:
-- `HARDLINK_CROSS_DEVICE`: Input and output paths are on different filesystemsâ€”see [Docker Hardlink Requirements](#-docker-deployment)
+- `HARDLINK_CROSS_DEVICE`: Input and output paths are on different filesystems—see [Docker Hardlink Requirements](#-docker-deployment)
 - `ENRICH_ANIDB_RATE_LIMIT`: AniDB request throttled (normal behavior)
 - `ENRICH_PROVIDER_FAIL`: Provider unreachable or API key invalid
 
@@ -450,17 +450,17 @@ Inactive providers appear below active slotsâ€”click to re-add them to the 
 
 ```
 data/
-â”œâ”€â”€ enrich-store.json       # Cached enrichment metadata
-â”œâ”€â”€ logs.txt                # Server event log
-â”œâ”€â”€ parsed-cache.json       # Filename parse results
-â”œâ”€â”€ rendered-index.json     # Rendered name index
-â”œâ”€â”€ scan-cache.json         # File scan cache (mtimes, sizes)
-â”œâ”€â”€ scans.db                # SQLite database (scans, enrichment)
-â”œâ”€â”€ scans.json              # Legacy scan storage (migrated to DB)
-â”œâ”€â”€ session.key             # Session signing key (auto-generated)
-â”œâ”€â”€ settings.json           # Server-wide settings
-â”œâ”€â”€ users.json              # User accounts and per-user settings
-â””â”€â”€ wiki-episode-cache.json # Wikipedia episode cache
+├── enrich-store.json       # Cached enrichment metadata
+├── logs.txt                # Server event log
+├── parsed-cache.json       # Filename parse results
+├── rendered-index.json     # Rendered name index
+├── scan-cache.json         # File scan cache (mtimes, sizes)
+├── scans.db                # SQLite database (scans, enrichment)
+├── scans.json              # Legacy scan storage (migrated to DB)
+├── session.key             # Session signing key (auto-generated)
+├── settings.json           # Server-wide settings
+├── users.json              # User accounts and per-user settings
+└── wiki-episode-cache.json # Wikipedia episode cache
 ```
 
 **Important**: Do not commit `data/` to version control—it contains API keys and session secrets.
@@ -483,12 +483,12 @@ npm run test:anidb         # AniDB provider tests
 
 ### Test Coverage
 
-- âœ… ED2K hash computation (single/multi-chunk, boundary cases)
-- âœ… AniDB UDP/HTTP responses, rate limiting
-- âœ… TVDB episode title translation priority (english â†’ romaji â†’ native)
-- âœ… Filename parsing edge cases
-- âœ… Hardlink creation logic
-- âœ… Enrichment cache normalization
+- ✅ ED2K hash computation (single/multi-chunk, boundary cases)
+- ✅ AniDB UDP/HTTP responses, rate limiting
+- ✅ TVDB episode title translation priority (english → romaji → native)
+- ✅ Filename parsing edge cases
+- ✅ Hardlink creation logic
+- ✅ Enrichment cache normalization
 
 ### Contributing
 
@@ -509,10 +509,10 @@ npm run test:anidb         # AniDB provider tests
 
 #### "Hardlink failed: EXDEV (cross-device link not permitted)"
 
-**Cause**: Input and output paths are on different filesystems. In Docker, this happens when you mount input and output folders separatelyâ€”even if they're on the same physical disk, the kernel sees them as distinct mounts.
+**Cause**: Input and output paths are on different filesystems. In Docker, this happens when you mount input and output folders separately—even if they're on the same physical disk, the kernel sees them as distinct mounts.
 
 **Solution**:
-- **Docker**: Mount the **parent directory** once (e.g., `/mnt/media` â†’ `/media`) and use subpaths inside the container (`/media/input`, `/media/output`)
+- **Docker**: Mount the **parent directory** once (e.g., `/mnt/media` → `/media`) and use subpaths inside the container (`/media/input`, `/media/output`)
 - **Host OS**: Ensure input and output are on the same drive/partition
 
 See [Docker Hardlink Requirements](#-docker-deployment) for detailed examples.
@@ -524,7 +524,7 @@ See [Docker Hardlink Requirements](#-docker-deployment) for detailed examples.
 **Solution**:
 - Verify username/password in Settings
 - Check AniDB account is active
-- Wait 24 hours if banned (should not happen with proper rate limitingâ€”report as bug)
+- Wait 24 hours if banned (should not happen with proper rate limiting—report as bug)
 
 #### Items disappear after scanning
 
@@ -628,4 +628,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-**Happy renaming! ðŸŽ¬âœ¨**
+**Happy renaming! 🎬✨**
