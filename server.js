@@ -5750,14 +5750,15 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
 
       if (!dryRun) {
         // Determine if this plan explicitly requested a hardlink (preview sets actions: [{op:'hardlink'}])
-        const requestedHardlink = (p.actions && Array.isArray(p.actions) && p.actions[0] && p.actions[0].op === 'hardlink') || false
-        const targetUnderConfiguredOut = configuredOut && toResolved.startsWith(path.resolve(configuredOut))
-  // If the plan explicitly requested a hardlink, require a configured output path; never hardlink into the input folder
-  if (requestedHardlink && !configuredOut) {
-    appendLog(`HARDLINK_FAIL_NO_OUTPUT from=${from} requestedHardlink=true`);
-    throw new Error('Hardlink requested but no configured output path found. Set scan_output_path in settings.');
-  }
-          if (requestedHardlink || targetUnderConfiguredOut) {
+        const requestedHardlink = (p.actions && Array.isArray(p.actions) && p.actions[0] && p.actions[0].op === 'hardlink') || false;
+        const targetUnderConfiguredOut = configuredOut && toResolved.startsWith(path.resolve(configuredOut));
+        const explicitOutputFolderRequested = !!(outputFolder && configuredOut);
+        // If the plan explicitly requested a hardlink, require a configured output path; never hardlink into the input folder
+        if ((requestedHardlink || explicitOutputFolderRequested) && !configuredOut) {
+          appendLog(`HARDLINK_FAIL_NO_OUTPUT from=${from} requestedHardlink=${requestedHardlink} explicitOutput=${explicitOutputFolderRequested}`);
+          throw new Error('Hardlink requested but no configured output path found. Set scan_output_path in settings.');
+        }
+        if (requestedHardlink || targetUnderConfiguredOut || explicitOutputFolderRequested) {
           // create directories and attempt to create a hard link; do NOT move the original file
           try {
             // Prepare effective target path (default to provided toResolved). If rendering succeeds we'll replace it.
