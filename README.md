@@ -10,9 +10,9 @@ Built with a Node.js/Express backend and a modern React + Vite frontend, MMP-Ren
 
 ### Metadata Enrichment
 - **AniDB ED2K Hash Lookup**: Primary anime provider using file hashing for 99% accurate episode identification—even with bad filenames
-- **Multi-Provider Fallback Chain**: AniList → TVDB → TMDb for comprehensive coverage
+- **Multi-Provider Fallback Chain**: AniList → TVDB → TMDb → Wikipedia → Kitsu for comprehensive coverage
 - **Configurable Provider Order**: Drag-and-drop provider priority in the UI
-- **Wikipedia Episode Titles**: Optional fallback for series/episode title enrichment
+- **Wikipedia & Kitsu Fallback**: Optional episode title enrichment when primary providers lack data
 
 ### Smart Scanning & Organization
 - **Full & Incremental Scans**: Full library walks or fast incremental detection of new/changed files
@@ -251,14 +251,25 @@ Configuration is managed via:
    }
    ```
 
+#### Wikipedia & Kitsu
+**Optional fallback providers for episode titles**
+
+- **Wikipedia**: Automatically searches MediaWiki for episode lists when primary providers lack episode names
+- **Kitsu**: Anime-focused API providing episode metadata for series not in AniDB/AniList
+- **No API key required**: Both providers work out-of-the-box as fallbacks
+
+These providers activate automatically when enabled in the provider order and primary lookups return incomplete data.
+
 ### Provider Priority Order
 
-Drag-and-drop providers in the **Settings â†’ Metadata & File Paths** section to set lookup order. Default order:
+Drag-and-drop providers in the **Settings → Metadata & File Paths** section to set lookup order. Default order:
 
 1. **AniDB** (ED2K hash, anime only)
 2. **AniList** (anime catalog, no episode titles)
 3. **TVDB** (series/episode metadata)
 4. **TMDb** (general fallback)
+5. **Wikipedia** (episode title fallback)
+6. **Kitsu** (anime episode metadata)
 
 The system tries each provider in order until a match is found. You can disable providers by removing them from the active slots.
 

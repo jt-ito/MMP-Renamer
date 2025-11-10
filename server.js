@@ -12,8 +12,17 @@ const { lookupMetadataWithAniDB, getAniDBCredentials } = require('./lib/meta-pro
 // below is a no-op stub that returns null so the rest of the server continues
 // to operate without external provider lookups.
 
-const METADATA_PROVIDER_IDS = ['anidb', 'anilist', 'tvdb', 'tmdb'];
+const METADATA_PROVIDER_IDS = ['anidb', 'anilist', 'tvdb', 'tmdb', 'wikipedia', 'kitsu'];
 const DEFAULT_METADATA_PROVIDER_ORDER = ['anidb', 'anilist', 'tvdb', 'tmdb'];
+const FOLDER_WATCH_RESTART_DELAY_MS = 5000;
+const PROVIDER_DISPLAY_NAMES = {
+  anidb: 'AniDB',
+  anilist: 'AniList',
+  tvdb: 'TVDB',
+  tmdb: 'TMDB',
+  wikipedia: 'Wikipedia',
+  kitsu: 'Kitsu'
+};
 
 const app = express();
 // Enable CORS but allow credentials so cookies can be sent from the browser (echo origin)
@@ -42,6 +51,69 @@ function requireAdmin(req, res, next) {
     if (users && users[username] && users[username].role === 'admin') return next();
     return res.status(403).json({ error: 'forbidden' });
   } catch (e) { return res.status(403).json({ error: 'forbidden' }) }
+}
+
+function coerceBoolean(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'off', ''].includes(normalized)) return false;
+  }
+  if (typeof value === 'number') return value !== 0;
+  return !!value;
+}
+
+function normalizeProviderId(value) {
+  if (!value) return null;
+  return String(value).trim().toLowerCase();
+}
+
+function truncateProviderDetail(value, maxLength = 120) {
+  if (!value) return '';
+  const clean = String(value)
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (!clean.length) return '';
+  return clean.length > maxLength ? `${clean.slice(0, maxLength - 1)}…` : clean;
+}
+
+function assignProviderSourceMetadata(target, meta = {}) {
+  try {
+    if (!target || typeof target !== 'object') return;
+    const buildEntry = (entry) => {
+      if (!entry) return null;
+      const id = normalizeProviderId(entry.id || entry.provider || entry.source);
+      if (!id) return null;
+      const display = PROVIDER_DISPLAY_NAMES[id] || (id.charAt(0).toUpperCase() + id.slice(1));
+      const detail = truncateProviderDetail(entry.detail || entry.title || entry.name || '');
+      return { id, display, detail };
+    };
+    const seriesEntry = buildEntry(meta.seriesProvider);
+    const episodeEntry = buildEntry(meta.episodeProvider);
+    const summaryParts = [];
+    const pushSummary = (entry) => {
+      if (!entry) return;
+      const suffix = entry.detail ? ` (${entry.detail})` : '';
+      summaryParts.push(`${entry.display}${suffix}`);
+    };
+    // avoid duplicate when series/episode entries are effectively identical
+    if (seriesEntry) {
+      pushSummary(seriesEntry);
+    }
+    if (episodeEntry) {
+      const sameId = seriesEntry && episodeEntry && seriesEntry.id === episodeEntry.id;
+      if (!sameId || !seriesEntry) {
+        pushSummary(episodeEntry);
+      }
+    }
+    const summary = summaryParts.join(' + ');
+    try { target.sources = { series: seriesEntry || null, episode: episodeEntry || null }; } catch (e) {}
+    if (summary) target.source = summary;
+    else if (!target.source && seriesEntry) target.source = seriesEntry.display;
+    else if (!target.source && episodeEntry) target.source = episodeEntry.display;
+  } catch (e) { /* ignore */ }
 }
 
 const DATA_DIR = path.resolve(__dirname, 'data');
@@ -189,6 +261,13 @@ let renderedIndex = {};
 let hideEvents = [];
 // Folder watchers by username: { [username]: watcher }
 const folderWatchers = {};
+
+function isFolderWatchEnabledForUser(username) {
+  try {
+    if (!username || !users || !users[username]) return false;
+    return coerceBoolean(users[username].settings && users[username].settings.enable_folder_watch);
+  } catch (e) { return false; }
+}
 // Require DB at startup. Fail fast if DB init or cache loads fail so we don't silently fall back to JSON files.
 try {
   const dbLib = require('./lib/db');
@@ -280,6 +359,15 @@ function startFolderWatcher(username, libPath) {
       try { folderWatchers[username].close(); } catch (e) {}
       delete folderWatchers[username];
     }
+
+    if (!isFolderWatchEnabledForUser(username)) {
+      appendLog(`WATCHER_SKIP_DISABLED username=${username}`);
+      return;
+    }
+    if (!libPath) {
+      appendLog(`WATCHER_SKIP_NO_PATH username=${username}`);
+      return;
+    }
     
     // Don't start watcher if path doesn't exist
     if (!fs.existsSync(libPath) || !fs.statSync(libPath).isDirectory()) {
@@ -293,8 +381,10 @@ function startFolderWatcher(username, libPath) {
       persistent: true,
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 2000, pollInterval: 500 },
-      depth: 10
+      depth: 10,
+      ignorePermissionErrors: true
     });
+    folderWatchers[username] = watcher;
     
     const triggerIncrementalScan = () => {
       if (debounceTimer) clearTimeout(debounceTimer);
@@ -355,11 +445,32 @@ function startFolderWatcher(username, libPath) {
       }, 3000); // 3 second debounce
     };
     
+    let readyTriggered = false;
+    watcher.on('ready', () => {
+      try { appendLog(`WATCHER_READY username=${username} path=${libPath}`); } catch (e) {}
+      if (!readyTriggered) {
+        readyTriggered = true;
+        triggerIncrementalScan();
+      }
+    });
+
     watcher.on('add', triggerIncrementalScan);
     watcher.on('change', triggerIncrementalScan);
     watcher.on('unlink', triggerIncrementalScan);
+    watcher.on('addDir', triggerIncrementalScan);
+    watcher.on('unlinkDir', triggerIncrementalScan);
+
+    watcher.on('error', (err) => {
+      try { appendLog(`WATCHER_ERROR username=${username} path=${libPath} err=${err && err.message ? err.message : String(err)}`); } catch (e) {}
+      try { watcher.close(); } catch (closeErr) {}
+      if (folderWatchers[username] === watcher) delete folderWatchers[username];
+      if (isFolderWatchEnabledForUser(username)) {
+        setTimeout(() => {
+          if (isFolderWatchEnabledForUser(username)) startFolderWatcher(username, libPath);
+        }, FOLDER_WATCH_RESTART_DELAY_MS);
+      }
+    });
     
-    folderWatchers[username] = watcher;
     appendLog(`WATCHER_STARTED username=${username} path=${libPath}`);
   } catch (err) {
     appendLog(`WATCHER_START_ERROR username=${username} path=${libPath} err=${err.message}`);
@@ -370,9 +481,11 @@ function startFolderWatcher(username, libPath) {
 function stopFolderWatcher(username) {
   try {
     if (folderWatchers[username]) {
-      folderWatchers[username].close();
+      const watcher = folderWatchers[username];
+      const pathInfo = watcher && watcher.getWatched ? Object.keys(watcher.getWatched() || {}).join('|') : '';
+      try { watcher.close(); } catch (e) {}
       delete folderWatchers[username];
-      appendLog(`WATCHER_STOPPED username=${username}`);
+      appendLog(`WATCHER_STOPPED username=${username} watched=${pathInfo || '<unknown>'}`);
     }
   } catch (err) {
     appendLog(`WATCHER_STOP_ERROR username=${username} err=${err.message}`);
@@ -384,9 +497,11 @@ function initializeAllWatchers() {
   try {
     for (const username in users) {
       const user = users[username];
-      if (user && user.settings && user.settings.scan_input_path) {
+      if (user && user.settings && user.settings.scan_input_path && isFolderWatchEnabledForUser(username)) {
         const libPath = path.resolve(user.settings.scan_input_path);
         startFolderWatcher(username, libPath);
+      } else {
+        stopFolderWatcher(username);
       }
     }
   } catch (err) {
@@ -787,14 +902,20 @@ async function metaLookup(title, apiKey, opts = {}) {
   const allowAniList = metaProviderSet.has('anilist')
   const allowTvdb = metaProviderSet.has('tvdb')
   const allowTmdb = metaProviderSet.has('tmdb')
+  const allowWikipedia = metaProviderSet.has('wikipedia')
+  const allowKitsu = metaProviderSet.has('kitsu')
   const indexInOrder = (id) => metaProvidersOrder.indexOf(id)
   const aniListIndex = indexInOrder('anilist')
   const tvdbIndex = indexInOrder('tvdb')
   const tmdbIndex = indexInOrder('tmdb')
-  const hasEpisodeProviderAfterAniList = aniListIndex !== -1 && metaProvidersOrder.slice(aniListIndex + 1).some(p => p === 'tvdb' || p === 'tmdb')
+  const wikipediaIndex = indexInOrder('wikipedia')
+  const kitsuIndex = indexInOrder('kitsu')
+  const hasEpisodeProviderAfterAniList = aniListIndex !== -1 && metaProvidersOrder.slice(aniListIndex + 1).some((p) => (
+    p === 'tvdb' || p === 'tmdb' || p === 'wikipedia' || p === 'kitsu'
+  ))
 
   // Minimal per-host pacing to avoid hammering external APIs
-  const hostPace = { 'graphql.anilist.co': 250, 'kitsu.io': 250, 'api.themoviedb.org': 300 } // ms
+  const hostPace = { 'graphql.anilist.co': 250, 'kitsu.io': 250, 'api.themoviedb.org': 300, 'en.wikipedia.org': 300 } // ms
   const lastRequestAt = metaLookup._lastRequestAt = metaLookup._lastRequestAt || {}
   async function pace(host) {
     const now = Date.now()
@@ -1278,9 +1399,20 @@ async function metaLookup(title, apiKey, opts = {}) {
       try { ej = JSON.parse(eres.body) } catch (e) { ej = null }
       const ep = ej && ej.data && Array.isArray(ej.data) && ej.data.length ? ej.data[0] : null
       if (!ep) return null
-  // prefer explicit English title if available, then canonicalTitle, then Japanese variant
-  const epTitle = ep && ep.attributes ? (ep.attributes.titles && (ep.attributes.titles.en || ep.attributes.titles.en_jp) ? (ep.attributes.titles.en || ep.attributes.titles.en_jp) : (ep.attributes.canonicalTitle || (ep.attributes.titles && (ep.attributes.titles.en_jp || ep.attributes.titles.ja_jp)))) : null
-      return { name: epTitle, raw: ep }
+      // prefer explicit English title if available, then canonicalTitle, then Japanese variant
+      const epTitle = ep && ep.attributes ? (ep.attributes.titles && (ep.attributes.titles.en || ep.attributes.titles.en_jp) ? (ep.attributes.titles.en || ep.attributes.titles.en_jp) : (ep.attributes.canonicalTitle || (ep.attributes.titles && (ep.attributes.titles.en_jp || ep.attributes.titles.ja_jp)))) : null
+      if (!epTitle) return null
+      const trimmed = String(epTitle).trim()
+      if (!trimmed) return null
+      const payload = {
+        name: trimmed,
+        title: trimmed,
+        localized_name: trimmed,
+        source: 'kitsu',
+        raw: ep
+      }
+      try { if (ep && ep.id) payload.id = ep.id } catch (e) {}
+      return payload
     } catch (e) { return null }
   }
 
@@ -1300,6 +1432,11 @@ async function metaLookup(title, apiKey, opts = {}) {
       const top = hits[0]
       const name = top.name || top.original_name || top.title || null
       const raw = Object.assign({}, top, { source: 'tmdb' })
+      const withEpisodeSource = (payload) => {
+        if (!payload || typeof payload !== 'object') return payload
+        if (payload.source === 'tmdb') return payload
+        return Object.assign({ source: 'tmdb' }, payload)
+      }
       if (season != null && episode != null) {
         try {
           await pace('api.themoviedb.org')
@@ -1317,7 +1454,7 @@ async function metaLookup(title, apiKey, opts = {}) {
               const hasCJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(epNameRaw)
 
               // If title is meaningful and Latin (English-like), return it immediately
-              if (!isPlaceholder && hasLatin) return { provider: 'tmdb', id: top.id, name, raw, episode: ej }
+              if (!isPlaceholder && hasLatin) return { provider: 'tmdb', id: top.id, name, raw, episode: withEpisodeSource(ej) }
 
               // Otherwise attempt translations endpoint to find an English/localized title
               try {
@@ -1345,7 +1482,7 @@ async function metaLookup(title, apiKey, opts = {}) {
                     if (picked) {
                       // attach the localized name into episode data for caller
                       try { ej.localized_name = picked } catch (e) {}
-                      return { provider: 'tmdb', id: top.id, name, raw, episode: ej }
+                      return { provider: 'tmdb', id: top.id, name, raw, episode: withEpisodeSource(ej) }
                     }
                   }
                 }
@@ -1353,7 +1490,7 @@ async function metaLookup(title, apiKey, opts = {}) {
 
               // If original was non-Latin but we couldn't find a translation, still return the raw
               // episode object (caller will decide whether to accept non-English titles).
-              return { provider: 'tmdb', id: top.id, name, raw, episode: ej }
+              return { provider: 'tmdb', id: top.id, name, raw, episode: withEpisodeSource(ej) }
             }
           }
         } catch (e) {}
@@ -1568,7 +1705,7 @@ async function metaLookup(title, apiKey, opts = {}) {
                       try {
                         if (isMeaningfulTitle(tmName) && !isPlaceholderTitle(tmName)) {
                           try { appendLog(`META_TMDB_VERIFIED_CACHE key=${key} tm=${tmName}`) } catch (e) {}
-                          return { provider: 'tmdb', id: top.id, name, raw, episode: ej }
+                          return Object.assign({}, tmCheck)
                         } else {
                           try { appendLog(`META_TMDB_VERIFIED_CACHE_IGNORED_PLACEHOLDER key=${key} tm=${tmName}`) } catch (e) {}
                         }
@@ -1842,7 +1979,7 @@ async function metaLookup(title, apiKey, opts = {}) {
       const uniqueTitleVariants = [...new Set(titleVariants)];
       let tmdbEpCheck = null;
 
-      if (!ep && tvdbCreds && opts && opts.season != null && opts.episode != null) {
+  if (!ep && allowTvdb && tvdbCreds && opts && opts.season != null && opts.episode != null) {
         try {
           const tvdbEpisode = await tvdb.fetchEpisode(tvdbCreds, uniqueTitleVariants, opts.season, opts.episode, {
             log: (line) => {
@@ -1873,7 +2010,7 @@ async function metaLookup(title, apiKey, opts = {}) {
         }
       }
 
-      if (!ep && apiKey) {
+  if (!ep && allowTmdb && apiKey) {
         const tmLookupName = strippedAniListName || aniListName || v;
         try { appendLog(`META_TMDB_EP_AFTER_ANILIST tmLookup=${tmLookupName} anilist=${aniListName} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
         try {
@@ -1906,7 +2043,7 @@ async function metaLookup(title, apiKey, opts = {}) {
         }
       }
 
-      if (!ep) {
+  if (!ep && allowWikipedia) {
         try {
           const wikiEp = await lookupWikipediaEpisode(uniqueTitleVariants.map(normalizeSearchQuery), opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey });
           const intendedSeries = aniListName;
@@ -1953,25 +2090,25 @@ async function metaLookup(title, apiKey, opts = {}) {
                     ep = tmEpCheck.episode;
                     try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI q=${aniListName} tm=${tmNameCheck}`) } catch (e) {}
                   } else if (wikiGood && wikiHasLatin) {
-                    ep = { name: wikiEp.name };
+                    ep = { name: wikiEp.name, title: wikiEp.name, localized_name: wikiEp.name, source: 'wikipedia', raw: wikiEp.raw };
                     try { appendLog(`META_WIKIPEDIA_PREFERRED_OVER_TM_PLACEHOLDER q=${aniListName} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
                   } else if (isMeaningfulTitle(tmNameCheck) && !isPlaceholderTitle(tmNameCheck)) {
                     ep = tmEpCheck.episode;
                     try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_NONLATIN q=${aniListName} tm=${tmNameCheck}`) } catch (e) {}
                   } else if (wikiGood) {
-                    ep = { name: wikiEp.name };
+                    ep = { name: wikiEp.name, title: wikiEp.name, localized_name: wikiEp.name, source: 'wikipedia', raw: wikiEp.raw };
                     try { appendLog(`META_WIKIPEDIA_FALLBACK_NONLATIN q=${aniListName} wiki=${wikiEp.name} tm=${tmNameCheck}`) } catch (e) {}
                   }
                 } else {
-                  ep = { name: wikiEp.name };
+                  ep = { name: wikiEp.name, title: wikiEp.name, localized_name: wikiEp.name, source: 'wikipedia', raw: wikiEp.raw };
                   try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${aniListName} epName=${wikiEp.name}`) } catch (e) {}
                 }
               } catch (e) {
-                ep = { name: wikiEp.name };
+                ep = { name: wikiEp.name, title: wikiEp.name, localized_name: wikiEp.name, source: 'wikipedia', raw: wikiEp.raw };
                 try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${aniListName} epName=${wikiEp.name}`) } catch (ee) {}
               }
             } else {
-              ep = { name: wikiEp.name };
+              ep = { name: wikiEp.name, title: wikiEp.name, localized_name: wikiEp.name, source: 'wikipedia', raw: wikiEp.raw };
               try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_OK q=${aniListName} epName=${wikiEp.name}`) } catch (e) {}
             }
           } else if (wikiEp && wikiEp.name && !wikiParentMatch) {
@@ -1981,8 +2118,8 @@ async function metaLookup(title, apiKey, opts = {}) {
       }
 
       // If still no episode title, try Kitsu as a fallback
-      if (!ep) {
-        if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY q=${aniListName}`) } catch (e) {} }
+      if (!ep && allowKitsu) {
+        if (allowTmdb && !apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY q=${aniListName}`) } catch (e) {} }
         ep = await fetchKitsuEpisode(strippedAniListName || aniListName || v, opts && opts.episode != null ? opts.episode : null)
         try { appendLog(`META_KITSU_EP q=${aniListName} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
       }
@@ -1992,15 +2129,16 @@ async function metaLookup(title, apiKey, opts = {}) {
       if (tvdbInfo) {
         try { aniListRawPayload.tvdb = { seriesId: tvdbInfo.seriesId, seriesName: tvdbInfo.seriesName } } catch (e) {}
       }
-      aniListResult = { name: a.name, raw: aniListRawPayload, episode: ep }
+      aniListResult = { name: a.name, raw: aniListRawPayload, episode: ep, provider: 'anilist', titleVariants: uniqueTitleVariants }
       if (tvdbInfo) {
         try { aniListResult.tvdb = tvdbInfo } catch (e) {}
       }
       break
     }
     if (aniListResult) {
-      storedAniListResult = Object.assign({}, aniListResult, { titleVariants: uniqueTitleVariants })
-      storedAniListVariants = uniqueTitleVariants
+      const variantsForStore = Array.isArray(aniListResult.titleVariants) ? aniListResult.titleVariants : []
+      storedAniListResult = Object.assign({}, aniListResult, { titleVariants: variantsForStore })
+      storedAniListVariants = variantsForStore
       if (!hasEpisodeProviderAfterAniList || (aniListResult && aniListResult.episode && (aniListResult.episode.name || aniListResult.episode.title))) {
         return aniListResult
       }
@@ -2045,7 +2183,7 @@ async function metaLookup(title, apiKey, opts = {}) {
         const uniqueTitleVariantsP = [...new Set(titleVariantsP)];
         let tmdbEpCheckParent = null;
 
-        if (!ep && tvdbCreds && opts && opts.season != null && opts.episode != null) {
+  if (!ep && allowTvdb && tvdbCreds && opts && opts.season != null && opts.episode != null) {
           try {
             const tvdbEpisode = await tvdb.fetchEpisode(tvdbCreds, uniqueTitleVariantsP, opts.season, opts.episode, {
               log: (line) => {
@@ -2076,7 +2214,7 @@ async function metaLookup(title, apiKey, opts = {}) {
           }
         }
 
-        if (!ep && apiKey) {
+  if (!ep && allowTmdb && apiKey) {
           const tmLookupName = strippedParentName || parentAniListName || parentCandidate;
           try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT tmLookup=${tmLookupName} anilist=${parentAniListName} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
           try {
@@ -2109,7 +2247,7 @@ async function metaLookup(title, apiKey, opts = {}) {
           }
         }
 
-        if (!ep) {
+  if (!ep && allowWikipedia) {
           try {
             const wikiEp = await lookupWikipediaEpisode(uniqueTitleVariantsP.map(normalizeSearchQuery), opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey });
             const intendedSeries = parentAniListName;
@@ -2137,25 +2275,25 @@ async function metaLookup(title, apiKey, opts = {}) {
                       ep = tmEpCheck.episode;
                       try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_PARENT q=${parentAniListName} tm=${tmParentName}`) } catch (e) {}
                     } else if (wikiHasLatin && isMeaningfulTitle(wikiEp.name)) {
-                      ep = { name: wikiEp.name };
+                      ep = { name: wikiEp.name, title: wikiEp.name, localized_name: wikiEp.name, source: 'wikipedia', raw: wikiEp.raw };
                       try { appendLog(`META_WIKIPEDIA_PREFERRED_PARENT_LATIN q=${parentAniListName} wiki=${wikiEp.name} tm=${tmParentName}`) } catch (e) {}
                     } else if (isMeaningfulTitle(tmParentName) && !isPlaceholderTitle(tmParentName)) {
                       ep = tmEpCheck.episode;
                       try { appendLog(`META_TMDB_VERIFIED_OVER_WIKI_PARENT_NONLATIN q=${parentAniListName} tm=${tmParentName}`) } catch (e) {}
                     } else {
-                      ep = { name: wikiEp.name };
+                      ep = { name: wikiEp.name, title: wikiEp.name, localized_name: wikiEp.name, source: 'wikipedia', raw: wikiEp.raw };
                       try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${parentAniListName} epName=${wikiEp.name}`) } catch (e) {}
                     }
                   } else {
-                    ep = { name: wikiEp.name };
+                    ep = { name: wikiEp.name, title: wikiEp.name, localized_name: wikiEp.name, source: 'wikipedia', raw: wikiEp.raw };
                     try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${parentAniListName} epName=${wikiEp.name}`) } catch (e) {}
                   }
                 } catch (e) {
-                  ep = { name: wikiEp.name };
+                  ep = { name: wikiEp.name, title: wikiEp.name, localized_name: wikiEp.name, source: 'wikipedia', raw: wikiEp.raw };
                   try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${parentAniListName} epName=${wikiEp.name}`) } catch (ee) {}
                 }
               } else {
-                ep = { name: wikiEp.name };
+                ep = { name: wikiEp.name, title: wikiEp.name, localized_name: wikiEp.name, source: 'wikipedia', raw: wikiEp.raw };
                 try { appendLog(`META_WIKIPEDIA_EP_AFTER_ANILIST_PARENT_OK q=${parentAniListName} epName=${wikiEp.name}`) } catch (e) {}
               }
             } else if (wikiEp && wikiEp.name && !wikiParentMatch) {
@@ -2164,8 +2302,8 @@ async function metaLookup(title, apiKey, opts = {}) {
           } catch (e) {}
         }
 
-        if (!ep) {
-          if (!apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY_PARENT q=${parentAniListName}`) } catch (e) {} }
+        if (!ep && allowKitsu) {
+          if (allowTmdb && !apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY_PARENT q=${parentAniListName}`) } catch (e) {} }
           ep = await fetchKitsuEpisode(strippedParentName || parentAniListName || parentCandidate, opts && opts.episode != null ? opts.episode : null)
           try { appendLog(`META_KITSU_EP_PARENT q=${parentAniListName} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
         }
@@ -2174,7 +2312,7 @@ async function metaLookup(title, apiKey, opts = {}) {
         if (tvdbInfoParent) {
           try { parentRaw.tvdb = { seriesId: tvdbInfoParent.seriesId, seriesName: tvdbInfoParent.seriesName } } catch (e) {}
         }
-        const parentRes = { name: a.name, raw: parentRaw, episode: ep }
+        const parentRes = { name: a.name, raw: parentRaw, episode: ep, provider: 'anilist', titleVariants: uniqueTitleVariantsP }
         if (tvdbInfoParent) {
           try { parentRes.tvdb = tvdbInfoParent } catch (e) {}
         }
@@ -2846,6 +2984,10 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
               raw: raw
             };
             guess.tmdb = { matched: false };
+            assignProviderSourceMetadata(guess.provider, {
+              seriesProvider: { id: 'anidb', detail: guess.title || primaryTitle },
+              episodeProvider: (guess.episodeTitle || anidbEpisodeTitle) ? { id: 'anidb', detail: guess.episodeTitle || anidbEpisodeTitle } : null
+            });
 
             const rawYear = raw.animeYear || raw.year || raw.animeProductionYear;
             const animeTypeRaw = res.animeType || raw.animeType || raw.animeSeriesType || null;
@@ -3039,6 +3181,22 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
               guess.tmdb = { matched: false }
             }
 
+            const seriesProviderId = normalizeProviderId(res.provider || (raw && raw.source) || providerName)
+            const episodeProviderId = normalizeProviderId((res && res.episode && res.episode.source) || null)
+            const episodeDetailCandidate = (() => {
+              if (guess.episodeTitle) return guess.episodeTitle
+              if (res && res.episode) {
+                try {
+                  return res.episode.localized_name || res.episode.name || res.episode.title || null
+                } catch (e) { return null }
+              }
+              return null
+            })()
+            assignProviderSourceMetadata(guess.provider, {
+              seriesProvider: seriesProviderId ? { id: seriesProviderId, detail: guess.seriesTitleExact || guess.originalSeriesTitle || guess.title || providerPreferred } : null,
+              episodeProvider: (episodeProviderId || seriesProviderId) ? { id: episodeProviderId || seriesProviderId, detail: episodeDetailCandidate } : null
+            })
+
             // IMPORTANT: keep parsed episode/season strictly from filename.
             // Prevent parent-folder parsing or provider results from overriding
             // the episode/season numbers that were extracted from the filename.
@@ -3152,6 +3310,13 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
             episodeTitle: tvdbHit.episodeTitle,
             raw: tvdbHit.raw
           }
+          const upstreamSeriesProviderId = normalizeProviderId((providerResult && (providerResult.provider || (providerResult.raw && providerResult.raw.source))) || null)
+          const upstreamSeriesDetail = (providerResult && providerResult.name) ? providerResult.name : (guess.title || null)
+          const episodeSummaryDetail = upstreamSeriesProviderId ? tvdbHit.episodeTitle : null
+          assignProviderSourceMetadata(guess.provider, {
+            seriesProvider: upstreamSeriesProviderId ? { id: upstreamSeriesProviderId, detail: upstreamSeriesDetail } : null,
+            episodeProvider: { id: 'tvdb', detail: episodeSummaryDetail }
+          })
           seriesSignal = true
           analyzeRawForMedia(tvdbHit && tvdbHit.raw && tvdbHit.raw.series)
           analyzeRawForMedia(tvdbHit && tvdbHit.raw && tvdbHit.raw.episode)
@@ -4166,11 +4331,14 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch'];
     
     // Check if scan_input_path changed to update watcher
     const oldScanPath = users[username].settings.scan_input_path;
     const newScanPath = body.scan_input_path;
+    const oldWatchEnabled = coerceBoolean(users[username].settings.enable_folder_watch);
+    let newWatchEnabled = oldWatchEnabled;
+    let watchProvided = false;
     
     for (const k of allowed) {
       if (body[k] === undefined) continue;
@@ -4183,6 +4351,11 @@ app.post('/api/settings', requireAuth, (req, res) => {
         users[username].settings.default_meta_provider = first;
       } else if (k === 'output_folders') {
         users[username].settings.output_folders = Array.isArray(body[k]) ? body[k] : [];
+      } else if (k === 'enable_folder_watch') {
+        watchProvided = true;
+        const normalized = coerceBoolean(body[k]);
+        users[username].settings.enable_folder_watch = normalized;
+        newWatchEnabled = normalized;
       } else {
         users[username].settings[k] = body[k];
       }
@@ -4196,11 +4369,13 @@ app.post('/api/settings', requireAuth, (req, res) => {
     writeJson(usersFile, users);
     appendLog(`SETTINGS_SAVED_USER user=${username} keys=${Object.keys(body).join(',')}`);
     
-    // Update folder watcher if scan_input_path changed
-    if (newScanPath !== undefined && newScanPath !== oldScanPath) {
+    const pathChanged = newScanPath !== undefined && newScanPath !== oldScanPath;
+    const watchToggled = watchProvided && newWatchEnabled !== oldWatchEnabled;
+    if (pathChanged || watchToggled) {
       stopFolderWatcher(username);
-      if (newScanPath) {
-        const libPath = path.resolve(newScanPath);
+      const finalPath = users[username].settings.scan_input_path;
+      if (newWatchEnabled && finalPath) {
+        const libPath = path.resolve(finalPath);
         startFolderWatcher(username, libPath);
       }
     }
@@ -6406,6 +6581,8 @@ module.exports._test.doProcessParsedItem = doProcessParsedItem;
 // expose internal helpers for unit tests
 module.exports._test.stripAniListSeasonSuffix = typeof stripAniListSeasonSuffix !== 'undefined' ? stripAniListSeasonSuffix : null;
 module.exports._test.lookupWikipediaEpisode = typeof lookupWikipediaEpisode !== 'undefined' ? lookupWikipediaEpisode : null;
+module.exports._test.assignProviderSourceMetadata = assignProviderSourceMetadata;
+module.exports._test.PROVIDER_DISPLAY_NAMES = PROVIDER_DISPLAY_NAMES;
 // expose wikiEpisodeCache for tests so unit tests can clear it
 module.exports.wikiEpisodeCache = wikiEpisodeCache;
 

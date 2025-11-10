@@ -30,6 +30,15 @@ function IconApply(){
 
 const API = (path) => `/api${path}`
 
+const PROVIDER_LABELS = {
+  anidb: 'AniDB',
+  anilist: 'AniList',
+  tvdb: 'TVDB',
+  tmdb: 'TMDB',
+  wikipedia: 'Wikipedia',
+  kitsu: 'Kitsu'
+}
+
 axios.defaults.withCredentials = true
 
 function useLocalState(key, initial) {
@@ -2485,6 +2494,12 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const providerYear = provider?.year ? ` (${provider.year})` : ''
   const providerEpisodeTitle = provider?.episodeTitle || ''
   const providerRendered = provider?.renderedName || (providerTitle ? `${providerTitle}${providerYear}${epLabel ? ' - ' + epLabel : ''}${providerEpisodeTitle ? ' - ' + providerEpisodeTitle : ''}` : null)
+  const providerSourceLabel = provider?.source || (provider?.provider ? (PROVIDER_LABELS[String(provider.provider).toLowerCase()] || provider.provider) : 'provider')
+  const providerIdCandidates = []
+  try { if (provider?.sources?.series?.id) providerIdCandidates.push(String(provider.sources.series.id).toLowerCase()) } catch (e) {}
+  try { if (provider?.sources?.episode?.id) providerIdCandidates.push(String(provider.sources.episode.id).toLowerCase()) } catch (e) {}
+  try { if (provider?.provider) providerIdCandidates.push(String(provider.provider).toLowerCase()) } catch (e) {}
+  const isAniDbProvider = providerIdCandidates.includes('anidb')
 
   const basename = (it && it.canonicalPath ? it.canonicalPath.split('/').pop() : '')
   const primary = providerRendered || parsedName || basename || ''
@@ -2560,10 +2575,10 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
             <div style={{fontSize:11, opacity:0.65, marginTop:3}}>
               Source: {provider ? (
                 <>
-                  <span style={{textTransform:'capitalize'}}>
-                    {provider.source || 'provider'}
+                  <span>
+                    {providerSourceLabel}
                   </span>
-                  {(provider.source === 'anidb-ed2k' || provider.source === 'anidb') && 
+                  {isAniDbProvider && 
                    <span style={{marginLeft:4, opacity:0.8}}>(ED2K hash)</span>}
                 </>
               ) : (parsed ? 'parsed' : 'unknown')}
