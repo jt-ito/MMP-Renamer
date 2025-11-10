@@ -4417,6 +4417,10 @@ app.post('/api/enrich', async (req, res) => {
       }
       if (oldHidden) enrichCache[key].hidden = oldHidden;
     }
+    // Also clear parsedCache on forced rescan so filename parsing regenerates
+    if (force && parsedCache[key]) {
+      delete parsedCache[key];
+    }
     // prefer existing enrichment when present and not forcing
     // Only short-circuit to cached provider if it appears to be a complete provider hit
     // (i.e. provider.matched and provider.renderedName present). Additionally, when the
