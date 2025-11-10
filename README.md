@@ -1,203 +1,620 @@
 # MMP-Renamer
 
-A small, local-first media renamer: a Node/Express backend with a Vite+React frontend that
-scans a local library, parses filenames, enriches metadata (TMDb when configured), and provides
-a safe preview / approve workflow that hardlinks files into a Jellyfin-friendly layout.
+**A powerful, local-first media renaming and organizing tool** that scans your media library, enriches metadata from multiple providers (AniDB, AniList, TVDB, TMDb), and creates Jellyfin/Plex-compatible folder structures using hardlinks—keeping your storage efficient without duplicating files.
 
-Important: the `data/` directory contains runtime state and secrets. Do not commit it.
+Built with a Node.js/Express backend and a modern React + Vite frontend, MMP-Renamer is designed for anime enthusiasts and media collectors who want accurate metadata and a safe, preview-before-commit workflow.
 
-## Features
+---
 
-- Full library scanning and per-path enrichment with server-side caching (persisted to `data/`).
-- TMDb enrichment when you provide an API key (settings page).
-- Preview renames and apply non-destructively by creating hardlinks under the configured output path
-  (falls back to copying if hardlinking across devices fails).
-- Applied renames are recorded (applied, hidden, appliedAt, appliedTo, renderedName, metadataFilename)
-  and can be unapproved.
-- Virtualized list rendering (react-window) for smooth large-library browsing.
+## 🎯 Core Features
 
-## Quick start (development)
+### Metadata Enrichment
+- **AniDB ED2K Hash Lookup**: Primary anime provider using file hashing for 99% accurate episode identification—even with bad filenames
+- **Multi-Provider Fallback Chain**: AniList → TVDB → TMDb for comprehensive coverage
+- **Configurable Provider Order**: Drag-and-drop provider priority in the UI
+- **Wikipedia Episode Titles**: Optional fallback for series/episode title enrichment
 
-1. Install dependencies
+### Smart Scanning & Organization
+- **Full & Incremental Scans**: Full library walks or fast incremental detection of new/changed files
+- **Folder Watching**: Automatic background rescans when files are added or modified
+- **Server-Side Search**: Fast regex-based search across large libraries without loading everything client-side
+- **Virtualized List Rendering**: Smooth browsing of 10,000+ items using react-window
 
-```powershell
-npm install
-cd web
-npm install
-cd ..
-```
+### Safe Rename Workflow
+- **Preview Before Apply**: See exactly what will happen before committing any changes
+- **Hardlink-First**: Creates hardlinks by default—no file duplication, instant "renames"
+- **Multiple Output Folders**: Choose different destinations per rename (e.g., Anime Library vs. TV Library)
+- **Alternative Folder Selection**: UI modal lets you pick the target folder on the fly
+- **Unapprove/Undo**: Revert recently applied items back to the queue
 
-2. Run in dev mode
+### Advanced Selection & Bulk Operations
+- **Select Mode**: Click or shift-click to select ranges, then bulk approve/hide/rescan
+- **Drag Selection**: Mouse drag to select multiple items at once
+- **Persistent Selection Across Rescans**: Selections survive metadata refreshes so you can batch-apply after rescanning
+- **Bulk Hide**: Remove clutter by hiding unwanted matches (tracked server-side)
 
-```powershell
-npm run dev
-```
+### Modern UI
+- **Dark & Light Themes**: Toggle between themes for comfortable viewing
+- **Settings Cards Layout**: Organized sections for API Keys, Metadata & Paths, Password Management
+- **Live Template Preview**: See how your rename template renders before saving
+- **Custom Favicon**: Branded with the printer icon for easy tab identification
+- **Responsive Design**: Works on desktop, tablet, and mobile
 
-The backend listens on port 5173. The web dev server (Vite) runs on 5174 and proxies `/api` to the backend.
+---
 
-## Environment variables
+## 📦 Installation
 
-- `SESSION_KEY` (required): cookie/session signing key. Provide a secure random string.
-- `ADMIN_PASSWORD` (optional): when present at first startup an admin user will be created with this
-  password; remove it from the environment after initialization.
+### Prerequisites
+- **Node.js 18+** and **npm** (or compatible package manager)
+- **Git** (to clone the repository)
+- Optional: **Docker** for containerized deployment
 
-## Docker
+### Local Development Setup
 
-Build the image locally:
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/jt-ito/MMP-Renamer.git
+   cd MMP-Renamer
+   ```
 
-```powershell
+2. **Install server dependencies**
+   ```bash
+   npm install
+   ```
+
+3. **Install web UI dependencies**
+   ```bash
+   cd web
+   npm install
+   cd ..
+   ```
+
+4. **Set environment variables** (optional but recommended)
+   ```bash
+   # Windows PowerShell
+   $env:SESSION_KEY = "your-secure-random-string-here"
+   $env:ADMIN_PASSWORD = "temporary-admin-password"
+
+   # Linux/macOS
+   export SESSION_KEY="your-secure-random-string-here"
+   export ADMIN_PASSWORD="temporary-admin-password"
+   ```
+
+   - `SESSION_KEY`: Required for secure cookie signing (generate a random 32+ character string)
+   - `ADMIN_PASSWORD`: Used on first run to create the admin user; remove after initialization
+
+5. **Run in development mode**
+   ```bash
+   npm run dev
+   ```
+
+   This starts:
+   - Backend server on port **5173**
+   - Vite dev server on port **5174** (proxies `/api` to backend)
+
+6. **Build for production** (optional)
+   ```bash
+   cd web
+   npm run build
+   cd ..
+   node server.js
+   ```
+
+   Production build serves static assets from `web/dist/` on port **5173**.
+
+### First-Time Setup
+
+1. Navigate to `http://localhost:5173` in your browser
+2. Register the first user (becomes admin automatically)
+3. Go to **Settings** and configure:
+   - **API Keys**: TMDb, TVDB v4, AniList, AniDB credentials
+   - **Input Path**: Directory to scan for media files
+   - **Output Path**: Directory where hardlinks will be created
+   - **Rename Template**: Customize filename format (see [Template Tokens](#rename-template-tokens))
+
+---
+
+## 🐳 Docker Deployment
+
+### Build the Image
+
+```bash
 docker build -t mmp-renamer:latest .
 ```
 
-Run it and mount `data/` from the host:
+### Run the Container
 
-```powershell
-docker run -p 5173:5173 -v ${PWD}\\data:/usr/src/app/data -e SESSION_KEY="<secure-session-key>" -e ADMIN_PASSWORD="<temporary-admin-pwd>" mmp-renamer:latest
+```bash
+docker run -d \
+  --name mmp-renamer \
+  -p 5173:5173 \
+  -v /path/to/data:/usr/src/app/data \
+  -v /path/to/media:/media \
+  -e SESSION_KEY="your-secure-session-key" \
+  -e ADMIN_PASSWORD="temporary-admin-password" \
+  --restart unless-stopped \
+  mmp-renamer:latest
 ```
 
-Build with custom repo/ref (the Dockerfile supports `REPO_URL` and `REPO_REF` build args):
+**Important for Hardlinks**: Mount the **parent directory** that contains both your input and output folders. Hardlinks cannot cross filesystem boundaries—if you mount `/input` and `/output` separately, even on the same physical disk, Docker treats them as separate filesystems and hardlinks will fail with `EXDEV` errors.
 
-```powershell
-docker build --build-arg REPO_URL=https://github.com/jt-ito/MMP-Renamer.git --build-arg REPO_REF=main -t mmp-renamer:latest .
-```
-MMP-Renamer
-===========
+✅ **Correct**: Mount `/mnt/media` and use `/mnt/media/input` and `/mnt/media/output` inside the container  
+❌ **Wrong**: Mount `/mnt/media/input` to `/input` and `/mnt/media/output` to `/output` separately
 
-A lightweight media renamer and organizer with provider-based enrichment (TMDb/Kitsu).
+### Docker Compose
 
-This README describes how to run the server and web UI, configure metadata providers, and how to run in Docker or Docker Compose. It also explains an important mount rule when running inside containers: hardlinks cannot cross filesystems, so mount the parent mount point (or entire device) into the container instead of mounting multiple individual subpaths from the same device.
-
-Quick features
-- Filename parsing and parsed vs provider naming separation (parsed results never include episodeTitle)
-- TMDb primary provider with Kitsu fallback
-- Per-user and server settings (API keys, scan input/output, rename template)
-- Hardlink-only "apply" semantics by default (no copy fallback) — keeps storage efficient and avoids duplicates
-- Background first-N enrichment to populate provider-rendered names
-- Sweep helper to purge stale enrichment entries
-
-Getting started (local)
-1. Install Node.js 18+ and npm
-2. Clone repo and install deps
-
-   npm install
-
-3. Start server (development)
-
-   node server.js
-
-4. Open the web UI at http://localhost:5173 (or the port you configured)
-
-Configuration
-- Server settings (global admin): `data/settings.json` or via Admin UI -> Settings (requires an admin account)
-  - `tmdb_api_key` — provider key used when user keys are not supplied
-  - `tvdb_v4_api_key` — TVDB project key used for v4 authentication (required for TVDB lookups)
-  - `tvdb_v4_user_pin` — optional TVDB v4 user PIN when your project requires account-scoped access
-  - `scan_output_path` — server default output path for hardlinking
-  - `rename_template` — default rename template
-- Per-user settings stored in `data/users.json` under each user -> `settings`:
-  - `scan_input_path` — user default input path for scans
-  - `scan_output_path` — user default output path for renames
-  - `tmdb_api_key` — optional user key that overrides server key
-  - `tvdb_v4_api_key` — per-user TVDB project key override
-  - `tvdb_v4_user_pin` — per-user TVDB v4 user PIN override
-  - `rename_template` — user template to override server default
-
-Important: hardlinks and mounts (Docker/containers)
------------------------------------------------
-Hardlinks are implemented with `fs.linkSync` and therefore cannot be created across different filesystems or mount points. When the server runs inside a container, the kernel sees container mount points as distinct filesystems if you mount multiple host directories separately — even if they live on the same physical device. That causes EXDEV (cross-device link) errors when the server attempts to hardlink from the input path to the output path.
-
-To avoid this problem, mount the entire parent mount (or the device root) into the container and reference subfolders inside the container. Do NOT mount separate subfolders individually when you need to hardlink between them.
-
-Example: Bad (DON'T do this)
-- Mount `/mnt/disk/media/input` -> `/input`
-- Mount `/mnt/disk/media/output` -> `/media`
-
-Even though both host paths live on the same physical device, the container will often treat `/input` and `/media` as separate mount points and hardlinks will fail with EXDEV.
-
-Example: Good (DO this)
-- Mount `/mnt/disk/media` -> `/media`
-  - Use `/media/input` and `/media/output` inside the container for scanning and output.
-
-This ensures the kernel sees the source and the destination as the same filesystem and hardlinks succeed.
-
-Docker / Docker Compose
------------------------
-A recommended Docker setup is to mount the parent media directory into the container and map a host data directory for the server state.
-
-Minimal docker-compose example:
-
-version: '3.8'
-services:
-  renamer:
-    image: node:18-alpine
-    working_dir: /app
-    volumes:
-      - ./data:/app/data
-      - /mnt/disk/media:/media   # mount the entire media mountpoint
-      - ./web:/app/web
-      - ./lib:/app/lib
-    command: sh -c "npm install --production && node server.js"
-    ports:
-      - "5173:5173"
-    environment:
-      - NODE_ENV=production
-      # optionally set global TMDb key
-      # - TMDB_API_KEY=your_tmdb_key_here
-
-Alternate docker-compose service example
----------------------------------------
-
-You can also use the following service block in a compose file. This example mirrors common deployment variables used in this repo and shows a named service with a container name.
+Create `docker-compose.yml`:
 
 ```yaml
-mmp-renamer:
-    build:
-      context: ${MR_BUILD_PATH}
-      dockerfile: Dockerfile
+version: '3.8'
+services:
+  mmp-renamer:
+    image: mmp-renamer:latest
     container_name: mmp-renamer
-    # Optional: you can replace `build:` with `image: mmp-renamer:latest` to run a prebuilt image
-    # Ensure the container (the user really) has R/W privileges by running (enter the path to where you have your data path set in the yml):sudo chown -R 1000:1000 /home/jt/containers/MMP-Renamer/data
-    privileged: true
     ports:
-      - "${MR_EXTERNAL_PORT}:${MR_INTERNAL_PORT}"
-    environment:
-      - SESSION_KEY=${MR_SESSION_KEY} # required for secure cookie signing
-      - SESSION_COOKIE_SECURE=${MR_SESSION_COOKIE_SECURE} # optional: override secure cookie setting. Usefull when running on localhost (anything without https)
+      - "5173:5173"
     volumes:
-      - ${MR_DATA_PATH}:/usr/src/app/data   # persistent runtime data (users, enrich.json, rendered-index.json)
-      - ${MR_MOUNT_PATH}:/mnt:rw  # mount the entire drive that includes both your input and output folders
+      - ./data:/usr/src/app/data          # Persistent runtime data
+      - /mnt/media:/media:rw              # Mount entire parent media directory
+    environment:
+      - SESSION_KEY=${SESSION_KEY}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}  # Remove after first run
     restart: unless-stopped
 ```
 
-Notes:
-- Replace `/mnt/disk/media` with your host mountpoint that contains both the input and output folders.
-- If you run the container on Windows, use the host path appropriate for Windows (e.g., `//c/Users/you/media` or `C:\\media` depending on Docker setup). The same principle applies: mount the parent device/mountpoint once.
+Run with:
+```bash
+docker-compose up -d
+```
 
-Running without Docker
-----------------------
-If you run directly on a host OS, hardlinks will succeed as long as the input and output paths are on the same filesystem. If your input and output are on different drives, hardlinks will not be possible.
+### Environment Variables
 
-Behavior choices
-- Default: hardlink-only. If the server cannot hardlink due to EXDEV, the operation fails and is logged. This avoids accidental duplication.
-- Alternative: you may enable a copy-on-cross-device fallback by setting a server option (not enabled by default) — this will copy the file when hardlinks are impossible. Use with care.
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SESSION_KEY` | Yes | Secure random string for cookie signing (32+ chars) |
+| `ADMIN_PASSWORD` | No | Sets admin password on first run; remove after setup |
+| `PORT` | No | Override default port 5173 |
 
-Admin & Troubleshooting
-- Check `data/logs.txt` for helpful short tokens (SCAN_START, ENRICH_REQUEST, ENRICH_SUCCESS, PREVIEW_EFFECTIVE_OUTPUT, HARDLINK_OK, HARDLINK_FAIL, HARDLINK_CROSS_DEVICE, HARDLINK_REFUSE_INPUT)
-- If you see `HARDLINK_CROSS_DEVICE` or EXDEV errors, verify mounts as described above.
-- Use the `/api/path/exists` endpoint to confirm the server can see configured paths.
+---
+## âš™ï¸ Configuration
 
-Security & Permissions
-- The server must have read access to scan input folders and write access to the configured output path.
-- When running in Docker, ensure the container user has correct permissions or use a bind-mounted data directory with compatible permissions.
+### Settings Overview
 
-Contributing
-- Tests and scripts live under `scripts/` — please run `npm test` or inspect `scripts/test-hardlink.js` when changing hardlink logic.
+MMP-Renamer supports both **server-wide** (admin-configured) and **per-user** settings. User settings override server defaults where applicable.
 
-Credits
-- Built with Node.js and a minimal React UI in `web/`.
+Configuration is managed via:
+- **Web UI**: Settings page (requires login)
+- **Direct file edit**: `data/settings.json` (server), `data/users.json` (per-user)
+- **API**: `/api/settings` endpoint (POST to update, GET to retrieve)
 
-License
-- MIT
+### API Keys & Provider Configuration
 
+#### AniDB (Anime Database)
+**Primary anime provider using ED2K file hashing for 99% accurate identification**
 
-If you'd like, I can also add a small troubleshooting checklist to the Admin UI that detects EXDEV situations and warns users before they apply renames. Let me know if you want that added and where you'd like the guidance displayed.
+1. Create a free account at [anidb.net/user/register](https://anidb.net/user/register)
+2. Register your client at [anidb.net/software/add](https://anidb.net/software/add):
+   - **Client Name**: `mmprename` (or custom)
+   - **Version**: `1`
+   - **Purpose**: "Anime file renaming and metadata lookup"
+3. Wait for moderator approval (1-2 days)
+4. Add credentials in Settings:
+   ```json
+   {
+     "anidb_username": "your_anidb_username",
+     "anidb_password": "your_anidb_password",
+     "anidb_client_name": "mmprename",
+     "anidb_client_version": "1"
+   }
+   ```
+
+**How it works**: AniDB computes an ED2K hash of your file and looks it up in their database. This works even with terrible filenames because it identifies the exact file by content, not name. Rate-limited to 2.5s between requests to respect AniDB guidelines.
+
+#### AniList (Anime Catalog)
+**Provides series metadata for anime (no episode titles)**
+
+1. Optional: Get an API key at [anilist.co/settings/developer](https://anilist.co/settings/developer)
+2. Add to Settings:
+   ```json
+   {
+     "anilist_api_key": "your_optional_anilist_key"
+   }
+   ```
+
+**Note**: AniList does not provide episode titles. Use TVDB or TMDb alongside it for episode names.
+
+#### TVDB v4 (TheTVDB)
+**Series and episode metadata with localized titles**
+
+1. Create an account at [thetvdb.com](https://thetvdb.com)
+2. Get a v4 Project API Key from your [dashboard](https://thetvdb.com/dashboard)
+3. Optional: Add User PIN if your project requires account-scoped access
+4. Add to Settings:
+   ```json
+   {
+     "tvdb_v4_api_key": "your_project_api_key",
+     "tvdb_v4_user_pin": "optional_user_pin"
+   }
+   ```
+
+**Automatic token refresh**: Tokens are managed server-side and refresh automatically.
+
+#### TMDb (The Movie Database)
+**General TV/Movie metadata provider**
+
+1. Create an account at [themoviedb.org](https://www.themoviedb.org/signup)
+2. Request an API key at [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api)
+3. Add to Settings:
+   ```json
+   {
+     "tmdb_api_key": "your_tmdb_api_key"
+   }
+   ```
+
+### Provider Priority Order
+
+Drag-and-drop providers in the **Settings â†’ Metadata & File Paths** section to set lookup order. Default order:
+
+1. **AniDB** (ED2K hash, anime only)
+2. **AniList** (anime catalog, no episode titles)
+3. **TVDB** (series/episode metadata)
+4. **TMDb** (general fallback)
+
+The system tries each provider in order until a match is found. You can disable providers by removing them from the active slots.
+
+### Input/Output Paths
+
+| Setting | Description |
+|---------|-------------|
+| **Input Path** | Directory to scan for media files (e.g., `C:\Media\TV` or `/mnt/media/input`) |
+| **Output Path** | Default destination for hardlinks (e.g., `D:\JellyfinMedia\TV` or `/mnt/media/output`) |
+| **Alternative Output Folders** | Additional destinations selectable per-rename via UI modal |
+
+**Critical for Docker users**: Mount the **parent directory** containing both input and output folders. See [Docker Hardlink Requirements](#-docker-deployment) for details.
+
+### Rename Template Tokens
+
+Customize filename format in **Settings â†’ Metadata & File Paths**. Available tokens:
+
+| Token | Description | Example |
+|-------|-------------|---------|
+| `{title}` | Series/movie title | `Attack on Titan` |
+| `{basename}` | Original filename (no extension) | `aot_s01e01_720p` |
+| `{year}` | Release year | `2013` |
+| `{season}` | Season number (zero-padded) | `01` |
+| `{episode}` | Episode number (zero-padded) | `05` |
+| `{epLabel}` | Season/episode label | `S01E05` |
+| `{episodeTitle}` | Episode name | `First Battle` |
+| `{episodeRange}` | Multi-episode range | `01-03` |
+| `{tmdbId}` | TMDb ID (if available) | `1429` |
+
+**Default template**:  
+```
+{title} ({year}) - {epLabel} - {episodeTitle}
+```
+
+**Example output**:  
+```
+Attack on Titan (2013)/Season 01/Attack on Titan (2013) - S01E05 - First Battle.mkv
+```
+
+**Live preview** in Settings shows real-time rendering as you type.
+
+---
+
+## ðŸš€ Usage Guide
+
+### Scanning Your Library
+
+1. **Configure Input Path** in Settings (e.g., `C:\Media\Anime`)
+2. Click **Scan** in the header to run a full library walk
+3. Or click **Incremental Scan** to detect only new/changed files since last scan
+
+**Folder Watching**: Optionally enable automatic background scans when files are added/modified (configured per-user in `data/users.json` â†’ `scan_input_path`).
+
+### Enriching Metadata
+
+After scanning, the app automatically:
+1. Parses filenames to extract series name, season, episode
+2. Computes ED2K hash for anime files (if AniDB credentials configured)
+3. Looks up metadata from configured providers in priority order
+4. Caches results to `data/` for fast subsequent access
+
+**Manual refresh**: Click the refresh icon on individual items or use **Refresh metadata** button to force provider re-lookup.
+
+### Previewing & Applying Renames
+
+1. **Review parsed items** in the main listâ€”each shows:
+   - Original path
+   - Parsed/provider metadata
+   - Source provider (e.g., "anidb-ed2k", "tmdb")
+   - Season/episode info
+
+2. **Select items**:
+   - Click **Select** button to enter selection mode
+   - Click items to toggle selection
+   - **Shift+click** to select ranges
+   - **Drag** across items to multi-select
+
+3. **Approve selected**:
+   - Click **Approve selected** (appears when items are selected)
+   - Choose output folder from modal (if alternative folders configured)
+   - Hardlinks are created instantly (no file copying)
+
+4. **Hide unwanted items**: Click **Hide** on individual items or **Hide selected** to remove clutter
+
+### Bulk Operations
+
+| Action | Description |
+|--------|-------------|
+| **Approve selected** | Hardlink selected items to output folder |
+| **Hide selected** | Mark items as hidden (won't appear in future scans) |
+| **Rescan selected** | Force metadata refresh for selected items |
+
+**Selection persistence**: Selections survive rescansâ€”useful workflow is to select items, rescan them with fresh metadata, then immediately approve the updated results.
+
+### Unapproving Items
+
+If you need to undo a rename:
+
+1. Go to **Settings â†’ Metadata & File Paths**
+2. Under **Unapprove recent applied items**, choose count (Last 1, 5, 10, 20, or All)
+3. Click **Unapprove**
+
+Unapproved items reappear in the main list for re-approval or editing.
+
+### Hidden Items Management
+
+Admins can review/unhide items:
+
+1. Click **Hidden items** in header (admin only)
+2. Browse hidden paths
+3. Click **Unhide** to restore items to visible queue
+
+---
+
+## ðŸ“š Advanced Features
+
+### Server-Side Search
+
+Search across large libraries without loading everything into memory:
+
+1. Enter query in header search box
+2. Click **Search** (supports regex patterns server-side)
+3. Results stream efficiently even for 10,000+ item libraries
+
+**Clear search**: Click **Clear** or click the app title to reset view.
+
+### Alternative Output Folder Selection
+
+Configure multiple destinations (e.g., separate anime and TV libraries):
+
+1. **Settings â†’ Metadata & File Paths â†’ Alternative Output Folders**
+2. Click **+ Add Output Folder**
+3. Set name (e.g., "Anime Library") and path (e.g., `D:\Media\Anime`)
+4. Click **Save**
+
+When applying renames, a modal appears prompting you to choose the destination folder. Hardlinks are created to the selected path.
+
+### Shift-Click Range Selection
+
+1. Click **Select** to enter selection mode
+2. Click first item
+3. **Shift+click** last item in range
+4. All items between are selected
+
+Combine with **Rescan selected** to batch-refresh metadata, then **Approve selected** to apply in one go.
+
+### Drag Selection
+
+1. Enter select mode
+2. Click and hold on an item
+3. Drag mouse over additional items
+4. Release to finalize selection
+
+Useful for quickly selecting non-contiguous items or large blocks.
+
+### Provider Order Customization
+
+Drag providers in **Settings â†’ Metadata providers** to control lookup order. For example, prioritize TMDb over TVDB for better movie metadata, or put AniDB first for anime-heavy libraries.
+
+Inactive providers appear below active slotsâ€”click to re-add them to the chain.
+
+### Logs & Diagnostics
+
+**Server logs**: `data/logs.txt` contains timestamped events:
+- `SCAN_START`, `SCAN_COMPLETE`: Library walk activity
+- `ENRICH_REQUEST`, `ENRICH_SUCCESS`: Metadata lookups
+- `HARDLINK_OK`, `HARDLINK_FAIL`: Rename operation outcomes
+- `HARDLINK_CROSS_DEVICE`: Hardlink failed due to filesystem boundary
+
+**Web UI logs panel**: Real-time log tail displayed in sidebar (click **Refresh** to update).
+
+**Troubleshooting**:
+- `HARDLINK_CROSS_DEVICE`: Input and output paths are on different filesystemsâ€”see [Docker Hardlink Requirements](#-docker-deployment)
+- `ENRICH_ANIDB_RATE_LIMIT`: AniDB request throttled (normal behavior)
+- `ENRICH_PROVIDER_FAIL`: Provider unreachable or API key invalid
+
+### Data Directory Structure
+
+```
+data/
+â”œâ”€â”€ enrich-store.json       # Cached enrichment metadata
+â”œâ”€â”€ logs.txt                # Server event log
+â”œâ”€â”€ parsed-cache.json       # Filename parse results
+â”œâ”€â”€ rendered-index.json     # Rendered name index
+â”œâ”€â”€ scan-cache.json         # File scan cache (mtimes, sizes)
+â”œâ”€â”€ scans.db                # SQLite database (scans, enrichment)
+â”œâ”€â”€ scans.json              # Legacy scan storage (migrated to DB)
+â”œâ”€â”€ session.key             # Session signing key (auto-generated)
+â”œâ”€â”€ settings.json           # Server-wide settings
+â”œâ”€â”€ users.json              # User accounts and per-user settings
+â””â”€â”€ wiki-episode-cache.json # Wikipedia episode cache
+```
+
+**Important**: Do not commit `data/` to version controlâ€”it contains API keys and session secrets.
+
+---
+
+## ðŸ§ª Testing & Development
+
+### Run Tests
+
+```bash
+# All tests
+npm test
+
+# Specific test suites
+npm run test:unit          # Core unit tests
+npm run test:ed2k          # ED2K hash tests
+npm run test:anidb         # AniDB provider tests
+```
+
+### Test Coverage
+
+- âœ… ED2K hash computation (single/multi-chunk, boundary cases)
+- âœ… AniDB UDP/HTTP responses, rate limiting
+- âœ… TVDB episode title translation priority (english â†’ romaji â†’ native)
+- âœ… Filename parsing edge cases
+- âœ… Hardlink creation logic
+- âœ… Enrichment cache normalization
+
+### Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Run tests (`npm test`) and ensure they pass
+4. Commit changes (`git commit -m 'Add amazing feature'`)
+5. Push to branch (`git push origin feature/amazing-feature`)
+6. Open a Pull Request
+
+**Code style**: Follow existing patterns. ESLint/Prettier configs coming soon.
+
+---
+
+## ðŸ”§ Troubleshooting
+
+### Common Issues
+
+#### "Hardlink failed: EXDEV (cross-device link not permitted)"
+
+**Cause**: Input and output paths are on different filesystems. In Docker, this happens when you mount input and output folders separatelyâ€”even if they're on the same physical disk, the kernel sees them as distinct mounts.
+
+**Solution**:
+- **Docker**: Mount the **parent directory** once (e.g., `/mnt/media` â†’ `/media`) and use subpaths inside the container (`/media/input`, `/media/output`)
+- **Host OS**: Ensure input and output are on the same drive/partition
+
+See [Docker Hardlink Requirements](#-docker-deployment) for detailed examples.
+
+#### "Authentication failed" (AniDB)
+
+**Cause**: Invalid credentials or rate limit exceeded.
+
+**Solution**:
+- Verify username/password in Settings
+- Check AniDB account is active
+- Wait 24 hours if banned (should not happen with proper rate limitingâ€”report as bug)
+
+#### Items disappear after scanning
+
+**Cause**: Items were previously hidden or applied.
+
+**Solution**:
+- Check **Hidden items** page (admin only) to unhide
+- Or **Unapprove** recently applied items in Settings
+
+#### Metadata not enriching
+
+**Cause**: Missing API keys or network issues.
+
+**Solution**:
+- Verify API keys in Settings (click **Show** to reveal)
+- Check `data/logs.txt` for `ENRICH_PROVIDER_FAIL` errors
+- Test provider endpoints manually (see [API Documentation](#-api-reference))
+
+#### Search returns no results
+
+**Cause**: Query doesn't match any canonical paths.
+
+**Solution**:
+- Try broader search terms (e.g., part of series name)
+- Use regex patterns if needed (e.g., `.*anime.*`)
+- Click **Clear** to reset view
+
+---
+
+## ðŸ“– API Reference
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/scan` | POST | Trigger full or incremental scan |
+| `/api/scan/:id/items` | GET | Fetch scan results (paginated) |
+| `/api/scan/:id/search` | GET | Search scan items by query |
+| `/api/enrich` | POST/GET | Enrich metadata for a path |
+| `/api/enrich/bulk` | POST | Bulk enrich multiple paths |
+| `/api/rename/preview` | POST | Preview rename plan |
+| `/api/rename/apply` | POST | Apply renames (create hardlinks) |
+| `/api/rename/unapprove` | POST | Unapprove recent applied items |
+| `/api/settings` | GET/POST | Retrieve/update settings |
+| `/api/users` | GET/POST | User management (admin) |
+| `/api/path/exists` | GET | Check if path exists on server |
+
+### Example: Trigger Incremental Scan
+
+```bash
+curl -X POST http://localhost:5173/api/scan \
+  -H "Content-Type: application/json" \
+  -d '{
+    "libraryId": "default",
+    "mode": "incremental"
+  }'
+```
+
+### Example: Search Scan Items
+
+```bash
+curl "http://localhost:5173/api/scan/<scan-id>/search?q=attack&offset=0&limit=50"
+```
+
+---
+
+## ðŸ“„ Additional Documentation
+
+- **[AniDB Integration Guide](ANIDB_INTEGRATION.md)**: Detailed AniDB setup, rate limiting, ED2K hashing
+- **[AniDB Migration Guide](ANIDB_MIGRATION_GUIDE.md)**: Migrating from other systems to AniDB-based enrichment
+- **[Implementation Summary](IMPLEMENTATION_SUMMARY.md)**: Technical deep-dive into AniDB integration
+- **[Docker Guide](README-docker.md)**: Extended Docker deployment instructions
+
+---
+
+## ðŸ™ Credits
+
+- **Built with**: Node.js, Express, React, Vite, react-window
+- **Metadata Providers**: AniDB, AniList, TVDB, TMDb, Wikipedia
+- **Contributors**: See [GitHub contributors](https://github.com/jt-ito/MMP-Renamer/graphs/contributors)
+
+---
+
+## ðŸ“œ License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+## ðŸ†˜ Support
+
+- **Issues**: [GitHub Issues](https://github.com/jt-ito/MMP-Renamer/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/jt-ito/MMP-Renamer/discussions)
+- **Logs**: Check `data/logs.txt` for diagnostic information
+
+**Before opening an issue**, please:
+1. Check existing issues/discussions
+2. Include relevant log excerpts from `data/logs.txt`
+3. Describe steps to reproduce
+4. Mention your environment (OS, Docker version, Node version)
+
+---
+
+**Happy renaming! ðŸŽ¬âœ¨**
