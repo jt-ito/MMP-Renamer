@@ -150,13 +150,25 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 .hidden-list tr { background: transparent }
 .hidden-list tr:nth-child(even) { background: transparent }
 
-/* Search button uses hunter-green to match Settings save action */
-.btn-search { background: var(--hunter-green); color: #fff; border: none }
-.btn-search:hover { filter: brightness(0.95) }
+/* Search/Clear buttons follow the standard ghost styling so header controls share one palette */
+.btn-search,
+.btn-clear {
+	background: var(--bg-700);
+	border: 1px solid var(--bg-600);
+	color: var(--accent);
+	box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
 
-/* Clear button uses a dark red tone */
-.btn-clear { background: var(--danger-dark); color: #fff; border: none }
-.btn-clear:hover { filter: brightness(0.95) }
+.btn-search:hover,
+.btn-clear:hover {
+	background: var(--bg-600);
+}
+
+.btn-search:disabled,
+.btn-clear:disabled {
+	opacity: 0.55;
+	box-shadow: none;
+}
 
 /* Form and page centering utilities */
 .centered-page { display:flex; align-items:center; justify-content:center; min-height: calc(100vh - 120px); padding:20px }
@@ -276,9 +288,6 @@ select.form-input:focus {
 
 /* Make all settings/page buttons slightly more rounded to match modern look */
 .btn-ghost, .btn-cta, button { border-radius:12px }
-
-/* Light-mode: make ghost buttons have black borders for header/top-right controls */
-.light .btn-ghost { border-color: #000 }
 
 .app main { display:flex; gap:16px; padding:18px; height: calc(100vh - 108px); }
 .list { flex:1; background: var(--bg-800); padding:12px; border-radius: var(--radius); box-shadow: 0 6px 20px rgba(0,0,0,0.6); min-width:0; display: flex; flex-direction: column; }
@@ -454,17 +463,16 @@ button.folder-option:hover {
 
 /* Light theme overrides - Modern, clean design system */
 .light {
-	/* Modern light color palette - inspired by clean, professional design systems */
-	--bg-900: #F8FAFB; /* soft off-white background */
-	--bg-800: #FFFFFF; /* pure white cards */
-	--bg-700: #F1F4F9; /* subtle gray surface */
-	--bg-600: #DFE4EA; /* refined border color */
-	--muted: #64748B; /* balanced gray for secondary text */
-	--accent: #0F172A; /* deep slate for primary text */
-	--accent-cta: #0891B2; /* vibrant cyan for primary actions */
-	--accent-cta-2: #6366F1; /* modern indigo for variety */
-	--hunter-green: #059669; /* emerald green for save actions */
-	--danger-dark: #DC2626; /* bright red for destructive actions */
+	--bg-900: #F8FAFC;
+	--bg-800: #D9EAFD;
+	--bg-700: #BCCCDC;
+	--bg-600: #9AA6B2;
+	--muted: #5F6E7C;
+	--accent: #1C2534;
+	--accent-cta: #2563EB;
+	--accent-cta-2: #0EA5A3;
+	--hunter-green: #2563EB;
+	--danger-dark: #DC2626;
 }
 
 /* Light theme specific adjustments */
@@ -474,97 +482,121 @@ button.folder-option:hover {
 }
 
 .light .app header {
-	background: var(--bg-800);
-	border-bottom: 1px solid var(--bg-600);
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+	background: linear-gradient(180deg, rgba(248,250,252,0.96), rgba(217,234,253,0.92));
+	border-bottom: 1px solid rgba(154,166,178,0.45);
+	box-shadow: 0 14px 32px rgba(188,204,220,0.45);
 }
 
 .light .app header button {
-	border: 1px solid var(--bg-600);
+	background: rgba(217,234,253,0.78);
+	border: 1px solid rgba(154,166,178,0.45);
 	color: var(--accent);
+	box-shadow: 0 8px 18px rgba(188,204,220,0.38);
 }
 
 .light .app header button:hover {
-	background: var(--bg-700);
-	border-color: #CBD5E1;
+	background: rgba(188,204,220,0.85);
+	border-color: rgba(154,166,178,0.65);
 }
 
-.light .btn-ghost {
-	border-color: var(--bg-600);
+.light .btn-ghost,
+.light .btn-incremental,
+.light .btn-search,
+.light .btn-clear {
+	background: rgba(217,234,253,0.78);
+	border: 1px solid rgba(154,166,178,0.45);
 	color: var(--accent);
+	box-shadow: 0 10px 24px rgba(188,204,220,0.42);
 }
 
-.light .btn-ghost:hover {
-	background: var(--bg-700);
-	border-color: #94A3B8;
+.light .btn-ghost:hover,
+.light .btn-incremental:hover,
+.light .btn-search:hover,
+.light .btn-clear:hover {
+	background: rgba(188,204,220,0.88);
+	border-color: rgba(154,166,178,0.65);
+}
+
+.light .btn-ghost:disabled,
+.light .btn-incremental:disabled,
+.light .btn-search:disabled,
+.light .btn-clear:disabled {
+	opacity: 0.55;
+	box-shadow: none;
+	cursor: not-allowed;
 }
 
 .light .btn-cta {
 	background: var(--accent-cta);
 	color: #FFFFFF;
-	box-shadow: 0 2px 8px rgba(8, 145, 178, 0.25);
+	box-shadow: 0 12px 24px rgba(37,99,235,0.35);
 }
 
 .light .btn-cta:hover {
-	background: #0E7490;
-	box-shadow: 0 4px 12px rgba(8, 145, 178, 0.35);
+	background: #1D4ED8;
+	box-shadow: 0 16px 30px rgba(37,99,235,0.42);
 }
 
 .light .btn-save {
-	background: var(--hunter-green);
-	color: #FFFFFF;
-	box-shadow: 0 2px 8px rgba(5, 150, 105, 0.25);
+	background: linear-gradient(180deg, rgba(188,204,220,0.95), rgba(154,166,178,0.95));
+	color: var(--accent);
+	border: 1px solid rgba(154,166,178,0.55);
+	box-shadow: 0 16px 32px rgba(154,166,178,0.43);
 }
 
 .light .btn-save:hover {
-	background: #047857;
-	box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+	background: linear-gradient(180deg, rgba(154,166,178,0.98), rgba(188,204,220,0.98));
+	box-shadow: 0 18px 36px rgba(154,166,178,0.5);
 }
 
-.light .btn-search {
-	background: var(--hunter-green);
-	color: #FFFFFF;
+.light .btn-save:disabled {
+	opacity: 0.55;
+	box-shadow: none;
+	cursor: not-allowed;
 }
 
-.light .btn-search:hover {
-	background: #047857;
+.light .list,
+.light .side,
+.light .form-card,
+.light .settings-page-content .form-card,
+.light .logs,
+.light .modal-card,
+.light .loading-card,
+.light .toast,
+.light .hidden-page .form-card {
+	background: linear-gradient(180deg, rgba(248,250,252,0.98), rgba(217,234,253,0.92));
+	border: 1px solid rgba(154,166,178,0.45);
+	box-shadow: 0 18px 40px rgba(188,204,220,0.45);
+	color: var(--accent);
 }
 
-.light .btn-clear {
-	background: var(--danger-dark);
-	color: #FFFFFF;
-}
-
-.light .btn-clear:hover {
-	background: #B91C1C;
-}
-
-.light .list {
-	background: var(--bg-800);
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.05);
+.light .logs pre {
+	background: rgba(217,234,253,0.6);
+	color: var(--muted);
+	border: 1px solid rgba(154,166,178,0.45);
 }
 
 .light .row {
-	border-bottom: 1px solid var(--bg-600);
-	background: var(--bg-800);
+	border-bottom: 1px solid rgba(154,166,178,0.35);
+	background: rgba(248,250,252,0.92);
 }
 
 .light .row:nth-child(even) {
-	background: var(--bg-700);
+	background: rgba(217,234,253,0.9);
 }
 
 .light .row.row-select-mode:hover {
-	background: rgba(8, 145, 178, 0.08);
+	background: rgba(188,204,220,0.35);
 }
 
 .light .row.row-selected {
-	background: rgba(8, 145, 178, 0.12);
-	border-color: rgba(8, 145, 178, 0.3);
-	box-shadow: inset 0 0 0 1px rgba(8, 145, 178, 0.2);
+	background: linear-gradient(180deg, rgba(217,234,253,0.82), rgba(188,204,220,0.78));
+	border-color: rgba(154,166,178,0.65);
+	box-shadow: inset 0 0 0 1px rgba(154,166,178,0.45);
 }
 
 .light .row.row-selected .path {
-	color: var(--muted);
+	color: rgba(28,37,52,0.72);
 }
 
 .light .row.row-selected .title {
@@ -572,15 +604,16 @@ button.folder-option:hover {
 	font-weight: 700;
 }
 
-.light .row input[type="checkbox"] {
-	border: 2px solid #CBD5E1;
-	background: #FFFFFF;
-	box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+.light .row input[type="checkbox"],
+.light .hidden-list input[type="checkbox"] {
+	border: 2px solid rgba(154,166,178,0.6);
+	background: rgba(248,250,252,0.92);
+	box-shadow: inset 0 1px 2px rgba(188,204,220,0.45);
 }
 
 .light .row input[type="checkbox"]:hover,
 .light .hidden-list input[type="checkbox"]:hover {
-	border-color: var(--accent-cta);
+	border-color: rgba(37,99,235,0.55);
 }
 
 .light .row input[type="checkbox"]:checked,
@@ -590,179 +623,139 @@ button.folder-option:hover {
 }
 
 .light .provider-button {
-	border-color: var(--bg-600);
+	border-color: rgba(154,166,178,0.55);
 	color: var(--accent);
-	background: var(--bg-800);
+	background: rgba(248,250,252,0.9);
+	box-shadow: 0 8px 18px rgba(188,204,220,0.38);
 }
 
 .light .provider-button.inactive:hover {
-	background: var(--bg-700);
-	border-color: #94A3B8;
+	background: rgba(217,234,253,0.85);
+	border-color: rgba(154,166,178,0.65);
 }
 
 .light .provider-button.active {
 	background: var(--accent-cta);
 	color: #FFFFFF;
 	border-color: var(--accent-cta);
-	box-shadow: 0 4px 12px rgba(8, 145, 178, 0.3);
+	box-shadow: 0 12px 28px rgba(37,99,235,0.4);
 }
 
 .light .provider-slot {
-	background: rgba(8, 145, 178, 0.15);
-	color: var(--accent-cta);
+	background: rgba(188,204,220,0.35);
+	color: rgba(28,37,52,0.75);
 }
 
 .light .provider-slot-item.drag-over {
-	background: rgba(8, 145, 178, 0.1);
-	border: 2px dashed var(--accent-cta);
-}
-
-.light .form-card {
-	background: var(--bg-800);
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.05);
-	border: 1px solid var(--bg-600);
-}
-
-.light .settings-page-content .form-card {
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 8px 16px rgba(0, 0, 0, 0.04);
+	background: rgba(217,234,253,0.55);
+	border: 2px dashed rgba(154,166,178,0.75);
 }
 
 .light .form-input,
 .light select.form-input {
-	background: var(--bg-800);
-	border-color: var(--bg-600);
+	background: rgba(248,250,252,0.94);
+	border-color: rgba(154,166,178,0.45);
 	color: var(--accent);
+	box-shadow: inset 0 1px 2px rgba(188,204,220,0.25);
 }
 
 .light .form-input:focus,
 .light select.form-input:focus {
-	outline: 2px solid rgba(8, 145, 178, 0.3);
-	border-color: var(--accent-cta);
+	outline: 2px solid rgba(37,99,235,0.35);
+	border-color: rgba(37,99,235,0.45);
 }
 
 .light .header-search .form-input {
-	background: var(--bg-700);
-	border-color: var(--bg-600);
+	background: rgba(217,234,253,0.82);
+	border-color: rgba(154,166,178,0.45);
 }
 
 .light select.form-input option,
 .light select.form-input optgroup {
-	background: var(--bg-800);
+	background: rgba(248,250,252,0.96);
 	color: var(--accent);
-}
-
-.light .logs {
-	background: var(--bg-800);
-	border: 1px solid var(--bg-600);
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-
-.light .logs pre {
-	background: var(--bg-700);
-	color: var(--muted);
-	border: 1px solid var(--bg-600);
-}
-
-.light .modal-overlay {
-	background: rgba(15, 23, 42, 0.5);
-	backdrop-filter: blur(8px);
-}
-
-.light .modal-card {
-	background: var(--bg-800);
-	border: 1px solid var(--bg-600);
-	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
 }
 
 .light button.folder-option {
-	background: var(--bg-700);
-	border: 1px solid var(--bg-600);
+	background: rgba(217,234,253,0.82);
+	border: 1px solid rgba(154,166,178,0.45);
 }
 
 .light button.folder-option:hover {
-	border-color: var(--accent-cta);
-	background: rgba(8, 145, 178, 0.08);
-	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+	border-color: rgba(37,99,235,0.45);
+	background: rgba(188,204,220,0.85);
+	box-shadow: 0 12px 28px rgba(188,204,220,0.38);
+}
+
+.light .folder-chip {
+	background: rgba(217,234,253,0.7);
+	color: var(--accent);
+}
+
+.light .folder-chip.more {
+	background: rgba(188,204,220,0.6);
+	color: rgba(28,37,52,0.68);
 }
 
 .light .toast {
-	background: var(--bg-800);
 	color: var(--accent);
-	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-	border: 1px solid var(--bg-600);
 }
 
 .light .toast-body {
-	color: var(--muted);
+	color: rgba(28,37,52,0.65);
 }
 
 .light .actions button {
-	background: var(--bg-700);
-	border-color: var(--bg-600);
+	background: rgba(217,234,253,0.78);
+	border-color: rgba(154,166,178,0.45);
 	color: var(--accent);
+	box-shadow: 0 10px 24px rgba(188,204,220,0.38);
 }
 
 .light .actions button:hover {
-	background: var(--bg-600);
-	border-color: #94A3B8;
+	background: rgba(188,204,220,0.85);
+	border-color: rgba(154,166,178,0.65);
 }
 
 .light .actions button.btn-apply {
 	background: var(--accent-cta);
 	color: #FFFFFF;
 	border: none;
-	box-shadow: 0 2px 8px rgba(8, 145, 178, 0.3);
+	box-shadow: 0 12px 28px rgba(37,99,235,0.4);
 }
 
 .light .actions button.btn-apply:hover {
-	background: #0E7490;
-	box-shadow: 0 4px 12px rgba(8, 145, 178, 0.4);
+	background: #1D4ED8;
+	box-shadow: 0 16px 32px rgba(37,99,235,0.45);
 }
 
 .light .loading-card {
-	background: var(--bg-800);
-	border: 1px solid var(--bg-600);
-	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
-}
-
-.light .folder-chip {
-	background: rgba(8, 145, 178, 0.12);
 	color: var(--accent);
 }
 
-.light .folder-chip.more {
-	background: var(--bg-600);
-	color: var(--muted);
+.light .modal-overlay {
+	background: rgba(154,166,178,0.45);
+	backdrop-filter: blur(12px);
 }
 
-.light .hidden-page .form-card {
-	border: 1px solid var(--bg-600);
-	background: var(--bg-800);
-}
-
-/* Light theme focus states */
-.light button:focus {
-	outline: 2px solid rgba(8, 145, 178, 0.3);
-}
-
-.light .side {
-	background: var(--bg-800);
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-
-/* Light theme progress bar */
 .light .progress-bar {
-	background: var(--bg-600);
+	background: rgba(154,166,178,0.35);
 }
 
 .light .progress-bar .fill {
 	background: linear-gradient(90deg, var(--accent-cta), var(--accent-cta-2));
 }
 
+/* Light theme focus states */
+.light button:focus {
+	outline: 2px solid rgba(37,99,235,0.35);
+	outline-offset: 2px;
+}
+
 /* Light theme animations - adjust pulse for visibility */
 @keyframes light-pulse-border {
-	0%, 100% { border-color: var(--bg-600); }
-	50% { border-color: var(--accent-cta); opacity: 1; }
+	0%, 100% { border-color: rgba(154,166,178,0.45); }
+	50% { border-color: rgba(37,99,235,0.55); opacity: 1; }
 }
 
 .light .loading-pulse {
