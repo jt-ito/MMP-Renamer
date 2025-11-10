@@ -313,9 +313,12 @@ export default function Settings({ pushToast }){
   return (
     <div style={{padding:16}}>
       <h2>Settings</h2>
-      <div style={{marginTop:12}}>
+      <div style={{marginTop:12, display:'flex', flexDirection:'column', gap:16}}>
+        
+        {/* API Keys Section */}
         <div className="form-card">
-          <div style={{display:'flex', flexDirection:'column', gap:12}}>
+          <h3 style={{marginTop:0, marginBottom:16, fontSize:16, fontWeight:600}}>API Keys</h3>
+          <div style={{display:'flex', flexDirection:'column', gap:16}}>
 
         <div>
           <label style={{fontSize:13, color:'var(--muted)'}}>TMDb API Key</label>
@@ -434,8 +437,15 @@ export default function Settings({ pushToast }){
             </div>
           </div>
         </div>
+          </div>
+        </div>
 
   {/* Input path moved below the template section per UX request */}
+
+        {/* Metadata & Paths Section */}
+        <div className="form-card">
+          <h3 style={{marginTop:0, marginBottom:16, fontSize:16, fontWeight:600}}>Metadata & File Paths</h3>
+          <div style={{display:'flex', flexDirection:'column', gap:16}}>
 
         <div>
           <label style={{fontSize:13, color:'var(--muted)'}}>Default rename template</label>
@@ -677,17 +687,18 @@ export default function Settings({ pushToast }){
           </div>
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>Unapproving will mark recently applied items as visible again for rescans. Choose the number of recent applied items to unhide.</div>
         </div>
-
-                <div style={{display:'flex', gap:8}}>
-                  <button className={"btn-save" + (dirty ? '' : ' disabled')} onClick={save} disabled={!dirty}>Save</button>
-                  <button className="btn-ghost" onClick={clearAll}>Clear</button>
-                </div>
           </div>
         </div>
 
-        <div style={{marginTop:24}}>
-          <h3>Change password</h3>
-          <div style={{marginTop:8}}>
+        {/* Save/Clear Actions */}
+        <div style={{display:'flex', gap:8}}>
+          <button className={"btn-save" + (dirty ? '' : ' disabled')} onClick={save} disabled={!dirty}>Save</button>
+          <button className="btn-ghost" onClick={clearAll}>Clear</button>
+        </div>
+
+        {/* Change password section */}
+        <div>
+          <h3 style={{marginBottom:8}}>Change password</h3>
             <div className="form-card">
               <div style={{display:'flex', flexDirection:'column', gap:10}}>
                 <div>
@@ -713,7 +724,6 @@ export default function Settings({ pushToast }){
                 </div>
               </div>
             </div>
-          </div>
         </div>
       </div>
     </div>
