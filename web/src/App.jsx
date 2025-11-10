@@ -2265,7 +2265,7 @@ export default function App() {
               <Users pushToast={pushToast} />
             </section>
           ) : route === '#/settings' ? (
-            <section className="list">
+            <section className="list settings-page">
               <Settings pushToast={pushToast} />
             </section>
           ) : route === '#/hidden' ? (
