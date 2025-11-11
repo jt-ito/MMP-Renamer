@@ -46,5 +46,23 @@
     "title": "Sanitize persisted data",
     "description": "Scrub data/ and related folders so committed artifacts contain no sensitive or transient information",
     "status": "completed"
+  },
+  {
+    "id": 9,
+    "title": "Add hardlink deletion toggle UI",
+    "description": "Add a Settings checkbox defaulting to true for deleting hardlinks on unapprove and persist the preference per user.",
+    "status": "in-progress"
+  },
+  {
+    "id": 10,
+    "title": "Delete hardlinks when items are unapproved",
+    "description": "Extend server unapprove logic to remove created hardlinks across all output folders when the new setting is enabled.",
+    "status": "todo"
+  },
+  {
+    "id": 11,
+    "title": "Security audit",
+    "description": "Review authentication, session, and file-system access patterns to ensure industry-standard safeguards are in place.",
+    "status": "todo"
   }
 ]

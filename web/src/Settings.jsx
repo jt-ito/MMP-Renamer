@@ -96,11 +96,13 @@ export default function Settings({ pushToast }){
   const [outputFolders, setOutputFolders] = useState([])
   const [outputFoldersDirty, setOutputFoldersDirty] = useState([])
   const [enableFolderWatch, setEnableFolderWatch] = useState(false)
+  const [deleteHardlinksOnUnapprove, setDeleteHardlinksOnUnapprove] = useState(true)
   const [dirty, setDirty] = useState(false)
 
   useEffect(() => {
     // prefer user-specific settings from server, fall back to localStorage
     axios.get(API('/settings')).then(r => {
+      const server = (r.data && r.data.serverSettings) ? r.data.serverSettings : {}
       try {
         const user = (r.data && r.data.userSettings) ? r.data.userSettings : null
         if (user) {
@@ -117,6 +119,12 @@ export default function Settings({ pushToast }){
           setInputPath(user.scan_input_path || '')
           setOutputPath(user.scan_output_path || '')
           setEnableFolderWatch(user.enable_folder_watch === true || user.enable_folder_watch === 'true')
+          const deleteLinksPref = user.delete_hardlinks_on_unapprove
+          const serverDeletePref = server.delete_hardlinks_on_unapprove
+          const resolvedDeletePref = deleteLinksPref === undefined
+            ? (serverDeletePref === undefined ? true : (serverDeletePref === true || serverDeletePref === 'true'))
+            : (deleteLinksPref === true || deleteLinksPref === 'true')
+          setDeleteHardlinksOnUnapprove(resolvedDeletePref)
           const folders = Array.isArray(user.output_folders) ? user.output_folders : []
           setOutputFolders(folders)
           setOutputFoldersDirty(new Array(folders.length).fill(false))
@@ -124,7 +132,6 @@ export default function Settings({ pushToast }){
         }
       } catch (e) {}
       try {
-        const server = (r.data && r.data.serverSettings) ? r.data.serverSettings : {}
         const v = server.tmdb_api_key || localStorage.getItem('tmdb_api_key') || localStorage.getItem('tvdb_api_key') || ''
         const a = server.anilist_api_key || localStorage.getItem('anilist_api_key') || ''
         const anidbUser = server.anidb_username || localStorage.getItem('anidb_username') || ''
@@ -136,6 +143,11 @@ export default function Settings({ pushToast }){
         const inp = localStorage.getItem('scan_input_path') || ''
         const out = localStorage.getItem('scan_output_path') || ''
         const storedWatch = localStorage.getItem('enable_folder_watch') === 'true'
+  const serverDeletePref = server.delete_hardlinks_on_unapprove
+        const storedDeletePref = localStorage.getItem('delete_hardlinks_on_unapprove')
+        const deletePref = storedDeletePref != null
+          ? storedDeletePref !== 'false'
+          : (serverDeletePref === undefined ? true : (serverDeletePref === true || serverDeletePref === 'true'))
         const storedOrder = localStorage.getItem('metadata_provider_order') || localStorage.getItem('default_meta_provider')
         const storedFolders = localStorage.getItem('output_folders')
         setTmdbKey(v)
@@ -149,6 +161,7 @@ export default function Settings({ pushToast }){
         setInputPath(inp)
         setOutputPath(out)
         setEnableFolderWatch(storedWatch)
+  setDeleteHardlinksOnUnapprove(deletePref)
         setProviderOrder(sanitizeProviderOrder(storedOrder))
         try {
           const parsedFolders = storedFolders ? JSON.parse(storedFolders) : []
@@ -172,7 +185,8 @@ export default function Settings({ pushToast }){
         const tvV4Pin = localStorage.getItem('tvdb_v4_user_pin') || ''
         const inp = localStorage.getItem('scan_input_path') || ''
         const out = localStorage.getItem('scan_output_path') || ''
-        const storedOrder = localStorage.getItem('metadata_provider_order') || localStorage.getItem('default_meta_provider')
+  const storedOrder = localStorage.getItem('metadata_provider_order') || localStorage.getItem('default_meta_provider')
+  const storedDeletePref = localStorage.getItem('delete_hardlinks_on_unapprove')
         const storedFolders = localStorage.getItem('output_folders')
         setTmdbKey(v)
         setAnilistKey(a)
@@ -185,6 +199,7 @@ export default function Settings({ pushToast }){
         setInputPath(inp)
         setOutputPath(out)
         setProviderOrder(sanitizeProviderOrder(storedOrder))
+  setDeleteHardlinksOnUnapprove(storedDeletePref == null ? true : storedDeletePref !== 'false')
         try {
           const parsedFolders = storedFolders ? JSON.parse(storedFolders) : []
           const normalizedFolders = Array.isArray(parsedFolders) ? parsedFolders : []
@@ -231,6 +246,7 @@ export default function Settings({ pushToast }){
       localStorage.setItem('scan_input_path', inputPath)
       localStorage.setItem('scan_output_path', outputPath)
       localStorage.setItem('enable_folder_watch', String(enableFolderWatch))
+      localStorage.setItem('delete_hardlinks_on_unapprove', String(deleteHardlinksOnUnapprove))
       try { localStorage.setItem('output_folders', JSON.stringify(outputFolders)) } catch (e) {}
       const firstProvider = providerOrder[0] || 'tmdb'
       try {
@@ -248,6 +264,7 @@ export default function Settings({ pushToast }){
           scan_input_path: inputPath,
           scan_output_path: outputPath,
           enable_folder_watch: enableFolderWatch,
+          delete_hardlinks_on_unapprove: deleteHardlinksOnUnapprove,
           output_folders: outputFolders,
           rename_template: renameTemplate
         })
@@ -274,7 +291,8 @@ export default function Settings({ pushToast }){
       setRenameTemplate('{title} - {epLabel} - {episodeTitle}')
       setInputPath('')
       setOutputPath('')
-      setEnableFolderWatch(false)
+  setEnableFolderWatch(false)
+  setDeleteHardlinksOnUnapprove(true)
   setOutputFolders([])
   setOutputFoldersDirty([])
       localStorage.removeItem('tmdb_api_key')
@@ -289,6 +307,7 @@ export default function Settings({ pushToast }){
       localStorage.removeItem('scan_input_path')
       localStorage.removeItem('scan_output_path')
       localStorage.removeItem('enable_folder_watch')
+  localStorage.removeItem('delete_hardlinks_on_unapprove')
   localStorage.removeItem('output_folders')
       localStorage.setItem('rename_template', '{title} - {epLabel} - {episodeTitle}')
   axios.post(API('/settings'), { tmdb_api_key: '', anilist_api_key: '', anidb_username: '', anidb_password: '', default_meta_provider: 'tmdb', metadata_provider_order: DEFAULT_PROVIDER_ORDER, tvdb_v4_api_key: '', tvdb_v4_user_pin: '', scan_input_path: '', scan_output_path: '', enable_folder_watch: false, rename_template: '{title} - {epLabel} - {episodeTitle}', output_folders: [] }).catch(()=>{})
@@ -682,6 +701,26 @@ export default function Settings({ pushToast }){
           </label>
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8, marginLeft:32}}>
             Automatically detect new files added to the input path and trigger scans. The watcher monitors for file additions and modifications in real-time.
+          </div>
+        </div>
+
+        <div style={{marginTop:18}}>
+          <label style={{display:'flex', alignItems:'center', gap:12, cursor:'pointer', userSelect:'none'}}>
+            <input
+              type="checkbox"
+              checked={deleteHardlinksOnUnapprove}
+              onChange={e => { setDeleteHardlinksOnUnapprove(e.target.checked); setDirty(true) }}
+              style={{
+                width:20,
+                height:20,
+                cursor:'pointer',
+                accentColor:'var(--hunter-green)'
+              }}
+            />
+            <span style={{fontSize:13, color:'var(--accent)', fontWeight:500}}>Delete hardlinks when unapproved</span>
+          </label>
+          <div style={{fontSize:12, color:'var(--muted)', marginTop:8, marginLeft:32}}>
+            Removes generated hardlinks from any configured output folder when you unapprove an item. The original source file is never touched.
           </div>
         </div>
 

@@ -1,11 +1,16 @@
 const express = require('express');
+const helmet = require('helmet');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const tvdb = require('./lib/tvdb');
 const chokidar = require('chokidar');
 const { lookupMetadataWithAniDB, getAniDBCredentials } = require('./lib/meta-providers');
+const bcrypt = require('bcryptjs');
+const cookieParser = require('cookie-parser');
+const cookieSession = require('cookie-session');
 
 // External API integration removed: TMDb-related helpers and https monkey-patch
 // have been disabled to eliminate external HTTP calls. The metaLookup function
@@ -23,13 +28,13 @@ const PROVIDER_DISPLAY_NAMES = {
   wikipedia: 'Wikipedia',
   kitsu: 'Kitsu'
 };
+const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:5173'];
+const CSRF_COOKIE_NAME = 'XSRF-TOKEN';
+const CSRF_HEADER_NAME = 'X-CSRF-Token';
+const SAFE_CSRF_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 const app = express();
-// Enable CORS but allow credentials so cookies can be sent from the browser (echo origin)
-app.use(cors({ origin: true, credentials: true }));
-app.use(express.json({ limit: '50mb' }));
-const bcrypt = require('bcryptjs');
-const cookieSession = require('cookie-session');
+app.set('trust proxy', 1);
 
 // simple cookie session for auth
 // cookie-session will be initialized after we ensure a persistent SESSION_KEY is available
@@ -137,7 +142,7 @@ const sessionKeyFile = path.join(DATA_DIR, 'session.key');
 function ensureSessionKey() {
   try {
     if (!fs.existsSync(sessionKeyFile)) {
-      const k = require('crypto').randomBytes(32).toString('hex');
+      const k = crypto.randomBytes(32).toString('hex');
       fs.writeFileSync(sessionKeyFile, k, { encoding: 'utf8' });
     }
     const key = fs.readFileSync(sessionKeyFile, 'utf8').trim();
@@ -148,11 +153,7 @@ function ensureSessionKey() {
   }
 }
 const SESSION_KEY = ensureSessionKey();
-// initialize cookie-session middleware now that SESSION_KEY is present
-if (SESSION_KEY) {
-  app.use(cookieSession({ name: 'mmp_sess', keys: [SESSION_KEY], maxAge: 7 * 24 * 60 * 60 * 1000 }));
-} else {
-  // No session key available; run without cookie-session middleware (best-effort)
+if (!SESSION_KEY) {
   console.warn('SESSION_KEY missing; running without session middleware');
 }
 process.on('unhandledRejection', (reason, p) => {
@@ -177,6 +178,136 @@ let serverSettings = {};
 let users = {};
 try { ensureFile(settingsFile, {}); serverSettings = JSON.parse(fs.readFileSync(settingsFile, 'utf8') || '{}') } catch (e) { serverSettings = {} }
 try { ensureFile(usersFile, { admin: { username: 'admin', role: 'admin', passwordHash: null, settings: {} } }); users = JSON.parse(fs.readFileSync(usersFile, 'utf8') || '{}') } catch (e) { users = {} }
+
+if (typeof serverSettings.delete_hardlinks_on_unapprove === 'undefined') {
+  serverSettings.delete_hardlinks_on_unapprove = true;
+}
+
+const envAllowedOrigins = String(process.env.CORS_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin && origin.trim())
+  .filter(Boolean);
+const configuredAllowedOrigins = Array.isArray(serverSettings.allowed_origins)
+  ? serverSettings.allowed_origins.map((origin) => origin && String(origin).trim()).filter(Boolean)
+  : [];
+const allowedOrigins = Array.from(new Set([...(envAllowedOrigins || []), ...(configuredAllowedOrigins || [])].filter(Boolean)));
+if (!allowedOrigins.length) {
+  allowedOrigins.push(...DEFAULT_ALLOWED_ORIGINS);
+}
+const allowedOriginsNormalized = allowedOrigins.map((origin) => origin.toLowerCase());
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // allow same-origin or non-browser tooling
+    const normalized = origin.toLowerCase();
+    if (allowedOriginsNormalized.includes(normalized)) return callback(null, true);
+    return callback(new Error('Origin not allowed by CORS policy'));
+  },
+  credentials: true,
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'X-Requested-With', CSRF_HEADER_NAME],
+  exposedHeaders: [CSRF_HEADER_NAME]
+};
+
+const resolvedSameSite = (() => {
+  const candidate = String(process.env.SESSION_SAMESITE || 'lax').trim().toLowerCase();
+  if (['lax', 'strict', 'none'].includes(candidate)) return candidate;
+  return 'lax';
+})();
+let secureCookies = typeof process.env.SESSION_SECURE !== 'undefined'
+  ? coerceBoolean(process.env.SESSION_SECURE)
+  : process.env.NODE_ENV === 'production';
+if (resolvedSameSite === 'none' && !secureCookies) {
+  secureCookies = true;
+  console.warn('SESSION_SECURE forced to true because sameSite="none" requires secure cookies');
+}
+
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+  frameguard: { action: 'sameorigin' },
+  referrerPolicy: { policy: 'same-origin' }
+}));
+app.use((req, res, next) => { res.setHeader('Vary', 'Origin'); next(); });
+app.use(cors(corsOptions));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: false }));
+app.use(cookieParser());
+
+if (SESSION_KEY) {
+  app.use(cookieSession({
+    name: 'mmp_sess',
+    keys: [SESSION_KEY],
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    httpOnly: true,
+    sameSite: resolvedSameSite,
+    secure: secureCookies
+  }));
+}
+
+app.use(verifyCsrfToken);
+app.use(attachCsrfToken);
+
+function ensureCsrfToken(req) {
+  if (req && req.session) {
+    if (!req.session.csrfToken || typeof req.session.csrfToken !== 'string') {
+      req.session.csrfToken = crypto.randomBytes(32).toString('hex');
+    }
+    return req.session.csrfToken;
+  }
+  if (!req._csrfFallbackToken) req._csrfFallbackToken = crypto.randomBytes(32).toString('hex');
+  return req._csrfFallbackToken;
+}
+
+function verifyCsrfToken(req, res, next) {
+  if (SAFE_CSRF_METHODS.has(req.method)) return next();
+  try {
+    const expected = req && req.session ? req.session.csrfToken : null;
+    const provided = req.get(CSRF_HEADER_NAME) || (req.body && req.body._csrf) || (req.query && req.query._csrf);
+    if (!expected || !provided) throw new Error('missing token');
+    const expectedBuffer = Buffer.from(String(expected), 'utf8');
+    const providedBuffer = Buffer.from(String(provided), 'utf8');
+    if (expectedBuffer.length !== providedBuffer.length || !crypto.timingSafeEqual(expectedBuffer, providedBuffer)) {
+      throw new Error('token mismatch');
+    }
+    if (req.session) {
+      req.session.csrfToken = crypto.randomBytes(32).toString('hex');
+      res.locals.csrfToken = req.session.csrfToken;
+    }
+    return next();
+  } catch (err) {
+    try { appendLog(`CSRF_REJECT path=${req && req.originalUrl ? req.originalUrl : req.url}`); } catch (e) {}
+    return res.status(403).json({ error: 'invalid csrf token' });
+  }
+}
+
+function attachCsrfToken(req, res, next) {
+  try {
+    const token = res.locals && res.locals.csrfToken ? res.locals.csrfToken : ensureCsrfToken(req);
+    res.locals.csrfToken = token;
+    res.cookie(CSRF_COOKIE_NAME, token, {
+      httpOnly: false,
+      sameSite: resolvedSameSite,
+      secure: secureCookies
+    });
+    res.setHeader(CSRF_HEADER_NAME, token);
+  } catch (err) {
+    // best-effort; avoid failing the request if cookies cannot be set
+  }
+  next();
+}
+
+function resolveDeleteHardlinksSetting(username) {
+  try {
+    if (username && users && users[username] && users[username].settings && typeof users[username].settings.delete_hardlinks_on_unapprove !== 'undefined') {
+      return coerceBoolean(users[username].settings.delete_hardlinks_on_unapprove);
+    }
+    if (serverSettings && typeof serverSettings.delete_hardlinks_on_unapprove !== 'undefined') {
+      return coerceBoolean(serverSettings.delete_hardlinks_on_unapprove);
+    }
+  } catch (e) {}
+  return true;
+}
 
 // Ensure basic persistent store files exist and load them into memory
 try { ensureFile(enrichStoreFile, {}); } catch (e) {}
@@ -3729,13 +3860,13 @@ async function backgroundEnrichFirstN(scanId, enrichCandidates, session, libPath
 }
 
 // Endpoint: list libraries (just a sample folder picker)
-app.get('/api/libraries', (req, res) => {
+app.get('/api/libraries', requireAuth, (req, res) => {
   // Let user choose an existing folder under cwd or provide custom path via config later
   res.json([{ id: 'local', name: 'Local folder', canonicalPath: path.resolve('.') }]);
 });
 
 // New diagnostic endpoint: provider/meta status (TMDb/Kitsu)
-app.get('/api/meta/status', (req, res) => {
+app.get('/api/meta/status', requireAuth, (req, res) => {
   try {
     // check server and user keys (mask)
     const serverKey = serverSettings && serverSettings.tmdb_api_key ? String(serverSettings.tmdb_api_key) : null
@@ -3800,7 +3931,7 @@ app.get('/api/tmdb/status', (req, res) => {
 })
 
 // Trigger scan - performs full inventory then stores artifact
-app.post('/api/scan', async (req, res) => {
+app.post('/api/scan', requireAuth, async (req, res) => {
   const { libraryId, path: libraryPath } = req.body || {};
   // Resolve chosen path in order: explicit request -> requesting user's per-user setting
   // Do NOT fallback to a global server setting here; admins are regular users with extra privileges
@@ -4005,7 +4136,7 @@ app.post('/api/scan', async (req, res) => {
 // performing a full walk when a prior cache exists. This endpoint is used by the
 // client when it wants to resync current files (detect additions/removals/changes)
 // without forcing a full main scan that can be expensive.
-app.post('/api/scan/incremental', async (req, res) => {
+app.post('/api/scan/incremental', requireAuth, async (req, res) => {
   const { libraryId, path: libraryPath } = req.body || {};
   let libPath = null;
   if (libraryPath) libPath = path.resolve(libraryPath);
@@ -4099,11 +4230,11 @@ app.post('/api/scan/incremental', async (req, res) => {
   try { void backgroundEnrichFirstN(scanId, changedItems, req.session, libPath, `scanPath:${libPath}`, 12); } catch (e) { appendLog(`INCREMENTAL_BACKGROUND_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
 });
 
-app.get('/api/scan/:scanId', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
-app.get('/api/scan/:scanId/items', (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); const offset = parseInt(req.query.offset || '0', 10); const limit = Math.min(parseInt(req.query.limit || '50', 10), 500); const slice = s.items.slice(offset, offset + limit); res.json({ items: slice, offset, limit, total: s.totalCount }); });
+app.get('/api/scan/:scanId', requireAuth, (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
+app.get('/api/scan/:scanId/items', requireAuth, (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); const offset = parseInt(req.query.offset || '0', 10); const limit = Math.min(parseInt(req.query.limit || '50', 10), 500); const slice = s.items.slice(offset, offset + limit); res.json({ items: slice, offset, limit, total: s.totalCount }); });
 
 // Return the most recent scan artifact optionally filtered by libraryId. Useful when client lost lastScanId.
-app.get('/api/scan/latest', (req, res) => {
+app.get('/api/scan/latest', requireAuth, (req, res) => {
   try {
     const lib = req.query.libraryId || null
     const all = Object.keys(scans || {}).map(k => scans[k]).filter(Boolean)
@@ -4124,7 +4255,7 @@ app.get('/api/scan/latest', (req, res) => {
 })
 
 // Search items within a scan without returning all items (server-side filter)
-app.get('/api/scan/:scanId/search', (req, res) => {
+app.get('/api/scan/:scanId/search', requireAuth, (req, res) => {
   try {
     const s = scans[req.params.scanId];
     if (!s) return res.status(404).json({ error: 'scan not found' });
@@ -4179,7 +4310,7 @@ app.get('/api/scan/:scanId/search', (req, res) => {
   } catch (e) { return res.status(500).json({ error: e.message }) }
 })
 
-app.get('/api/enrich', (req, res) => {
+app.get('/api/enrich', requireAuth, (req, res) => {
   const { path: p } = req.query;
   const key = canonicalize(p || '');
   try {
@@ -4215,7 +4346,7 @@ app.get('/api/enrich', (req, res) => {
 });
 
 // Lookup enrichment by rendered metadata filename (without extension)
-app.get('/api/enrich/by-rendered', (req, res) => {
+app.get('/api/enrich/by-rendered', requireAuth, (req, res) => {
   try {
     const name = req.query.name || ''
     if (!name) return res.status(400).json({ error: 'name required' })
@@ -4228,7 +4359,7 @@ app.get('/api/enrich/by-rendered', (req, res) => {
 })
 
 // Bulk enrich lookup to reduce per-file GET traffic from the client during scan refreshes
-app.post('/api/enrich/bulk', (req, res) => {
+app.post('/api/enrich/bulk', requireAuth, (req, res) => {
   try {
     const paths = Array.isArray(req.body && req.body.paths) ? req.body.paths : null
     if (!paths) return res.status(400).json({ error: 'paths array required' })
@@ -4255,9 +4386,23 @@ app.post('/api/enrich/bulk', (req, res) => {
   } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }) }
 })
 
-app.get('/api/settings', (req, res) => { const userSettings = (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings) ? users[req.session.username].settings : {}; res.json({ serverSettings: serverSettings || {}, userSettings }); });
+app.get('/api/csrf-token', (req, res) => {
+  try {
+    const token = res.locals && res.locals.csrfToken ? res.locals.csrfToken : (typeof req.csrfToken === 'function' ? req.csrfToken() : null);
+    return res.json({ ok: true, token });
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
+
+app.get('/api/settings', requireAuth, (req, res) => {
+  const userSettings = (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings) ? users[req.session.username].settings : {};
+  const serverOut = { ...(serverSettings || {}) };
+  serverOut.delete_hardlinks_on_unapprove = resolveDeleteHardlinksSetting(req.session && req.session.username ? req.session.username : null);
+  return res.json({ serverSettings: serverOut, userSettings });
+});
 // Diagnostic: expose current session and user presence to help debug auth issues (no secrets)
-app.get('/api/debug/session', (req, res) => {
+app.get('/api/debug/session', requireAuth, (req, res) => {
   try {
     const session = req.session || null;
     const username = session && session.username ? session.username : null;
@@ -4298,7 +4443,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove'];
       for (const k of allowed) {
         if (body[k] === undefined) continue;
         if (k === 'metadata_provider_order') {
@@ -4312,6 +4457,8 @@ app.post('/api/settings', requireAuth, (req, res) => {
           serverSettings.default_meta_provider = first;
         } else if (k === 'output_folders') {
           serverSettings.output_folders = Array.isArray(body[k]) ? body[k] : [];
+        } else if (k === 'delete_hardlinks_on_unapprove') {
+          serverSettings.delete_hardlinks_on_unapprove = coerceBoolean(body[k]);
         } else {
           serverSettings[k] = body[k];
         }
@@ -4331,7 +4478,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch', 'delete_hardlinks_on_unapprove'];
     
     // Check if scan_input_path changed to update watcher
     const oldScanPath = users[username].settings.scan_input_path;
@@ -4356,6 +4503,8 @@ app.post('/api/settings', requireAuth, (req, res) => {
         const normalized = coerceBoolean(body[k]);
         users[username].settings.enable_folder_watch = normalized;
         newWatchEnabled = normalized;
+      } else if (k === 'delete_hardlinks_on_unapprove') {
+        users[username].settings.delete_hardlinks_on_unapprove = coerceBoolean(body[k]);
       } else {
         users[username].settings[k] = body[k];
       }
@@ -4395,9 +4544,9 @@ app.post('/api/scan/force', requireAdmin, (req, res) => {
 });
 
 // Path existence check (used by the client to validate configured paths)
-app.get('/api/path/exists', (req, res) => { const p = req.query.path || ''; try { const rp = path.resolve(p); const exists = fs.existsSync(rp); const stat = exists ? fs.statSync(rp) : null; res.json({ exists, isDirectory: stat ? stat.isDirectory() : false, resolved: rp }); } catch (err) { res.json({ exists: false, isDirectory: false, error: err.message }); } });
+app.get('/api/path/exists', requireAuth, (req, res) => { const p = req.query.path || ''; try { const rp = path.resolve(p); const exists = fs.existsSync(rp); const stat = exists ? fs.statSync(rp) : null; res.json({ exists, isDirectory: stat ? stat.isDirectory() : false, resolved: rp }); } catch (err) { res.json({ exists: false, isDirectory: false, error: err.message }); } });
 
-app.post('/api/enrich', async (req, res) => {
+app.post('/api/enrich', requireAuth, async (req, res) => {
   const { path: p, tmdb_api_key: tmdb_override, force, forceHash, tvdb_v4_api_key: tvdb_override_v4_api_key, tvdb_v4_user_pin: tvdb_override_v4_user_pin } = req.body;
   const key = canonicalize(p || '');
   appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'} forceHash=${forceHash ? 'yes' : 'no'}`);
@@ -4820,7 +4969,7 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
 });
 
 // Debug enrich: return cached enrichment and what externalEnrich would produce now
-app.get('/api/enrich/debug', async (req, res) => { const p = req.query.path || ''; const key = canonicalize(p); const cached = enrichCache[key] || null; // pick tmdb key if available (use server setting only for debug)
+app.get('/api/enrich/debug', requireAuth, requireAdmin, async (req, res) => { const p = req.query.path || ''; const key = canonicalize(p); const cached = enrichCache[key] || null; // pick tmdb key if available (use server setting only for debug)
   const tmdbKey = serverSettings && serverSettings.tmdb_api_key ? serverSettings.tmdb_api_key : null;
   let forced = null;
   try {
@@ -4935,7 +5084,7 @@ app.get('/api/scan/:scanId/progress', requireAuth, (req, res) => {
 })
 
 // Rename preview (generate plan)
-app.post('/api/rename/preview', async (req, res) => {
+app.post('/api/rename/preview', requireAuth, async (req, res) => {
   const { items, template, outputPath } = req.body || {};
   if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'items required' });
   // resolve effective output path: request overrides per-user setting -> server setting
@@ -6385,56 +6534,142 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
   }
   res.json({ results });
 });
-// Unapprove last N applied renames: mark applied->false and unhide
+function performUnapprove({ requestedPaths = null, count = 10, username = null } = {}) {
+  const changed = [];
+  const shouldDeleteHardlinks = resolveDeleteHardlinksSetting(username);
+  const hardlinkTargets = new Map();
+  const canonicalTargets = new Set();
+
+  const collectTargets = (entry, sourceCanonicalKey) => {
+    if (!entry || !entry.appliedTo) return;
+    const list = Array.isArray(entry.appliedTo) ? entry.appliedTo : [entry.appliedTo];
+    for (const raw of list) {
+      if (!raw) continue;
+      try {
+        const resolved = path.resolve(raw);
+        const canonicalTarget = canonicalize(resolved);
+        if (!canonicalTarget || canonicalTarget === sourceCanonicalKey) continue;
+        canonicalTargets.add(canonicalTarget);
+        if (!hardlinkTargets.has(canonicalTarget)) {
+          hardlinkTargets.set(canonicalTarget, { resolved, original: raw });
+        }
+      } catch (e) { /* ignore invalid paths */ }
+    }
+  };
+
+  const dropRenderedIndexTarget = (canonicalTarget) => {
+    try {
+      if (!canonicalTarget) return;
+      if (renderedIndex && Object.prototype.hasOwnProperty.call(renderedIndex, canonicalTarget)) {
+        delete renderedIndex[canonicalTarget];
+      }
+      const rKeys = Object.keys(renderedIndex || {});
+      for (const rk of rKeys) {
+        const entry = renderedIndex[rk];
+        if (typeof entry === 'string') {
+          try {
+            if (canonicalize(entry) === canonicalTarget) delete renderedIndex[rk];
+          } catch (e) { /* ignore */ }
+        } else if (entry && typeof entry === 'object' && entry.appliedTo) {
+          try {
+            if (canonicalize(entry.appliedTo) === canonicalTarget) delete renderedIndex[rk];
+          } catch (e) { /* ignore */ }
+        }
+      }
+    } catch (e) { /* ignore */ }
+  };
+
+  function markUnapproved(key) {
+    try {
+      const entry = enrichCache[key];
+      if (!entry) return;
+      collectTargets(entry, key);
+      let updated = false;
+      if (entry.applied) {
+        entry.applied = false;
+        delete entry.appliedAt;
+        delete entry.appliedTo;
+        updated = true;
+      } else if (entry.appliedTo) {
+        delete entry.appliedTo;
+        updated = true;
+      }
+      if (entry.hidden) {
+        entry.hidden = false;
+        updated = true;
+      }
+      if (updated && !changed.includes(key)) changed.push(key);
+    } catch (e) {}
+  }
+
+  if (Array.isArray(requestedPaths) && requestedPaths.length > 0) {
+    for (const p of requestedPaths) markUnapproved(p);
+  } else {
+    const applied = Object.keys(enrichCache)
+      .map(k => ({ k, v: enrichCache[k] }))
+      .filter(x => x.v && x.v.applied)
+      .sort((a, b) => (b.v.appliedAt || 0) - (a.v.appliedAt || 0));
+    const limit = (count && count > 0) ? count : applied.length;
+    const toUn = applied.slice(0, limit);
+    for (const item of toUn) markUnapproved(item.k);
+  }
+
+  try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
+
+  const deletedHardlinks = [];
+  const hardlinkErrors = [];
+  let renderedIndexMutated = false;
+
+  if (canonicalTargets.size) {
+    for (const canonicalTarget of canonicalTargets) {
+      dropRenderedIndexTarget(canonicalTarget);
+      renderedIndexMutated = true;
+      if (!shouldDeleteHardlinks) continue;
+      const info = hardlinkTargets.get(canonicalTarget);
+      if (!info || !info.resolved) continue;
+      try {
+        const stat = fs.lstatSync(info.resolved);
+        if (stat.isDirectory()) {
+          hardlinkErrors.push({ path: info.resolved, error: 'target is a directory' });
+          continue;
+        }
+        fs.unlinkSync(info.resolved);
+        deletedHardlinks.push(info.resolved);
+      } catch (err) {
+        if (err && err.code === 'ENOENT') {
+          deletedHardlinks.push(info.resolved);
+        } else {
+          hardlinkErrors.push({ path: info.resolved, error: err && err.message ? err.message : String(err) });
+        }
+      }
+    }
+  }
+
+  if (renderedIndexMutated) {
+    try { if (db) db.setKV('renderedIndex', renderedIndex); else writeJson(renderedIndexFile, renderedIndex); } catch (e) {}
+  }
+
+  return { changed, deletedHardlinks, hardlinkErrors, shouldDeleteHardlinks };
+}
+
+// Unapprove last N applied renames: mark applied->false, unhide, and optionally remove hardlinks
 app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {
   try {
-    const requestedPaths = (req.body && Array.isArray(req.body.paths)) ? req.body.paths : null
-    const rawCount = !requestedPaths ? ((req.body && req.body.count) ?? '10') : null
-    let count = 10
+    const username = req.session && req.session.username ? req.session.username : null;
+    const requestedPaths = (req.body && Array.isArray(req.body.paths)) ? req.body.paths : null;
+    const rawCount = !requestedPaths ? ((req.body && req.body.count) ?? '10') : null;
+    let count = 10;
     if (rawCount !== null && rawCount !== undefined) {
-      const parsed = parseInt(String(rawCount), 10)
-      if (Number.isFinite(parsed)) count = parsed
-    }
-    const changed = []
-
-    function markUnapproved(key) {
-      try {
-        const entry = enrichCache[key]
-        if (!entry) return
-        let updated = false
-        if (entry.applied) {
-          entry.applied = false
-          delete entry.appliedAt
-          delete entry.appliedTo
-          updated = true
-        }
-        if (entry.hidden) {
-          entry.hidden = false
-          updated = true
-        }
-        if (updated && !changed.includes(key)) changed.push(key)
-      } catch (e) {}
+      const parsed = parseInt(String(rawCount), 10);
+      if (Number.isFinite(parsed)) count = parsed;
     }
 
-    if (requestedPaths && requestedPaths.length > 0) {
-      // Unapprove exactly the provided canonical paths
-      for (const p of requestedPaths) markUnapproved(p)
-    } else {
-      // collect applied entries sorted by appliedAt desc and unapprove last N (existing behavior)
-      const applied = Object.keys(enrichCache)
-        .map(k => ({ k, v: enrichCache[k] }))
-        .filter(x => x.v && x.v.applied)
-        .sort((a, b) => (b.v.appliedAt || 0) - (a.v.appliedAt || 0))
-      const limit = (count && count > 0) ? count : applied.length
-      const toUn = applied.slice(0, limit)
-      for (const item of toUn) markUnapproved(item.k)
-    }
+    const { changed, deletedHardlinks, hardlinkErrors, shouldDeleteHardlinks } = performUnapprove({ requestedPaths, count, username });
 
-    try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
-    appendLog(`UNAPPROVE count=${changed.length}`)
-    res.json({ ok: true, unapproved: changed })
+    appendLog(`UNAPPROVE count=${changed.length} deleteHardlinks=${shouldDeleteHardlinks ? 'yes' : 'no'} removed=${deletedHardlinks.length}`);
+    res.json({ ok: true, unapproved: changed, deletedHardlinks, hardlinkErrors });
   } catch (e) { res.status(500).json({ error: e.message }) }
-})
+});
 
 app.get('/api/rename/hidden', requireAuth, requireAdmin, (req, res) => {
   try {
@@ -6475,7 +6710,7 @@ app.get('/api/rename/hidden', requireAuth, requireAdmin, (req, res) => {
 })
 
 // Logs endpoints
-app.get('/api/logs/recent', (req, res) => {
+app.get('/api/logs/recent', requireAuth, requireAdmin, (req, res) => {
   try {
     // Read only the last ~100KB from the logs file to avoid loading very large files into memory.
     if (!fs.existsSync(logsFile)) return res.json({ logs: '' })
@@ -6511,13 +6746,13 @@ app.get('/api/logs/recent', (req, res) => {
   }
 });
 
-app.post('/api/logs/clear', (req, res) => {
+app.post('/api/logs/clear', requireAuth, requireAdmin, (req, res) => {
   fs.writeFileSync(logsFile, '');
   res.json({ ok: true });
 });
 
 // Debug trace endpoint: return recent logs and runtime state for diagnostics
-app.get('/api/debug/trace', (req, res) => {
+app.get('/api/debug/trace', requireAuth, requireAdmin, (req, res) => {
   try {
     const tail = fs.existsSync(logsFile) ? fs.readFileSync(logsFile, 'utf8').split('\n').slice(-500).join('\n') : '';
     const state = {
@@ -6544,6 +6779,14 @@ app.get('/api/tvdb/status', (req, res) => {
 app.get('/api/tmdb/status', (req, res) => {
   return app._router.handle(req, res, () => {}, 'GET', '/api/meta/status')
 })
+
+app.use((err, req, res, next) => {
+  if (!err) return next();
+  if (err && err.message === 'Origin not allowed by CORS policy') {
+    return res.status(403).json({ error: 'origin not allowed' });
+  }
+  return next(err);
+});
 
 // Serve web app static if built (with no-cache for HTML to avoid stale JS references)
 app.use('/', express.static(path.join(__dirname, 'web', 'dist'), {
@@ -6578,6 +6821,18 @@ module.exports._test.incrementalScanLibrary = typeof incrementalScanLibrary !== 
 module.exports._test.loadScanCache = typeof loadScanCache !== 'undefined' ? loadScanCache : null;
 module.exports._test.saveScanCache = typeof saveScanCache !== 'undefined' ? saveScanCache : null;
 module.exports._test.processParsedItem = doProcessParsedItem;
+module.exports._test.performUnapprove = performUnapprove;
+module.exports._test.renderedIndex = renderedIndex;
+module.exports._test.serverSettings = serverSettings;
+module.exports._test.users = users;
+module.exports._test.canonicalize = canonicalize;
+module.exports._test.setServerSetting = (key, value) => { serverSettings[key] = value; };
+module.exports._test.setUserSetting = (username, key, value) => {
+  if (!username) return;
+  users[username] = users[username] || { username, role: 'admin', passwordHash: null, settings: {} };
+  users[username].settings = users[username].settings || {};
+  users[username].settings[key] = value;
+};
 module.exports._test.determineIsMovie = determineIsMovie;
 module.exports._test.renderProviderName = renderProviderName;
 module.exports._test.ensureRenderedNameHasYear = ensureRenderedNameHasYear;

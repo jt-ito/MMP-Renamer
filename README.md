@@ -184,6 +184,26 @@ docker-compose up -d
 | `PORT` | No | Override default port 5173 |
 
 ---
+
+## 🔒 Security
+
+- **Strict CORS allowlist**: Requests are only accepted from origins declared in `CORS_ALLOWED_ORIGINS` (comma-separated). If unset, the server defaults to `http://localhost:5173`. Browsers outside the allowlist receive a `403` response.
+- **Hardened session cookies**: Cookies are `httpOnly` and default to `SameSite=Lax`. Set `SESSION_SECURE=true` in production so cookies are only transmitted over HTTPS. If you need cross-site embedding, set `SESSION_SAMESITE=none` (HTTPS is enforced automatically in that case).
+- **CSRF protection**: Every response issues a CSRF token in both the `X-CSRF-Token` header and an `XSRF-TOKEN` cookie. Clients must echo the token in the `X-CSRF-Token` header for all state-changing requests. A helper endpoint `GET /api/csrf-token` is available if you need to prime a token before posting.
+- **Locked-down APIs**: Sensitive endpoints (settings, enrichment, scan management, filesystem lookups, logs, diagnostics) now require authentication, and destructive operations demand admin privileges. Anonymous callers only have access to the `_health` check and static assets.
+
+| Variable | Description |
+|----------|-------------|
+| `CORS_ALLOWED_ORIGINS` | Comma-separated list of permitted origins (e.g. `https://renamer.example.com,https://admin.example.com`). |
+| `SESSION_SECURE` | Force secure cookies (`true` recommended in production; defaults to `true` when `NODE_ENV=production`). |
+| `SESSION_SAMESITE` | Override cookie `SameSite` policy (`lax`, `strict`, or `none`). |
+
+**Client integration tips**
+- Fetch the UI from an allowed origin so the CSRF token cookie can be issued.
+- Ensure your HTTP client forwards the token in the `X-CSRF-Token` header (Axios does this automatically when configured with `xsrfCookieName="XSRF-TOKEN"` and `xsrfHeaderName="X-CSRF-Token"`).
+- If you script against the API, call `GET /api/csrf-token` first, then include the returned token in subsequent mutations.
+
+---
 ## ⚙️ Configuration
 
 ### Settings Overview
