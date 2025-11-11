@@ -1,5 +1,15 @@
 # MMP-Renamer
 
+[![Docker Pulls](https://img.shields.io/docker/pulls/jteaito/mmp-renamer?style=flat-square&logo=docker&logoColor=white)](https://hub.docker.com/r/jteaito/mmp-renamer)
+[![Docker Image Size](https://img.shields.io/docker/image-size/jteaito/mmp-renamer/latest?style=flat-square&logo=docker&logoColor=white)](https://hub.docker.com/r/jteaito/mmp-renamer)
+[![GitHub Stars](https://img.shields.io/github/stars/jt-ito/MMP-Renamer?style=flat-square&logo=github)](https://github.com/jt-ito/MMP-Renamer)
+[![License](https://img.shields.io/github/license/jt-ito/MMP-Renamer?style=flat-square)](https://github.com/jt-ito/MMP-Renamer/blob/main/LICENSE)
+
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat-square&logo=linux&logoColor=white)](https://github.com/jt-ito/MMP-Renamer)
+[![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
+[![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
+[![Express](https://img.shields.io/badge/Express-4-000000?style=flat-square&logo=express&logoColor=white)](https://expressjs.com)
+
 **A powerful, local-first media renaming and organizing tool** that scans your media library, enriches metadata from multiple providers (AniDB, AniList, TVDB, TMDb), and creates Jellyfin/Plex-compatible folder structures using hardlinks—keeping your storage efficient without duplicating files.
 
 Built with a Node.js/Express backend and a modern React + Vite frontend, MMP-Renamer is designed for anime enthusiasts and media collectors who want accurate metadata and a safe, preview-before-commit workflow.
