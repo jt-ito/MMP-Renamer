@@ -2504,13 +2504,14 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const basename = (it && it.canonicalPath ? it.canonicalPath.split('/').pop() : '')
   const primary = providerRendered || parsedName || basename || ''
   const handleRowClick = (ev) => {
-    if (!selectMode || !it || isRangeSelecting) return
+    if (!selectMode || !it) return
     // ignore clicks originating from action buttons or the checkbox container
     const interactive = ev.target.closest('.actions') || ev.target.closest('button') || ev.target.closest('a') || ev.target.closest('input')
     if (interactive) return
     
     // Handle shift-click for range selection
     if (ev.shiftKey && lastClickedIndex.current !== null && lastClickedIndex.current !== index) {
+      ev.preventDefault()
       const start = Math.min(lastClickedIndex.current, index)
       const end = Math.max(lastClickedIndex.current, index)
       
@@ -2521,17 +2522,16 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
           toggleSelect(item.canonicalPath, true)
         }
       }
-    } else {
-      // Normal click - toggle selection
+      
+      // Update last clicked index for future shift-clicks
+      lastClickedIndex.current = index
+    } else if (!isDragging) {
+      // Normal click - toggle selection (but only if not in middle of drag selection)
       toggleSelect(it.canonicalPath, !isSelected)
+      
+      // Update last clicked index for future shift-clicks
+      lastClickedIndex.current = index
     }
-    
-    // Update last clicked index for future shift-clicks
-    lastClickedIndex.current = index
-    setIsDragging(false)
-    setDragStartIndex(null)
-    setDragCurrentIndex(null)
-    dragInitialSelected.current = {}
   }
 
     return (
