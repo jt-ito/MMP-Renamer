@@ -211,7 +211,14 @@ function isOriginTrusted(origin, req) {
     const hostHeader = (req && req.headers && req.headers.host ? String(req.headers.host) : '').toLowerCase();
     if (!hostHeader) return false;
     const parsed = new URL(origin);
-    if (parsed.host && parsed.host.toLowerCase() === hostHeader) return true;
+    const originHost = parsed.host ? parsed.host.toLowerCase() : '';
+    // Direct match: origin host exactly matches Host header (same domain + port)
+    if (originHost === hostHeader) return true;
+    // Flexible match: same hostname, allowing different ports or protocol upgrades
+    const originHostname = parsed.hostname ? parsed.hostname.toLowerCase() : '';
+    const hostParts = hostHeader.split(':');
+    const headerHostname = hostParts[0].toLowerCase();
+    if (originHostname && originHostname === headerHostname) return true;
   } catch (err) {
     // fall through to rejection
   }
