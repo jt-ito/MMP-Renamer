@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "test": "npm run test:unit && node ./tests/test-extract-year.js && node ./tests/test-filename-parser.js && node ./tests/test-meta-anilist-no-special.js && node ./tests/test-tvdb-title-priority.js && node ./tests/test-series-hardlink-format.js && node ./tests/unapprove-hardlinks.test.js",
+    "test": "npm run test:unit && node ./tests/test-extract-year.js && node ./tests/test-filename-parser.js && node ./tests/test-meta-anilist-no-special.js && node ./tests/test-tvdb-title-priority.js && node ./tests/test-series-hardlink-format.js && node ./tests/unapprove-hardlinks.test.js && node ./tests/test-extras-folder-skip.js",
     "test:unit": "mocha --exit tests/scan.test.js tests/rescan-reparse.test.js tests/ed2k-hash.test.js tests/anidb.provider.test.js tests/meta-providers.test.js",
     "test:ed2k": "mocha --exit tests/ed2k-hash.test.js",
     "test:anidb": "mocha --exit tests/anidb.provider.test.js",

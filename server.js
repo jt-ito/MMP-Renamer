@@ -2799,6 +2799,13 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
           continue
         }
         
+        // Check if the raw segment is an extras/bonus folder before parsing
+        // This catches "Featurettes", "Extras", "Bonus", "Behind the Scenes", etc.
+        if (isExtrasFolderToken(seg)) {
+          try { appendLog(`META_PARENT_SKIP_EXTRAS_FOLDER seg=${String(seg).slice(0,50)}`) } catch (e) {}
+          continue
+        }
+        
         const pParsed = parseFilename(seg)
         let cand = pParsed && pParsed.title ? String(pParsed.title).trim() : ''
         if (!cand) continue
@@ -5453,6 +5460,25 @@ function isSeasonFolderToken(value) {
   if (/^(season|seasons|series)\s*\d{1,2}$/.test(norm)) return true;
   if (/^(season|series)\s*\d{1,2}\b/.test(norm) && norm.split(/\s+/).length <= 3) return true;
   if (/^s0*\d{1,2}$/.test(norm)) return true;
+  return false;
+}
+
+function isExtrasFolderToken(value) {
+  if (!value) return false;
+  const norm = String(value).replace(/[\._\-]+/g, ' ').trim().toLowerCase();
+  if (!norm) return false;
+  // Common extras/bonus folder names that should be skipped when looking for series title
+  const EXTRAS_KEYWORDS = [
+    'featurettes', 'featurette', 'extras', 'extra', 'bonus', 'bonuses',
+    'behind the scenes', 'bts', 'interviews', 'interview', 'deleted scenes',
+    'making of', 'specials', 'special features', 'documentary', 'documentaries',
+    'trailers', 'trailer', 'promos', 'promo', 'clips', 'outtakes', 'bloopers'
+  ];
+  for (const keyword of EXTRAS_KEYWORDS) {
+    if (norm === keyword) return true;
+    // Also match if it starts with the keyword followed by space/number (e.g., "Featurettes 2024")
+    if (norm.startsWith(keyword + ' ')) return true;
+  }
   return false;
 }
 
