@@ -157,9 +157,17 @@ services:
       - ./data:/usr/src/app/data          # Persistent runtime data
       - /mnt/media:/media:rw              # Mount entire parent media directory
     environment:
-      - SESSION_KEY=${SESSION_KEY}
+      - PUID=1000                         # User ID (default: 1000)
+      - PGID=1000                         # Group ID (default: 1000)
+      - SESSION_KEY=${SESSION_KEY}        # Secure random string for cookie signing (32+ chars)
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}  # Remove after first run
     restart: unless-stopped
+```
+
+**Set correct permissions before first run:**
+```bash
+# Ensure the container user has R/W privileges (adjust path to match your data volume)
+sudo chown -R 1000:1000 ./data
 ```
 
 Run with:
