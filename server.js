@@ -5227,6 +5227,19 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     const anidbRawEpisode = meta && meta.extraGuess && meta.extraGuess.anidb && meta.extraGuess.anidb.episodeNumberRaw;
     const shouldUseAnidbRaw = anidbRawEpisode && /^[SCTPO]\d+$/i.test(String(anidbRawEpisode));
     
+    try {
+      if (meta && meta.extraGuess && meta.extraGuess.anidb) {
+        console.log('[DEBUG] AniDB raw episode check:', {
+          hasAnidb: true,
+          episodeNumberRaw: meta.extraGuess.anidb.episodeNumberRaw,
+          anidbRawEpisode,
+          shouldUseAnidbRaw,
+          metaEpisode: meta.episode,
+          metaSeason: meta.season
+        });
+      }
+    } catch (e) {}
+    
     let epLabel = ''
     if (meta && meta.episodeRange) {
       epLabel = meta.season != null ? `S${pad(meta.season)}E${meta.episodeRange}` : `E${meta.episodeRange}`
@@ -6198,6 +6211,19 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
               // Check if we have an AniDB raw episode number that should be preserved
               const anidbRawEpisode2 = enrichment && enrichment.extraGuess && enrichment.extraGuess.anidb && enrichment.extraGuess.anidb.episodeNumberRaw;
               const shouldUseAnidbRaw2 = anidbRawEpisode2 && /^[SCTPO]\d+$/i.test(String(anidbRawEpisode2));
+              
+              try {
+                if (enrichment && enrichment.extraGuess && enrichment.extraGuess.anidb) {
+                  console.log('[DEBUG] AniDB raw episode check (apply):', {
+                    hasAnidb: true,
+                    episodeNumberRaw: enrichment.extraGuess.anidb.episodeNumberRaw,
+                    anidbRawEpisode2,
+                    shouldUseAnidbRaw2,
+                    enrichmentEpisode: enrichment.episode,
+                    enrichmentSeason: enrichment.season
+                  });
+                }
+              } catch (e) {}
               
               let epLabel2 = ''
               if (enrichment && enrichment.episodeRange) {
