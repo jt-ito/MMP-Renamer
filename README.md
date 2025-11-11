@@ -136,6 +136,14 @@ docker run -d \
   mmp-renamer:latest
 ```
 
+**Port Mapping**: The format is `-p <external>:<internal>`. The **internal port must be 5173** (the application default), but you can map any external port:
+
+```bash
+-p 8080:5173   # Access at http://localhost:8080
+-p 3000:5173   # Access at http://localhost:3000
+-p 80:5173     # Access at http://localhost
+```
+
 **Important for Hardlinks**: Mount the **parent directory** that contains both your input and output folders. Hardlinks cannot cross filesystem boundaries—if you mount `/input` and `/output` separately, even on the same physical disk, Docker treats them as separate filesystems and hardlinks will fail with `EXDEV` errors.
 
 ✅ **Correct**: Mount `/mnt/media` and use `/mnt/media/input` and `/mnt/media/output` inside the container  
@@ -152,7 +160,7 @@ services:
     image: mmp-renamer:latest
     container_name: mmp-renamer
     ports:
-      - "5173:5173"
+      - "5173:5173"                       # Format: "external:internal" (internal must be 5173)
     volumes:
       - ./data:/usr/src/app/data          # Persistent runtime data
       - /mnt/media:/media:rw              # Mount entire parent media directory
@@ -163,6 +171,16 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}  # Remove after first run
     restart: unless-stopped
 ```
+
+**Custom External Port Examples:**
+```yaml
+ports:
+  - "8080:5173"  # Access at http://localhost:8080
+  - "3000:5173"  # Access at http://localhost:3000
+  - "80:5173"    # Access at http://localhost (requires root/admin)
+```
+
+> **Important**: The internal port (right side) must always be `5173`. Only change the external port (left side) to match your needs.
 
 **Set correct permissions before first run:**
 ```bash
