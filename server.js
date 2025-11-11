@@ -196,17 +196,39 @@ if (!allowedOrigins.length) {
 }
 const allowedOriginsNormalized = allowedOrigins.map((origin) => origin.toLowerCase());
 
-const corsOptions = {
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true); // allow same-origin or non-browser tooling
-    const normalized = origin.toLowerCase();
-    if (allowedOriginsNormalized.includes(normalized)) return callback(null, true);
-    return callback(new Error('Origin not allowed by CORS policy'));
-  },
+const baseCorsOptions = {
   credentials: true,
   methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'X-Requested-With', CSRF_HEADER_NAME],
   exposedHeaders: [CSRF_HEADER_NAME]
+};
+
+function isOriginTrusted(origin, req) {
+  if (!origin) return true;
+  const normalized = origin.toLowerCase();
+  if (allowedOriginsNormalized.includes(normalized)) return true;
+  try {
+    const hostHeader = (req && req.headers && req.headers.host ? String(req.headers.host) : '').toLowerCase();
+    if (!hostHeader) return false;
+    const parsed = new URL(origin);
+    if (parsed.host && parsed.host.toLowerCase() === hostHeader) return true;
+  } catch (err) {
+    // fall through to rejection
+  }
+  return false;
+}
+
+const corsOptionsDelegate = (req, callback) => {
+  try {
+    const origin = req.headers && req.headers.origin ? String(req.headers.origin) : null;
+    if (isOriginTrusted(origin, req)) {
+      callback(null, baseCorsOptions);
+    } else {
+      callback(new Error('Origin not allowed by CORS policy'));
+    }
+  } catch (err) {
+    callback(err);
+  }
 };
 
 const resolvedSameSite = (() => {
@@ -229,7 +251,7 @@ app.use(helmet({
   referrerPolicy: { policy: 'same-origin' }
 }));
 app.use((req, res, next) => { res.setHeader('Vary', 'Origin'); next(); });
-app.use(cors(corsOptions));
+app.use(cors(corsOptionsDelegate));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
