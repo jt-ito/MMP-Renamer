@@ -5222,9 +5222,17 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   const baseNameTemplate = template || userTemplate || serverSettings.rename_template || '{title}';
     // compute epLabel from enrichment metadata
     function pad(n){ return String(n).padStart(2,'0') }
+    
+    // Check if we have an AniDB raw episode number that should be preserved (like "S2", "C1", "T1")
+    const anidbRawEpisode = meta && meta.extraGuess && meta.extraGuess.anidb && meta.extraGuess.anidb.episodeNumberRaw;
+    const shouldUseAnidbRaw = anidbRawEpisode && /^[SCTPO]\d+$/i.test(String(anidbRawEpisode));
+    
     let epLabel = ''
     if (meta && meta.episodeRange) {
       epLabel = meta.season != null ? `S${pad(meta.season)}E${meta.episodeRange}` : `E${meta.episodeRange}`
+    } else if (shouldUseAnidbRaw) {
+      // Use AniDB's raw episode format (S2, C1, etc.) with season 0 prefix
+      epLabel = meta.season != null ? `S${pad(meta.season)}E${String(anidbRawEpisode).toUpperCase()}` : `E${String(anidbRawEpisode).toUpperCase()}`
     } else if (meta && meta.episode != null) {
       epLabel = meta.season != null ? `S${pad(meta.season)}E${pad(meta.episode)}` : `E${pad(meta.episode)}`
     }
@@ -5240,7 +5248,18 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   const resolvedSeriesTitle = resolveSeriesTitle(meta, rawTitle, fromPath, episodeTitleTokenFromMeta, { preferExact: true });
   const englishSeriesTitle = extractEnglishSeriesTitle(meta);
   const renderBaseTitle = englishSeriesTitle || resolvedSeriesTitle || rawTitle;
-  const title = cleanTitleForRender(renderBaseTitle, (meta && meta.episode != null) ? (meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`) : '', episodeTitleTokenFromMeta);
+  
+  // Format episode number for title - use AniDB raw format if available
+  let episodeForTitle = '';
+  if (meta && meta.episode != null) {
+    if (shouldUseAnidbRaw) {
+      episodeForTitle = meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(anidbRawEpisode).toUpperCase()}` : `E${String(anidbRawEpisode).toUpperCase()}`;
+    } else {
+      episodeForTitle = meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`;
+    }
+  }
+  
+  const title = cleanTitleForRender(renderBaseTitle, episodeForTitle, episodeTitleTokenFromMeta);
   const isMovie = determineIsMovie(meta);
   const templateYear = year ? String(year) : '';
   const folderYear = (isMovie === true && templateYear) ? templateYear : '';
@@ -6175,9 +6194,17 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
               // build tokens similar to previewRename
               const ext2 = path.extname(from);
               function pad(n){ return String(n).padStart(2,'0') }
+              
+              // Check if we have an AniDB raw episode number that should be preserved
+              const anidbRawEpisode2 = enrichment && enrichment.extraGuess && enrichment.extraGuess.anidb && enrichment.extraGuess.anidb.episodeNumberRaw;
+              const shouldUseAnidbRaw2 = anidbRawEpisode2 && /^[SCTPO]\d+$/i.test(String(anidbRawEpisode2));
+              
               let epLabel2 = ''
               if (enrichment && enrichment.episodeRange) {
                 epLabel2 = enrichment.season != null ? `S${pad(enrichment.season)}E${enrichment.episodeRange}` : `E${enrichment.episodeRange}`
+              } else if (shouldUseAnidbRaw2) {
+                // Use AniDB's raw episode format (S2, C1, etc.)
+                epLabel2 = enrichment.season != null ? `S${pad(enrichment.season)}E${String(anidbRawEpisode2).toUpperCase()}` : `E${String(anidbRawEpisode2).toUpperCase()}`
               } else if (enrichment && enrichment.episode != null) {
                 epLabel2 = enrichment.season != null ? `S${pad(enrichment.season)}E${pad(enrichment.episode)}` : `E${pad(enrichment.episode)}`
               }
@@ -6206,7 +6233,18 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
               const resolvedSeriesTitle2 = resolveSeriesTitle(enrichment, rawTitle2, from, episodeTitleToken2, { preferExact: true });
               const englishSeriesTitle2 = extractEnglishSeriesTitle(enrichment);
               const renderBaseTitle2 = englishSeriesTitle2 || resolvedSeriesTitle2 || rawTitle2;
-              const titleToken2 = cleanTitleForRender(renderBaseTitle2, (enrichment && enrichment.episode != null) ? (enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`) : '', (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
+              
+              // Format episode number for title - use AniDB raw format if available
+              let episodeForTitle2 = '';
+              if (enrichment && enrichment.episode != null) {
+                if (shouldUseAnidbRaw2) {
+                  episodeForTitle2 = enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(anidbRawEpisode2).toUpperCase()}` : `E${String(anidbRawEpisode2).toUpperCase()}`;
+                } else {
+                  episodeForTitle2 = enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`;
+                }
+              }
+              
+              const titleToken2 = cleanTitleForRender(renderBaseTitle2, episodeForTitle2, (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
               let yearToken2 = ''
               try {
                 if (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) {
