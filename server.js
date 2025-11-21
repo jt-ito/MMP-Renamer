@@ -11,6 +11,7 @@ const { lookupMetadataWithAniDB, getAniDBCredentials } = require('./lib/meta-pro
 const bcrypt = require('bcryptjs');
 const cookieParser = require('cookie-parser');
 const cookieSession = require('cookie-session');
+const titleCase = require('./lib/title-case');
 
 // External API integration removed: TMDb-related helpers and https monkey-patch
 // have been disabled to eliminate external HTTP calls. The metaLookup function
@@ -814,6 +815,13 @@ function normalizeEnrichEntry(entry) {
     out.originalSeriesTitle = entry.originalSeriesTitle || (extraSource && extraSource.originalSeriesTitle) || out.originalSeriesTitle || null;
     if (!out.title && out.seriesTitle) out.title = out.seriesTitle;
     out.seriesLookupTitle = entry.seriesLookupTitle || (extraSource && extraSource.seriesLookupTitle) || out.seriesLookupTitle || null;
+    try {
+      if (out.seriesTitle && typeof out.seriesTitle === 'string') out.seriesTitle = titleCase(out.seriesTitle);
+      if (out.seriesTitleEnglish && typeof out.seriesTitleEnglish === 'string') out.seriesTitleEnglish = titleCase(out.seriesTitleEnglish);
+      if (out.seriesTitleRomaji && typeof out.seriesTitleRomaji === 'string') out.seriesTitleRomaji = titleCase(out.seriesTitleRomaji);
+      if (out.originalSeriesTitle && typeof out.originalSeriesTitle === 'string') out.originalSeriesTitle = titleCase(out.originalSeriesTitle);
+      if (out.seriesLookupTitle && typeof out.seriesLookupTitle === 'string') out.seriesLookupTitle = titleCase(out.seriesLookupTitle);
+    } catch (e) { /* ignore title-case errors */ }
     if (typeof out.parentCandidate === 'undefined') {
       const parentGuess = entry.parentCandidate || (extraSource && extraSource.parentCandidate) || null;
       if (parentGuess) out.parentCandidate = parentGuess;
