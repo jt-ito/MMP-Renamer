@@ -12,6 +12,7 @@ const bcrypt = require('bcryptjs');
 const cookieParser = require('cookie-parser');
 const cookieSession = require('cookie-session');
 const titleCase = require('./lib/title-case');
+const normalizeApostrophes = require('./lib/normalize-apostrophes');
 
 // External API integration removed: TMDb-related helpers and https monkey-patch
 // have been disabled to eliminate external HTTP calls. The metaLookup function
@@ -816,6 +817,19 @@ function normalizeEnrichEntry(entry) {
     if (!out.title && out.seriesTitle) out.title = out.seriesTitle;
     out.seriesLookupTitle = entry.seriesLookupTitle || (extraSource && extraSource.seriesLookupTitle) || out.seriesLookupTitle || null;
     try {
+      // Normalize apostrophes to straight single-quote for display fields
+      if (out.title && typeof out.title === 'string') out.title = normalizeApostrophes(out.title);
+      if (out.seriesTitle && typeof out.seriesTitle === 'string') out.seriesTitle = normalizeApostrophes(out.seriesTitle);
+      if (out.seriesTitleEnglish && typeof out.seriesTitleEnglish === 'string') out.seriesTitleEnglish = normalizeApostrophes(out.seriesTitleEnglish);
+      if (out.seriesTitleRomaji && typeof out.seriesTitleRomaji === 'string') out.seriesTitleRomaji = normalizeApostrophes(out.seriesTitleRomaji);
+      if (out.originalSeriesTitle && typeof out.originalSeriesTitle === 'string') out.originalSeriesTitle = normalizeApostrophes(out.originalSeriesTitle);
+      if (out.seriesLookupTitle && typeof out.seriesLookupTitle === 'string') out.seriesLookupTitle = normalizeApostrophes(out.seriesLookupTitle);
+
+      // Also normalize parsed/title variants so parsed cache updates use straight apostrophes
+      if (out.parsed && out.parsed.title && typeof out.parsed.title === 'string') out.parsed.title = normalizeApostrophes(out.parsed.title);
+      if (out.parsed && out.parsed.parsedName && typeof out.parsed.parsedName === 'string') out.parsed.parsedName = normalizeApostrophes(out.parsed.parsedName);
+
+      // Apply title casing after apostrophe normalization
       if (out.seriesTitle && typeof out.seriesTitle === 'string') out.seriesTitle = titleCase(out.seriesTitle);
       if (out.seriesTitleEnglish && typeof out.seriesTitleEnglish === 'string') out.seriesTitleEnglish = titleCase(out.seriesTitleEnglish);
       if (out.seriesTitleRomaji && typeof out.seriesTitleRomaji === 'string') out.seriesTitleRomaji = titleCase(out.seriesTitleRomaji);
@@ -4838,6 +4852,16 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
 
   const backgroundRun = async () => {
     const results = [];
+    // Pre-normalize existing enrich cache entries for this scan so title-case
+    // changes are applied immediately even if a provider lookup fails later.
+    try {
+      for (const it of s.items || []) {
+        try {
+          const key = canonicalize(it.canonicalPath);
+          if (enrichCache && enrichCache[key]) updateEnrichCacheInMemory(key, {});
+        } catch (e) {}
+      }
+    } catch (e) {}
     try {
       for (const it of s.items) {
         try {
