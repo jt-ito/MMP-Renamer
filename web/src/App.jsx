@@ -2547,10 +2547,12 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
       
       // Update last clicked index for future shift-clicks
       lastClickedIndex.current = index
-    } else if (!isDragging) {
-      // Normal click - toggle selection (but only if not in middle of drag selection)
+    } else {
+      // Normal click - toggle selection. Allow toggling even if `isDragging` flag
+      // is unexpectedly set (this ensures a second press on the same item will
+      // deselect it reliably).
       toggleSelect(it.canonicalPath, !isSelected)
-      
+
       // Update last clicked index for future shift-clicks
       lastClickedIndex.current = index
     }
