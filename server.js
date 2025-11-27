@@ -3845,7 +3845,12 @@ async function backgroundEnrichFirstN(scanId, enrichCandidates, session, libPath
           try { appendLog(`BACKGROUND_ENRICH_SKIP_FAILURE path=${key}`); } catch (e) {}
           continue;
         }
-        const data = await externalEnrich(key, tmdbKey, { username });
+        // If the user's provider order prefers AniDB first, force computing ED2K hash
+        const _providerOrder = resolveMetadataProviderOrder(username);
+        const _forceHashForAniDB = (_providerOrder && _providerOrder.length && _providerOrder[0] === 'anidb');
+        const _opts = Object.assign({}, { username });
+        if (_forceHashForAniDB) _opts.forceHash = true;
+        const data = await externalEnrich(key, tmdbKey, _opts);
         if (!data) { continue; }
         try {
           const providerRendered = renderProviderName(data, key, session);
@@ -4878,7 +4883,13 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
           const fallbackParsed = entryAfterParse && entryAfterParse.parsed ? Object.assign({}, entryAfterParse.parsed) : null;
           try { appendLog(`REFRESH_ITEM_FORCE_LOOKUP path=${key}`); } catch (e) {}
           try {
-            lookup = await externalEnrich(key, tmdbKey, { username, force: true });
+            // Respect user's provider order: if AniDB is configured first, force hash so
+            // AniDB lookups wait for ED2K computation instead of falling back immediately.
+            const _refreshProviderOrder = resolveMetadataProviderOrder(username);
+            const _refreshForceHash = (_refreshProviderOrder && _refreshProviderOrder.length && _refreshProviderOrder[0] === 'anidb');
+            const _refreshOpts = Object.assign({}, { username, force: true });
+            if (_refreshForceHash) _refreshOpts.forceHash = true;
+            lookup = await externalEnrich(key, tmdbKey, _refreshOpts);
           } catch (err) {
             lookupError = err;
             try { appendLog(`REFRESH_ITEM_LOOKUP_ERR path=${key} err=${err && err.message ? err.message : String(err)}`); } catch (logErr) {}
@@ -5195,7 +5206,13 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     // Only enrich if not already complete
     if (!isProviderComplete(prov)) {
       try {
-        const data = await externalEnrich(fromPath, tmdbKey, { username });
+        // When previewing/enriching items on-demand, if AniDB is the user's primary
+        // metadata provider, prefer forcing hash so AniDB results are authoritative.
+        const _previewProviderOrder = resolveMetadataProviderOrder(username);
+        const _previewForceHash = (_previewProviderOrder && _previewProviderOrder.length && _previewProviderOrder[0] === 'anidb');
+        const _previewOpts = Object.assign({}, { username });
+        if (_previewForceHash) _previewOpts.forceHash = true;
+        const data = await externalEnrich(fromPath, tmdbKey, _previewOpts);
         if (data) {
           const providerRendered = renderProviderName(data, fromPath, req.session);
           const providerRaw = cloneProviderRaw(extractProviderRaw(data));

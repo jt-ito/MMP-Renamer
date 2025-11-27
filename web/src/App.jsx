@@ -2407,19 +2407,33 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const [dragCurrentIndex, setDragCurrentIndex] = useState(null)
   const dragInitialSelected = useRef({})
   const lastClickedIndex = useRef(null)
+  const selectionUtilsRef = useRef(null)
+
+  useEffect(() => {
+    // dynamically import selection utils (CommonJS module) and cache
+    import('./selection-utils').then(m => {
+      // interop: module may export via module.exports (default) or named
+      const sel = m && (m.selectRange || (m.default && m.default.selectRange) || (m.default || m))
+      selectionUtilsRef.current = sel
+    }).catch(() => { selectionUtilsRef.current = null })
+  }, [])
   
   // Handle drag selection
   useEffect(() => {
     if (!selectMode || !isDragging || dragStartIndex === null || dragCurrentIndex === null) return
-    
     const start = Math.min(dragStartIndex, dragCurrentIndex)
     const end = Math.max(dragStartIndex, dragCurrentIndex)
-    
-    // Update selection for range
-    for (let i = start; i <= end; i++) {
-      const item = items[i]
-      if (item && item.canonicalPath) {
-        toggleSelect(item.canonicalPath, true)
+    // Use helper when available
+    const selFn = selectionUtilsRef.current
+    if (selFn && typeof selFn === 'function') {
+      const paths = selFn(items, start, end)
+      for (const p of paths || []) toggleSelect(p, true)
+    } else {
+      for (let i = start; i <= end; i++) {
+        const item = items[i]
+        if (item && item.canonicalPath) {
+          toggleSelect(item.canonicalPath, true)
+        }
       }
     }
   }, [isDragging, dragStartIndex, dragCurrentIndex, items, selectMode, toggleSelect])
@@ -2439,8 +2453,13 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     return () => document.removeEventListener('mouseup', handleMouseUp)
   }, [selectMode])
   
-  const handleRowMouseDown = (index) => {
+  const handleRowMouseDown = (ev, index) => {
     if (!selectMode) return
+    // Only start a drag on left-button down and when not holding Shift
+    if (ev && ev.button !== 0) return
+    if (ev && ev.shiftKey) return
+    // record last clicked index on mousedown to be resilient across scroll/virtualization
+    lastClickedIndex.current = index
     setIsDragging(true)
     setDragStartIndex(index)
     setDragCurrentIndex(index)
@@ -2514,12 +2533,15 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
       ev.preventDefault()
       const start = Math.min(lastClickedIndex.current, index)
       const end = Math.max(lastClickedIndex.current, index)
-      
-      // Select all items in range
-      for (let i = start; i <= end; i++) {
-        const item = items[i]
-        if (item && item.canonicalPath) {
-          toggleSelect(item.canonicalPath, true)
+      // Select all items in range via helper when available
+      const selFn = selectionUtilsRef.current
+      if (selFn && typeof selFn === 'function') {
+        const paths = selFn(items, start, end)
+        for (const p of paths || []) toggleSelect(p, true)
+      } else {
+        for (let i = start; i <= end; i++) {
+          const item = items[i]
+          if (item && item.canonicalPath) toggleSelect(item.canonicalPath, true)
         }
       }
       
@@ -2539,7 +2561,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
         className={"row" + (selectMode ? ' row-select-mode' : '') + (isSelected ? ' row-selected' : '')}
         style={style}
         onClick={handleRowClick}
-        onMouseDown={() => handleRowMouseDown(index)}
+        onMouseDown={(ev) => handleRowMouseDown(ev, index)}
         onMouseEnter={() => handleRowMouseEnter(index)}
         role={selectMode ? 'button' : undefined}
         tabIndex={selectMode ? 0 : undefined}
