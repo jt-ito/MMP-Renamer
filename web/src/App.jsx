@@ -2406,6 +2406,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const [dragStartIndex, setDragStartIndex] = useState(null)
   const [dragCurrentIndex, setDragCurrentIndex] = useState(null)
   const dragInitialSelected = useRef({})
+  const possibleDragRef = useRef(null)
   const lastClickedIndex = useRef(null)
   const selectionUtilsRef = useRef(null)
 
@@ -2449,27 +2450,39 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
       setDragStartIndex(null)
       setDragCurrentIndex(null)
       dragInitialSelected.current = {}
+      possibleDragRef.current = null
     }
     
     document.addEventListener('mouseup', handleMouseUp)
     return () => document.removeEventListener('mouseup', handleMouseUp)
   }, [selectMode])
+
   
   const handleRowMouseDown = (ev, index) => {
     if (!selectMode) return
-    // Only start a drag on left-button down and when not holding Shift
+    // Only consider a drag on left-button down and when not holding Shift
     if (ev && ev.button !== 0) return
     if (ev && ev.shiftKey) return
     // record last clicked index on mousedown to be resilient across scroll/virtualization
     lastClickedIndex.current = index
-    setIsDragging(true)
+    // mark a possible drag start; only activate drag when pointer moves to another row
+    possibleDragRef.current = index
     setDragStartIndex(index)
     setDragCurrentIndex(index)
     dragInitialSelected.current = { ...selected }
   }
   
   const handleRowMouseEnter = (index) => {
-    if (!selectMode || !isDragging) return
+    if (!selectMode) return
+    // If a possible drag start is recorded and the pointer moved to a different index,
+    // begin actual drag selection.
+    if (possibleDragRef.current !== null && !isDragging && possibleDragRef.current !== index) {
+      setIsDragging(true)
+      setDragStartIndex(possibleDragRef.current)
+      setDragCurrentIndex(index)
+      return
+    }
+    if (!isDragging) return
     setDragCurrentIndex(index)
   }
 
