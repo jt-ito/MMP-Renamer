@@ -2418,9 +2418,11 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     }).catch(() => { selectionUtilsRef.current = null })
   }, [])
   
-  // Handle drag selection
+  // Handle drag selection (only when the drag covers more than one index)
   useEffect(() => {
     if (!selectMode || !isDragging || dragStartIndex === null || dragCurrentIndex === null) return
+    // Ignore single-click drags where start === current to avoid overriding click toggles
+    if (dragStartIndex === dragCurrentIndex) return
     const start = Math.min(dragStartIndex, dragCurrentIndex)
     const end = Math.max(dragStartIndex, dragCurrentIndex)
     // Use helper when available
