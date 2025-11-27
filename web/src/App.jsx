@@ -95,12 +95,11 @@ function LoadingIndicator({ status, stage }) {
         </path>
       </svg>
       <span style={{ opacity: 0.9, fontWeight: 500 }}>{getMessage()}</span>
-    </div>
-  )
-}
-
-export default function App() {
-  const [libraries, setLibraries] = useState([])
+            <div
+              className={rowClass}
+              onMouseDown={(e) => handleRowMouseDown(e, index)}
+              onClick={(e) => handleRowClick(e, index)}
+            >
   const [scanId, setScanId] = useState(null)
   const [scanMeta, setScanMeta] = useState(null)
   const [lastLibraryId, setLastLibraryId] = useLocalState('lastLibraryId', '')
@@ -2402,11 +2401,6 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const listRef = useRef(null)
   const containerRef = useRef(null)
   const [listHeight, setListHeight] = useState(700)
-  const [isDragging, setIsDragging] = useState(false)
-  const [dragStartIndex, setDragStartIndex] = useState(null)
-  const [dragCurrentIndex, setDragCurrentIndex] = useState(null)
-  const dragInitialSelected = useRef({})
-  const possibleDragRef = useRef(null)
   const lastClickedIndex = useRef(null)
   const selectionUtilsRef = useRef(null)
 
@@ -2419,71 +2413,21 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     }).catch(() => { selectionUtilsRef.current = null })
   }, [])
   
-  // Handle drag selection (only when the drag covers more than one index)
-  useEffect(() => {
-    if (!selectMode || !isDragging || dragStartIndex === null || dragCurrentIndex === null) return
-    // Ignore single-click drags where start === current to avoid overriding click toggles
-    if (dragStartIndex === dragCurrentIndex) return
-    const start = Math.min(dragStartIndex, dragCurrentIndex)
-    const end = Math.max(dragStartIndex, dragCurrentIndex)
-    // Use helper when available
-    const selFn = selectionUtilsRef.current
-    if (selFn && typeof selFn === 'function') {
-      const paths = selFn(items, start, end)
-      for (const p of paths || []) toggleSelect(p, true)
-    } else {
-      for (let i = start; i <= end; i++) {
-        const item = items[i]
-        if (item && item.canonicalPath) {
-          toggleSelect(item.canonicalPath, true)
-        }
-      }
-    }
-  }, [isDragging, dragStartIndex, dragCurrentIndex, items, selectMode, toggleSelect])
-  
-  // Handle mouse up globally to end drag
-  useEffect(() => {
-    if (!selectMode) return
-    
-    const handleMouseUp = () => {
-      setIsDragging(false)
-      setDragStartIndex(null)
-      setDragCurrentIndex(null)
-      dragInitialSelected.current = {}
-      possibleDragRef.current = null
-    }
-    
-    document.addEventListener('mouseup', handleMouseUp)
-    return () => document.removeEventListener('mouseup', handleMouseUp)
-  }, [selectMode])
+  // Drag-selection removed: we rely on Shift+click for range selection.
 
   
   const handleRowMouseDown = (ev, index) => {
     if (!selectMode) return
-    // Only consider a drag on left-button down and when not holding Shift
+    // Only react to left-button and ignore Shift here. We don't start drag.
     if (ev && ev.button !== 0) return
     if (ev && ev.shiftKey) return
     // record last clicked index on mousedown to be resilient across scroll/virtualization
     lastClickedIndex.current = index
-    // mark a possible drag start; only activate drag when pointer moves to another row
-    possibleDragRef.current = index
-    setDragStartIndex(index)
-    setDragCurrentIndex(index)
-    dragInitialSelected.current = { ...selected }
   }
   
   const handleRowMouseEnter = (index) => {
-    if (!selectMode) return
-    // If a possible drag start is recorded and the pointer moved to a different index,
-    // begin actual drag selection.
-    if (possibleDragRef.current !== null && !isDragging && possibleDragRef.current !== index) {
-      setIsDragging(true)
-      setDragStartIndex(possibleDragRef.current)
-      setDragCurrentIndex(index)
-      return
-    }
-    if (!isDragging) return
-    setDragCurrentIndex(index)
+    // No-op; dragging disabled in favor of Shift+click selection.
+    return
   }
 
   // Measure container height dynamically
