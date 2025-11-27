@@ -95,11 +95,12 @@ function LoadingIndicator({ status, stage }) {
         </path>
       </svg>
       <span style={{ opacity: 0.9, fontWeight: 500 }}>{getMessage()}</span>
-            <div
-              className={rowClass}
-              onMouseDown={(e) => handleRowMouseDown(e, index)}
-              onClick={(e) => handleRowClick(e, index)}
-            >
+    </div>
+  )
+}
+
+export default function App() {
+  const [libraries, setLibraries] = useState([])
   const [scanId, setScanId] = useState(null)
   const [scanMeta, setScanMeta] = useState(null)
   const [lastLibraryId, setLastLibraryId] = useLocalState('lastLibraryId', '')
@@ -2401,6 +2402,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const listRef = useRef(null)
   const containerRef = useRef(null)
   const [listHeight, setListHeight] = useState(700)
+  // drag-selection removed - rely on Shift+click for range selection
   const lastClickedIndex = useRef(null)
   const selectionUtilsRef = useRef(null)
 
@@ -2413,12 +2415,12 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     }).catch(() => { selectionUtilsRef.current = null })
   }, [])
   
-  // Drag-selection removed: we rely on Shift+click for range selection.
+  // drag-selection removed: no global mouseup or drag effects
 
   
   const handleRowMouseDown = (ev, index) => {
     if (!selectMode) return
-    // Only react to left-button and ignore Shift here. We don't start drag.
+    // Only respond to left-button and ignore Shift (Shift triggers range selection on click)
     if (ev && ev.button !== 0) return
     if (ev && ev.shiftKey) return
     // record last clicked index on mousedown to be resilient across scroll/virtualization
@@ -2426,7 +2428,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   }
   
   const handleRowMouseEnter = (index) => {
-    // No-op; dragging disabled in favor of Shift+click selection.
+    // No-op: drag-selection removed. Keep handler for potential future use.
     return
   }
 
