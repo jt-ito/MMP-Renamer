@@ -2455,7 +2455,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const loadingState = it && loadingEnrich[it.canonicalPath]
   const loading = Boolean(loadingState)
   const isSelected = !!(selectMode && it && selected?.[it.canonicalPath])
-  const isRangeSelecting = isDragging && dragStartIndex !== null && dragCurrentIndex !== null && dragStartIndex !== dragCurrentIndex
+  const isRangeSelecting = false
 
   // Only use the two canonical outputs: parsed and provider
   const parsed = enrichment?.parsed || null
