@@ -5508,6 +5508,16 @@ function stripSeasonNumberSuffix(name) {
     if (!/\b\d{4}\b$/.test(s)) {
       s = s.replace(/\s*[\-–—:\/\(]?\s*(?:#\s*)?(?:\b(?:[0-9]{1,2}|[IVXLC]+)\b)\s*\)?$/i, '').trim();
     }
+
+    // Also strip patterns where the ordinal/number precedes the word 'Season', e.g. '2nd Season' or 'Second Season'
+    try {
+      // numeric ordinal before 'Season'
+      s = s.replace(/\s+\d{1,2}(?:st|nd|rd|th)?\s+Season\s*$/i, '').trim();
+      // textual ordinals (first, second, third, ...)
+      s = s.replace(/\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+Season\s*$/i, '').trim();
+      // also handle forms like 'Season Second' (rare) just in case
+      s = s.replace(/\s+Season\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s*$/i, '').trim();
+    } catch (e) { /* best-effort */ }
     return s;
   } catch (e) { return String(name || '').trim() }
 }
