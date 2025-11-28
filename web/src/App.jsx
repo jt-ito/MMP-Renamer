@@ -2310,22 +2310,12 @@ export default function App() {
                   )}
 
                   {scanMeta ? (
-            // Wrap toggleSelect with a debug-logging handler to capture selection toggles
-            (() => {
-              const toggleSelectHandler = (p, val) => {
-                try { console.debug && console.debug('[sel] toggleSelect called', { path: p, val, before: Object.keys(selected || {}).slice(0,10) }) } catch (e) {}
-                setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; try { console.debug && console.debug('[sel] toggleSelect after', { path: p, after: Object.keys(n || {}).slice(0,10) }) } catch (e) {} return n })
-              }
-              return (
-                <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
-                  previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
-                  selectOutputFolder={selectOutputFolder}
-                  selectMode={selectMode} selected={selected} toggleSelect={toggleSelectHandler}
-                  providerKey={providerKey} hideOne={hideOnePath}
-                  searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching} />
-              )
-            })()
-          ) : null}
+            <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
+              previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
+              selectOutputFolder={selectOutputFolder}
+              selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
+              providerKey={providerKey} hideOne={hideOnePath}
+              searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching} />
                   ) : null}
                 </>
               )}
@@ -2412,7 +2402,10 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const listRef = useRef(null)
   const containerRef = useRef(null)
   const [listHeight, setListHeight] = useState(700)
-  // drag-selection removed - rely on Shift+click for range selection
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStartIndex, setDragStartIndex] = useState(null)
+  const [dragCurrentIndex, setDragCurrentIndex] = useState(null)
+  const dragInitialSelected = useRef({})
   const lastClickedIndex = useRef(null)
   const selectionUtilsRef = useRef(null)
 
@@ -2425,23 +2418,57 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     }).catch(() => { selectionUtilsRef.current = null })
   }, [])
   
-  // drag-selection removed: no global mouseup or drag effects
-
+  // Handle drag selection
+  useEffect(() => {
+    if (!selectMode || !isDragging || dragStartIndex === null || dragCurrentIndex === null) return
+    const start = Math.min(dragStartIndex, dragCurrentIndex)
+    const end = Math.max(dragStartIndex, dragCurrentIndex)
+    // Use helper when available
+    const selFn = selectionUtilsRef.current
+    if (selFn && typeof selFn === 'function') {
+      const paths = selFn(items, start, end)
+      for (const p of paths || []) toggleSelect(p, true)
+    } else {
+      for (let i = start; i <= end; i++) {
+        const item = items[i]
+        if (item && item.canonicalPath) {
+          toggleSelect(item.canonicalPath, true)
+        }
+      }
+    }
+  }, [isDragging, dragStartIndex, dragCurrentIndex, items, selectMode, toggleSelect])
+  
+  // Handle mouse up globally to end drag
+  useEffect(() => {
+    if (!selectMode) return
+    
+    const handleMouseUp = () => {
+      setIsDragging(false)
+      setDragStartIndex(null)
+      setDragCurrentIndex(null)
+      dragInitialSelected.current = {}
+    }
+    
+    document.addEventListener('mouseup', handleMouseUp)
+    return () => document.removeEventListener('mouseup', handleMouseUp)
+  }, [selectMode])
   
   const handleRowMouseDown = (ev, index) => {
     if (!selectMode) return
-    // Only respond to left-button and ignore Shift (Shift triggers range selection on click)
+    // Only start a drag on left-button down and when not holding Shift
     if (ev && ev.button !== 0) return
     if (ev && ev.shiftKey) return
     // record last clicked index on mousedown to be resilient across scroll/virtualization
-    // Temporary debug log to capture ordering and state during repro
-    try { console.debug && console.debug('[sel] mousedown', { index, button: ev && ev.button, shift: ev && ev.shiftKey, lastClicked: lastClickedIndex.current, selectMode }) } catch (e) {}
     lastClickedIndex.current = index
+    setIsDragging(true)
+    setDragStartIndex(index)
+    setDragCurrentIndex(index)
+    dragInitialSelected.current = { ...selected }
   }
   
   const handleRowMouseEnter = (index) => {
-    // No-op: drag-selection removed. Keep handler for potential future use.
-    return
+    if (!selectMode || !isDragging) return
+    setDragCurrentIndex(index)
   }
 
   // Measure container height dynamically
@@ -2467,7 +2494,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const loadingState = it && loadingEnrich[it.canonicalPath]
   const loading = Boolean(loadingState)
   const isSelected = !!(selectMode && it && selected?.[it.canonicalPath])
-  const isRangeSelecting = false
+  const isRangeSelecting = isDragging && dragStartIndex !== null && dragCurrentIndex !== null && dragStartIndex !== dragCurrentIndex
 
   // Only use the two canonical outputs: parsed and provider
   const parsed = enrichment?.parsed || null
@@ -2500,8 +2527,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     // ignore clicks originating from action buttons or the checkbox container
     const interactive = ev.target.closest('.actions') || ev.target.closest('button') || ev.target.closest('a') || ev.target.closest('input')
     if (interactive) return
-    try { console.debug && console.debug('[sel] click:start', { index, shift: ev.shiftKey, target: ev.target && ev.target.tagName, lastClicked: lastClickedIndex.current, isSelected }) } catch (e) {}
-    
+
     // Handle shift-click for range selection
     if (ev.shiftKey && lastClickedIndex.current !== null && lastClickedIndex.current !== index) {
       ev.preventDefault()
@@ -2518,17 +2544,11 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
           if (item && item.canonicalPath) toggleSelect(item.canonicalPath, true)
         }
       }
-      
       // Update last clicked index for future shift-clicks
-      try { console.debug && console.debug('[sel] click:shift-selected', { start, end }) } catch (e) {}
       lastClickedIndex.current = index
-    } else {
-      // Normal click - toggle selection. Allow toggling even if `isDragging` flag
-      // is unexpectedly set (this ensures a second press on the same item will
-      // deselect it reliably).
+    } else if (!isDragging) {
+      // Normal click - always toggle selection, even if already selected and lastClickedIndex matches
       toggleSelect(it.canonicalPath, !isSelected)
-      try { console.debug && console.debug('[sel] click:toggled', { path: it && it.canonicalPath, nowSelected: !isSelected }) } catch (e) {}
-
       // Update last clicked index for future shift-clicks
       lastClickedIndex.current = index
     }
