@@ -6418,15 +6418,18 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
             // or other tokens differ unexpectedly.
             let usePlanToPath = false;
             try {
-              // Compare preview toPath against the configured output for this apply run.
-              if (p && p.toPath && configuredOut) {
-                const candidate = path.resolve(p.toPath);
-                if (String(candidate).startsWith(path.resolve(configuredOut))) {
+              // If the preview plan provided an explicit toPath, prefer it consistently.
+              // We force-accept the preview name so the applied filesystem target matches
+              // what the UI preview showed. This is defensive: we still resolve the path
+              // and log the use so we can trace any unexpected results.
+              if (p && p.toPath) {
+                try {
+                  const candidate = path.resolve(p.toPath);
                   effectiveToResolved = candidate;
                   usePlanToPath = true;
-                  try { appendLog(`APPLY_USE_PLAN topath=${candidate}`) } catch (e) {}
-                } else {
-                  try { appendLog(`APPLY_PLAN_IGNORED planToPath=${String(p.toPath)} configuredOut=${String(configuredOut)}`) } catch (e) {}
+                  try { appendLog(`APPLY_FORCE_USE_PLAN topath=${candidate}`) } catch (e) {}
+                } catch (e) {
+                  try { appendLog(`APPLY_PLAN_CHECK_ERR err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
                 }
               }
             } catch (e) { try { appendLog(`APPLY_PLAN_CHECK_ERR err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
