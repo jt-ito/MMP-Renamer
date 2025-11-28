@@ -3739,8 +3739,37 @@ function renderProviderName(data, key, session) {
       .replace(/\s{2,}/g, ' ')
       .trim();
     providerRendered = ensureRenderedNameHasYear(providerRendered, templateYear);
+    // Apply OS-specific filename-length truncation to the rendered name so displayed
+    // and persisted rendered names don't exceed user-configured OS limits.
+    try {
+      const osKey = (session && session.username && users[session.username] && users[session.username].settings && users[session.username].settings.client_os) ? users[session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
+      const maxLen = getMaxFilenameLengthForOS(osKey);
+      if (maxLen && String(providerRendered).length > maxLen) {
+        providerRendered = truncateFilenameComponent(providerRendered, maxLen);
+      }
+    } catch (e) {}
     return providerRendered;
   } catch (e) { return '' }
+}
+
+function getMaxFilenameLengthForOS(osKey) {
+  const key = String(osKey || 'linux').toLowerCase();
+  // Common max filename length per filesystem (component length)
+  // Windows/NTFS: 255, macOS(APFS/HFS+): 255, Linux(ext4): 255
+  if (key === 'windows') return 255;
+  if (key === 'mac' || key === 'macos' || key === 'darwin') return 255;
+  return 255; // default for linux and unknown
+}
+
+function truncateFilenameComponent(name, maxLen) {
+  if (!name) return name;
+  const s = String(name);
+  if (!maxLen || s.length <= maxLen) return s;
+  // preserve start and end pieces if possible: "Base - S01E01 - Episode" -> keep start and end
+  // but to keep it simple, truncate at maxLen-1 and append ellipsis
+  const ell = '…';
+  const keep = Math.max(1, maxLen - ell.length);
+  return s.slice(0, keep) + ell;
 }
 
 // Centralized parsed item processing used by scans: parse filename, update parsedCache & enrichCache
@@ -4558,7 +4587,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove', 'client_os'];
       for (const k of allowed) {
         if (body[k] === undefined) continue;
         if (k === 'metadata_provider_order') {
@@ -4593,7 +4622,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch', 'delete_hardlinks_on_unapprove'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch', 'delete_hardlinks_on_unapprove', 'client_os'];
     
     // Check if scan_input_path changed to update watcher
     const oldScanPath = users[username].settings.scan_input_path;
@@ -5421,6 +5450,12 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   if (!(isMovie === true)) {
     try { sanitizedBaseFolder = stripTrailingYear(sanitizedBaseFolder) } catch (e) {}
   }
+  // Enforce per-OS filename limits on folder and file base names
+  try {
+    const osKey = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.client_os) ? users[req.session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
+    const maxLen = getMaxFilenameLengthForOS(osKey) || 255;
+    if (sanitizedBaseFolder && sanitizedBaseFolder.length > maxLen) sanitizedBaseFolder = truncateFilenameComponent(sanitizedBaseFolder, maxLen);
+  } catch (e) {}
   const titleFolder = folderYear ? `${sanitizedBaseFolder} (${folderYear})` : sanitizedBaseFolder;
   const seasonFolder = (!isMovie && meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
   const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
@@ -5467,6 +5502,11 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     let toPath;
     if (effectiveOutput) {
       let finalFileName = nameWithoutExt;
+      try {
+        const osKey = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.client_os) ? users[req.session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
+        const maxLen = getMaxFilenameLengthForOS(osKey) || 255;
+        if (finalFileName && finalFileName.length > maxLen) finalFileName = truncateFilenameComponent(finalFileName, maxLen);
+      } catch (e) {}
       finalFileName = (finalFileName + ext).replace(/\\/g, '/');
       toPath = path.join(folder, finalFileName).replace(/\\/g, '/');
     } else {

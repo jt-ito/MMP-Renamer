@@ -293,8 +293,9 @@ select.form-input:focus {
 .list { flex:1; background: var(--bg-800); padding:12px; border-radius: var(--radius); box-shadow: 0 6px 20px rgba(0,0,0,0.6); min-width:0; display: flex; flex-direction: column; }
 .side { width:360px }
 
-/* Row styling matches the fixed itemSize in the virtualized list (90px) */
-.row { display:flex; justify-content:space-between; align-items:center; padding:16px; height:90px; box-sizing:border-box; border-bottom:1px solid var(--bg-600); background: var(--bg-700) }
+
+/* Allow rows to grow vertically when titles span multiple lines and avoid clipping */
+.row { display:flex; justify-content:space-between; align-items:flex-start; padding:16px; min-height:72px; box-sizing:border-box; border-bottom:1px solid var(--bg-600); background: var(--bg-700); gap:12px }
 .row:nth-child(even) { background: var(--bg-800) }
 .row.row-select-mode { cursor: pointer; transition: background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease }
 .row.row-select-mode:hover { background: rgba(96,165,250,0.08) }
@@ -332,9 +333,8 @@ select.form-input:focus {
 	top: 50%;
 	transform: translate(-50%, -54%);
 }
-.row .path { font-size:14px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-.row .title { font-weight:600; font-size:15px; color:var(--accent); margin-top:6px }
-.row .title,.row .path { display:block }
+.row .path { font-size:14px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; display:block; max-width:100%; word-break:break-word }
+.row .title { font-weight:600; font-size:15px; color:var(--accent); margin-top:0; line-height:1.25; word-break:break-word; display:block }
 
 .actions { display:flex; gap:8px; align-items:center }
 .actions button { padding:10px 14px; font-size:14px; border-radius:12px; background:var(--bg-700); color:var(--accent); border:1px solid var(--bg-600); cursor:pointer }

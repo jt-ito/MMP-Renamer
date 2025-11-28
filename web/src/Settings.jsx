@@ -98,6 +98,7 @@ export default function Settings({ pushToast }){
   const [enableFolderWatch, setEnableFolderWatch] = useState(false)
   const [deleteHardlinksOnUnapprove, setDeleteHardlinksOnUnapprove] = useState(true)
   const [dirty, setDirty] = useState(false)
+  const [clientOS, setClientOS] = useState(typeof window !== 'undefined' ? (localStorage.getItem('client_os') || 'linux') : 'linux')
 
   useEffect(() => {
     // prefer user-specific settings from server, fall back to localStorage
@@ -205,6 +206,7 @@ export default function Settings({ pushToast }){
           const normalizedFolders = Array.isArray(parsedFolders) ? parsedFolders : []
           setOutputFolders(normalizedFolders)
           setOutputFoldersDirty(new Array(normalizedFolders.length).fill(false))
+          setClientOS(localStorage.getItem('client_os') || 'linux')
         } catch (e) {
           setOutputFolders([])
           setOutputFoldersDirty([])
@@ -243,6 +245,7 @@ export default function Settings({ pushToast }){
       try { localStorage.setItem('metadata_provider_order', JSON.stringify(providerOrder)) } catch (e) {}
       try { localStorage.setItem('default_meta_provider', providerOrder[0] || 'tmdb') } catch (e) {}
       localStorage.setItem('rename_template', renameTemplate)
+      try { localStorage.setItem('client_os', clientOS) } catch (e) {}
       localStorage.setItem('scan_input_path', inputPath)
       localStorage.setItem('scan_output_path', outputPath)
       localStorage.setItem('enable_folder_watch', String(enableFolderWatch))
@@ -266,7 +269,8 @@ export default function Settings({ pushToast }){
           enable_folder_watch: enableFolderWatch,
           delete_hardlinks_on_unapprove: deleteHardlinksOnUnapprove,
           output_folders: outputFolders,
-          rename_template: renameTemplate
+          rename_template: renameTemplate,
+          client_os: clientOS
         })
         pushToast && pushToast('Settings', 'Saved')
         setDirty(false)
@@ -309,6 +313,7 @@ export default function Settings({ pushToast }){
       localStorage.removeItem('enable_folder_watch')
   localStorage.removeItem('delete_hardlinks_on_unapprove')
   localStorage.removeItem('output_folders')
+        localStorage.removeItem('client_os')
       localStorage.setItem('rename_template', '{title} - {epLabel} - {episodeTitle}')
   axios.post(API('/settings'), { tmdb_api_key: '', anilist_api_key: '', anidb_username: '', anidb_password: '', default_meta_provider: 'tmdb', metadata_provider_order: DEFAULT_PROVIDER_ORDER, tvdb_v4_api_key: '', tvdb_v4_user_pin: '', scan_input_path: '', scan_output_path: '', enable_folder_watch: false, rename_template: '{title} - {epLabel} - {episodeTitle}', output_folders: [] }).catch(()=>{})
       setDirty(false)
@@ -587,6 +592,16 @@ export default function Settings({ pushToast }){
           <div style={{fontSize:12, color: outputExists === false ? '#ffb4b4' : 'var(--muted)', marginTop:6}}>
             {outputExists === false ? 'Output path does not exist — hardlink operations will fail until this is fixed.' : 'When a rename/hardlink operation is applied the tool will create hardlinks under this output path using a naming scheme compatible with Jellyfin. Example layout: '}<code>Show Title (Year)/Season 01/Show Title (Year) - S01E01 - Episode Title.ext</code>.
           </div>
+        </div>
+
+        <div style={{marginTop:12}}>
+          <label style={{fontSize:13, color:'var(--muted)'}}>Client OS (affects max filename lengths)</label>
+          <select className='form-input' value={clientOS} onChange={e => { setClientOS(e.target.value); setDirty(true) }} style={{marginTop:8, maxWidth:320}}>
+            <option value='linux'>Linux / Other (max filename 255)</option>
+            <option value='mac'>macOS (max filename 255)</option>
+            <option value='windows'>Windows (NTFS, max filename 255)</option>
+          </select>
+          <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>Choose the OS where files will be written so the tool can limit filename lengths to the platform's limits.</div>
         </div>
 
         <div style={{marginTop:18}}>
