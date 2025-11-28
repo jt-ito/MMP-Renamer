@@ -6352,6 +6352,12 @@ function extractYear(meta, fromPath) {
 app.post('/api/rename/apply', requireAuth, async (req, res) => {
   const { plans, dryRun, outputFolder } = req.body || {};
   if (!plans || !Array.isArray(plans)) return res.status(400).json({ error: 'plans required' });
+  // Diagnostic: dump the incoming plans payload to a timestamped file for inspection
+  try {
+    const dumpUser = req.session && req.session.username ? req.session.username : '<anon>';
+    const dumpPath = path.join(process.cwd(), 'data', `apply-plans-dump-${Date.now()}.json`);
+    try { fs.writeFileSync(dumpPath, JSON.stringify({ user: dumpUser, plans: plans }, null, 2), { encoding: 'utf8' }); appendLog(`APPLY_DUMP file=${dumpPath}`); } catch (e) { appendLog(`APPLY_DUMP_FAIL err=${e && e.message ? e.message : String(e)}`) }
+  } catch (e) { /* non-fatal */ }
   // Ensure cached movie/english flags are healed before applying rename plans so folder/year logic is correct
   try { healCachedEnglishAndMovieFlags(); } catch (e) { /* non-fatal */ }
   const results = [];
