@@ -5512,6 +5512,10 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
 
   // Render template with preferência to enrichment-provided tokens.
   // If the provider returned a renderedName (TMDb), prefer that exact rendered string for preview.
+  // However, if this seems to be an episodic item and the provider-rendered name does not
+  // contain episode information (SxxExx or episode title), prefer the user/template render
+  // so previews include per-episode labels and the apply step won't collapse multiple
+  // episodes into the same series-level filename.
   let nameWithoutExtRaw;
   if (meta && meta.provider && meta.provider.renderedName) {
     // strip extension and insert year if provider-rendered name is missing it
@@ -5527,7 +5531,25 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
       }
     } catch (e) {}
     providerName = ensureRenderedNameHasYear(providerName, templateYear);
-    nameWithoutExtRaw = providerName;
+    // If this looks like a series-level rendered name (no episode tokens) but we
+    // have episode metadata, prefer the template rendering so each episode gets
+    // a unique filename.
+    try {
+      const hasEpisodeMeta = (meta && (meta.episode != null || meta.episodeRange));
+      const providerLower = String(providerName || '').toLowerCase();
+      const epLabelPresent = epLabel && providerLower.indexOf(String(epLabel).toLowerCase()) !== -1;
+      const epTitlePresent = episodeTitleToken && providerLower.indexOf(String(episodeTitleToken).toLowerCase()) !== -1;
+      const sxxMatch = /\bS\d{2}E\d{2}\b/i.test(providerName);
+      const exxMatch = /\bE\d{1,3}\b/i.test(providerName);
+      if (hasEpisodeMeta && !(epLabelPresent || epTitlePresent || sxxMatch || exxMatch)) {
+        // fall through to template-based rendering below
+        nameWithoutExtRaw = null;
+      } else {
+        nameWithoutExtRaw = providerName;
+      }
+    } catch (e) {
+      nameWithoutExtRaw = providerName;
+    }
   } else {
     nameWithoutExtRaw = baseNameTemplate
   .replace('{title}', sanitize(stripSeasonNumberSuffix(title)))
@@ -6333,6 +6355,10 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
     try {
       const from = p.fromPath;
       const to = p.toPath;
+      // Debug: log incoming plan payload details to help diagnose apply mismatches
+      try {
+        appendLog(`APPLY_PLAN_PAYLOAD item=${p.itemId} from=${from} to=${String(to)} templateUsed=${String(p.templateUsed || '')} actions=${JSON.stringify(p.actions || [])}`);
+      } catch (e) {}
       if (from === to) {
         results.push({ itemId: p.itemId, status: 'noop' });
         continue;
