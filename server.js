@@ -6559,17 +6559,33 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
                 // Best-effort: truncate final basename to OS limits before mkdir/link
                 try {
                   const osKey = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.client_os) ? users[req.session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
-                  const maxLen = getMaxFilenameLengthForOS(osKey) || 255;
+                  const isWindows = String(osKey || '').toLowerCase() === 'windows';
+                  const maxComponentLen = getMaxFilenameLengthForOS(osKey) || 255;
+                  // Windows MAX_PATH is 260. Use 258 for safety. Linux/Mac usually 4096+.
+                  const maxTotalPath = isWindows ? 258 : 4096;
+
                   try {
                     const parentDir = path.dirname(effectiveToResolved || toResolved) || '';
                     const base = path.basename(effectiveToResolved || toResolved) || '';
                     const extA = path.extname(base) || '';
                     const nameNoExt = base.slice(0, base.length - extA.length) || '';
-                    if (nameNoExt && maxLen && nameNoExt.length > maxLen) {
-                      const truncated = truncateFilenameComponent(nameNoExt, maxLen);
+                    
+                    // Calculate available space for the filename component based on total path limit
+                    // parentDir + separator + filename <= maxTotalPath
+                    const parentLen = parentDir.length;
+                    // Ensure we leave at least a tiny budget (10 chars) even if path is deep, though it will likely fail later if too deep.
+                    const availableForBase = Math.max(10, maxTotalPath - parentLen - 1);
+                    
+                    // The effective limit for the name part (without extension) is the min of:
+                    // 1. The OS component limit (e.g. 230 or 255) minus extension length
+                    // 2. The available space in the total path minus extension length
+                    const effectiveLimit = Math.min(maxComponentLen, availableForBase) - extA.length;
+
+                    if (nameNoExt && effectiveLimit > 0 && nameNoExt.length > effectiveLimit) {
+                      const truncated = truncateFilenameComponent(nameNoExt, effectiveLimit);
                       const newBase = `${truncated}${extA}`;
                       const newEffective = path.resolve(parentDir, newBase);
-                      appendLog(`HARDLINK_TRUNCATED original=${base} truncated=${newBase} maxLen=${maxLen}`);
+                      appendLog(`HARDLINK_TRUNCATED original=${base} truncated=${newBase} maxComponent=${maxComponentLen} maxTotal=${maxTotalPath} parentLen=${parentLen} effectiveLimit=${effectiveLimit}`);
                       effectiveToResolved = newEffective;
                     }
                   } catch (e) { /* ignore truncation errors */ }
@@ -6696,16 +6712,25 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
             // Ensure final basename respects OS filename limits to avoid ENAMETOOLONG
             try {
               const osKey = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.client_os) ? users[req.session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
-              const maxLen = getMaxFilenameLengthForOS(osKey) || 255;
+              const isWindows = String(osKey || '').toLowerCase() === 'windows';
+              const maxComponentLen = getMaxFilenameLengthForOS(osKey) || 255;
+              const maxTotalPath = isWindows ? 258 : 4096;
+
               try {
+                const parentDir = path.dirname(to) || '';
                 const base = path.basename(to) || '';
                 const extB = path.extname(base) || '';
                 const nameNoExtB = base.slice(0, base.length - extB.length) || '';
-                if (nameNoExtB && maxLen && nameNoExtB.length > maxLen) {
-                  const truncatedB = truncateFilenameComponent(nameNoExtB, maxLen);
+                
+                const parentLen = parentDir.length;
+                const availableForBase = Math.max(10, maxTotalPath - parentLen - 1);
+                const effectiveLimit = Math.min(maxComponentLen, availableForBase) - extB.length;
+
+                if (nameNoExtB && effectiveLimit > 0 && nameNoExtB.length > effectiveLimit) {
+                  const truncatedB = truncateFilenameComponent(nameNoExtB, effectiveLimit);
                   const newBaseB = `${truncatedB}${extB}`;
-                  const newTo = path.join(path.dirname(to), newBaseB);
-                  appendLog(`HARDLINK_TRUNCATED_FALLBACK original=${base} truncated=${newBaseB} maxLen=${maxLen}`);
+                  const newTo = path.join(parentDir, newBaseB);
+                  appendLog(`HARDLINK_TRUNCATED_FALLBACK original=${base} truncated=${newBaseB} maxComponent=${maxComponentLen} maxTotal=${maxTotalPath} parentLen=${parentLen} effectiveLimit=${effectiveLimit}`);
                   to = newTo;
                 }
               } catch (e) { /* ignore truncation issues */ }
