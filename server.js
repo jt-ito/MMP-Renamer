@@ -2544,8 +2544,28 @@ async function metaLookup(title, apiKey, opts = {}) {
             }
           } catch (e) { /* best-effort */ }
         try { merged.tvdb = tvdbFallback } catch (e) {}
+          // capture fallback year from TVDB series data for AniList base results
+          try {
+            if (merged.raw && !merged.raw._fallbackProviderYear) {
+              const maybe = (tvdbFallback.raw && tvdbFallback.raw.series && (tvdbFallback.raw.series.first_air_date || tvdbFallback.raw.series.startDate)) || tvdbFallback.raw && (tvdbFallback.raw.first_air_date || tvdbFallback.raw.release_date) || null
+              if (maybe) {
+                const yy = new Date(String(maybe)).getFullYear()
+                if (!Number.isNaN(yy) && yy > 0) merged.raw._fallbackProviderYear = String(yy)
+              }
+            }
+          } catch (e) {}
           return merged
         }
+        // when returning a pure TVDB-only result, populate a fallback year as well
+        try {
+          if (providerRaw && !providerRaw._fallbackProviderYear) {
+            const maybe = (tvdbFallback.raw && tvdbFallback.raw.series && (tvdbFallback.raw.series.first_air_date || tvdbFallback.raw.series.startDate)) || tvdbFallback.raw && (tvdbFallback.raw.first_air_date || tvdbFallback.raw.release_date) || null
+            if (maybe) {
+              const yy = new Date(String(maybe)).getFullYear()
+              if (!Number.isNaN(yy) && yy > 0) providerRaw._fallbackProviderYear = String(yy)
+            }
+          }
+        } catch (e) {}
         return { name: tvdbFallback.seriesName || fallbackCandidates[0], raw: providerRaw, episode: episodeObj, tvdb: tvdbFallback }
       }
       try { appendLog(`META_TVDB_FALLBACK_NONE candidates=${fallbackCandidates.slice(0,3).join('|')}`) } catch (e) {}
@@ -2585,8 +2605,28 @@ async function metaLookup(title, apiKey, opts = {}) {
           try { merged.raw.tmdb = { id: t.id, name: t.name } } catch (e) {}
         }
         try { merged.tmdb = Object.assign({}, t, { raw: providerRaw }) } catch (e) {}
+        // If we merged TMDb into an AniList base result, capture a fallback year
+        try {
+          if (merged.raw && !merged.raw._fallbackProviderYear) {
+            const maybe = providerRaw.first_air_date || providerRaw.release_date || (providerRaw.attributes && (providerRaw.attributes.startDate || providerRaw.attributes.releaseDate)) || null
+            if (maybe) {
+              const yy = new Date(String(maybe)).getFullYear()
+              if (!Number.isNaN(yy) && yy > 0) merged.raw._fallbackProviderYear = String(yy)
+            }
+          }
+        } catch (e) {}
         return merged
       }
+      // when returning a pure TMDb-only result, populate a fallback year field as well
+      try {
+        if (providerRaw && !providerRaw._fallbackProviderYear) {
+          const maybe = providerRaw.first_air_date || providerRaw.release_date || (providerRaw.attributes && (providerRaw.attributes.startDate || providerRaw.attributes.releaseDate)) || null
+          if (maybe) {
+            const yy = new Date(String(maybe)).getFullYear()
+            if (!Number.isNaN(yy) && yy > 0) providerRaw._fallbackProviderYear = String(yy)
+          }
+        }
+      } catch (e) {}
       return { name: t.name, raw: providerRaw, episode: episodePayload, tmdb: Object.assign({}, t, { raw: providerRaw }) }
     }
 
@@ -3423,6 +3463,14 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
                     }
                   } catch (e) {}
                 }
+                // If AniList didn't provide a year but a later provider (TMDb/TVDB) supplied one during merging,
+                // use that fallback year for this rescan only.
+                try {
+                  if (!guess.year && raw && raw._fallbackProviderYear) {
+                    const ryf = Number(String(raw._fallbackProviderYear))
+                    if (!Number.isNaN(ryf) && ryf > 0) guess.year = String(ryf)
+                  }
+                } catch (e) {}
                 // If we didn't get a year yet, fall back to episode air_date when available
                 if (!guess.year) {
                   if (!dateStr) {
@@ -3663,13 +3711,17 @@ function renderProviderName(data, key, session) {
     const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
     // Prefer English title when available from AniList metadata
     const rawTitle = data.seriesTitleEnglish || data.title || '';
+    // Final stripping guard: ensure season-like suffixes ("2nd Season", "Season 2", etc.)
+    // are removed from the title used for rendering so top-level folders don't inherit
+    // ordinal-season text. Use existing helper `stripSeasonNumberSuffix` for consistency.
+    const rawTitleStripped = (typeof stripSeasonNumberSuffix === 'function') ? stripSeasonNumberSuffix(rawTitle) : rawTitle;
     const templateYear = data && data.year ? String(data.year) : '';
     const sanitizedYear = templateYear ? sanitize(templateYear) : '';
     function pad(n){ return String(n).padStart(2,'0') }
     let epLabel = '';
     if (data.episodeRange) epLabel = data.season != null ? `S${pad(data.season)}E${data.episodeRange}` : `E${data.episodeRange}`
     else if (data.episode != null) epLabel = data.season != null ? `S${pad(data.season)}E${pad(data.episode)}` : `E${pad(data.episode)}`
-    const titleToken = cleanTitleForRender(rawTitle, epLabel, data.episodeTitle || '');
+    const titleToken = cleanTitleForRender(rawTitleStripped, epLabel, data.episodeTitle || '');
     const nameWithoutExtRaw = String(baseNameTemplate)
       .replace('{title}', sanitize(titleToken))
       .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
