@@ -2310,12 +2310,22 @@ export default function App() {
                   )}
 
                   {scanMeta ? (
-            <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
-              previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
-              selectOutputFolder={selectOutputFolder}
-              selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
-              providerKey={providerKey} hideOne={hideOnePath}
-              searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching} />
+            // Wrap toggleSelect with a debug-logging handler to capture selection toggles
+            (() => {
+              const toggleSelectHandler = (p, val) => {
+                try { console.debug && console.debug('[sel] toggleSelect called', { path: p, val, before: Object.keys(selected || {}).slice(0,10) }) } catch (e) {}
+                setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; try { console.debug && console.debug('[sel] toggleSelect after', { path: p, after: Object.keys(n || {}).slice(0,10) }) } catch (e) {} return n })
+              }
+              return (
+                <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
+                  previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
+                  selectOutputFolder={selectOutputFolder}
+                  selectMode={selectMode} selected={selected} toggleSelect={toggleSelectHandler}
+                  providerKey={providerKey} hideOne={hideOnePath}
+                  searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching} />
+              )
+            })()
+          ) : null}
                   ) : null}
                 </>
               )}
