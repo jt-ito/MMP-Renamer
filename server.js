@@ -3715,7 +3715,23 @@ function renderProviderName(data, key, session) {
     // are removed from the title used for rendering so top-level folders don't inherit
     // ordinal-season text. Use existing helper `stripSeasonNumberSuffix` for consistency.
     const rawTitleStripped = (typeof stripSeasonNumberSuffix === 'function') ? stripSeasonNumberSuffix(rawTitle) : rawTitle;
-    const templateYear = data && data.year ? String(data.year) : '';
+    
+    // Fallback year logic: if AniList returns null/undefined for year, try to use
+    // the fallback provider's year (TVDb/TMDb) or the parsed year from the filename.
+    let templateYear = data && data.year ? String(data.year) : '';
+    if (!templateYear || templateYear === 'null' || templateYear === 'undefined') {
+      // Try fallback provider year (transiently stored in raw._fallbackProviderYear by meta-providers)
+      if (data.raw && data.raw._fallbackProviderYear) {
+        templateYear = String(data.raw._fallbackProviderYear);
+      } else if (data.parsed && data.parsed.year) {
+        // Fallback to parsed year from filename
+        templateYear = String(data.parsed.year);
+      } else if (data.extraGuess && data.extraGuess.year) {
+        // Fallback to extraGuess year
+        templateYear = String(data.extraGuess.year);
+      }
+    }
+    
     const sanitizedYear = templateYear ? sanitize(templateYear) : '';
     function pad(n){ return String(n).padStart(2,'0') }
     let epLabel = '';
