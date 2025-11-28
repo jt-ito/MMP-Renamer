@@ -3755,8 +3755,8 @@ function renderProviderName(data, key, session) {
 function getMaxFilenameLengthForOS(osKey) {
   const key = String(osKey || 'linux').toLowerCase();
   // Common max filename length per filesystem (component length)
-  // Windows/NTFS: 255, macOS(APFS/HFS+): 255, Linux(ext4): 255
-  if (key === 'windows') return 255;
+  // Windows/NTFS: 255 limit, but total path is 260. Use a safer limit (230) to allow for folder depth.
+  if (key === 'windows') return 230;
   if (key === 'mac' || key === 'macos' || key === 'darwin') return 255;
   return 255; // default for linux and unknown
 }
