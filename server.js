@@ -5587,6 +5587,12 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     const action = effectiveOutput ? 'hardlink' : (fromPath === toPath ? 'noop' : 'move');
   return { itemId: it.id, fromPath, toPath, actions: [{ op: action }], templateUsed: baseNameTemplate };
   });
+  // DEBUG: persist a compact preview plan summary to logs for diagnostic purposes
+  try {
+    const uname = req && req.session && req.session.username ? req.session.username : '<anon>';
+    const dump = (plans || []).slice(0, 50).map(p => ({ itemId: p.itemId, from: p.fromPath, to: p.toPath, templateUsed: p.templateUsed }));
+    appendLog(`PREVIEW_PLANS user=${uname} count=${(plans||[]).length} payload=${JSON.stringify(dump)}`);
+  } catch (e) { /* non-fatal debug logging */ }
   res.json({ plans });
 });
 
