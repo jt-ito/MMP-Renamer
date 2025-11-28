@@ -366,14 +366,48 @@ try { ensureFile(seriesAliasesFile, {}); seriesAliases = JSON.parse(fs.readFileS
 function getSeriesAlias(name) {
   try {
     if (!name) return null;
-    const key = String(name).trim();
-    if (!key) return null;
-    if (seriesAliases && Object.prototype.hasOwnProperty.call(seriesAliases, key)) return seriesAliases[key];
-    // case-insensitive fallback
-    const lower = key.toLowerCase();
-    for (const k of Object.keys(seriesAliases || {})) {
-      if (String(k).toLowerCase() === lower) return seriesAliases[k];
+    const orig = String(name || '').trim();
+    if (!orig) return null;
+
+    // quick exact match for existing canonical entries
+    if (seriesAliases && Object.prototype.hasOwnProperty.call(seriesAliases, orig)) return seriesAliases[orig];
+
+    // Normalization helper: convert curly apostrophes to straight, normalize quotes,
+    // collapse whitespace, trim, and use lowercase for matching.
+    function normalizeSeriesKey(s) {
+      try {
+        if (!s) return '';
+        let out = String(s || '').trim();
+        // normalize curly/smart apostrophes and similar characters to straight apostrophe
+        out = out.replace(/[\u2018\u2019\u201A\u201B\u2032\u2035\u275B\u275C\uFF07]/g, "'");
+        // normalize smart double quotes to straight double-quote
+        out = out.replace(/[\u201C\u201D\u201E\u201F]/g, '"');
+        // collapse multiple whitespace to single space
+        out = out.replace(/\s+/g, ' ');
+        out = out.trim();
+        return out.toLowerCase();
+      } catch (e) { return String(s || '').toLowerCase().trim(); }
     }
+
+    const norm = normalizeSeriesKey(orig);
+
+    // Try normalized-key lookup against alias map keys
+    if (seriesAliases) {
+      for (const k of Object.keys(seriesAliases)) {
+        try {
+          if (normalizeSeriesKey(k) === norm) return seriesAliases[k];
+        } catch (e) { /* ignore per-key errors */ }
+      }
+    }
+
+    // Legacy case-insensitive fallback (keeps previous behavior)
+    try {
+      const lower = orig.toLowerCase();
+      for (const k of Object.keys(seriesAliases || {})) {
+        if (String(k).toLowerCase() === lower) return seriesAliases[k];
+      }
+    } catch (e) { /* ignore */ }
+
     return null;
   } catch (e) { return null }
 }
