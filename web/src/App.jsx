@@ -2424,6 +2424,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     if (ev && ev.button !== 0) return
     if (ev && ev.shiftKey) return
     // record last clicked index on mousedown to be resilient across scroll/virtualization
+    // Temporary debug log to capture ordering and state during repro
+    try { console.debug && console.debug('[sel] mousedown', { index, button: ev && ev.button, shift: ev && ev.shiftKey, lastClicked: lastClickedIndex.current, selectMode }) } catch (e) {}
     lastClickedIndex.current = index
   }
   
@@ -2488,6 +2490,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     // ignore clicks originating from action buttons or the checkbox container
     const interactive = ev.target.closest('.actions') || ev.target.closest('button') || ev.target.closest('a') || ev.target.closest('input')
     if (interactive) return
+    try { console.debug && console.debug('[sel] click:start', { index, shift: ev.shiftKey, target: ev.target && ev.target.tagName, lastClicked: lastClickedIndex.current, isSelected }) } catch (e) {}
     
     // Handle shift-click for range selection
     if (ev.shiftKey && lastClickedIndex.current !== null && lastClickedIndex.current !== index) {
@@ -2507,12 +2510,14 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
       }
       
       // Update last clicked index for future shift-clicks
+      try { console.debug && console.debug('[sel] click:shift-selected', { start, end }) } catch (e) {}
       lastClickedIndex.current = index
     } else {
       // Normal click - toggle selection. Allow toggling even if `isDragging` flag
       // is unexpectedly set (this ensures a second press on the same item will
       // deselect it reliably).
       toggleSelect(it.canonicalPath, !isSelected)
+      try { console.debug && console.debug('[sel] click:toggled', { path: it && it.canonicalPath, nowSelected: !isSelected }) } catch (e) {}
 
       // Update last clicked index for future shift-clicks
       lastClickedIndex.current = index
