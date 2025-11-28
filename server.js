@@ -6554,8 +6554,26 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
                 }
               } catch (e) { /* best-effort */ }
 
-              // Ensure destination parent exists
+              // Ensure destination parent exists and enforce per-OS filename component limits
               try {
+                // Best-effort: truncate final basename to OS limits before mkdir/link
+                try {
+                  const osKey = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.client_os) ? users[req.session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
+                  const maxLen = getMaxFilenameLengthForOS(osKey) || 255;
+                  try {
+                    const parentDir = path.dirname(effectiveToResolved || toResolved) || '';
+                    const base = path.basename(effectiveToResolved || toResolved) || '';
+                    const extA = path.extname(base) || '';
+                    const nameNoExt = base.slice(0, base.length - extA.length) || '';
+                    if (nameNoExt && maxLen && nameNoExt.length > maxLen) {
+                      const truncated = truncateFilenameComponent(nameNoExt, maxLen);
+                      const newBase = `${truncated}${extA}`;
+                      const newEffective = path.resolve(parentDir, newBase);
+                      appendLog(`HARDLINK_TRUNCATED original=${base} truncated=${newBase} maxLen=${maxLen}`);
+                      effectiveToResolved = newEffective;
+                    }
+                  } catch (e) { /* ignore truncation errors */ }
+                } catch (e) { /* ignore */ }
                 const parentDir = path.dirname(effectiveToResolved);
                 if (parentDir && !fs.existsSync(parentDir)) {
                   try { fs.mkdirSync(parentDir, { recursive: true }); appendLog(`HARDLINK_MKDIR created parent=${parentDir}`); } catch (e) { appendLog(`HARDLINK_MKDIR_FAIL parent=${parentDir} err=${e && e.message ? e.message : String(e)}`); }
@@ -6675,6 +6693,23 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
         } else {
           // default behavior: preserve original file; attempt to hardlink into target, fallback to copy
           try {
+            // Ensure final basename respects OS filename limits to avoid ENAMETOOLONG
+            try {
+              const osKey = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.client_os) ? users[req.session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
+              const maxLen = getMaxFilenameLengthForOS(osKey) || 255;
+              try {
+                const base = path.basename(to) || '';
+                const extB = path.extname(base) || '';
+                const nameNoExtB = base.slice(0, base.length - extB.length) || '';
+                if (nameNoExtB && maxLen && nameNoExtB.length > maxLen) {
+                  const truncatedB = truncateFilenameComponent(nameNoExtB, maxLen);
+                  const newBaseB = `${truncatedB}${extB}`;
+                  const newTo = path.join(path.dirname(to), newBaseB);
+                  appendLog(`HARDLINK_TRUNCATED_FALLBACK original=${base} truncated=${newBaseB} maxLen=${maxLen}`);
+                  to = newTo;
+                }
+              } catch (e) { /* ignore truncation issues */ }
+            } catch (e) {}
             const toDir2 = path.dirname(to);
             if (!fs.existsSync(toDir2)) fs.mkdirSync(toDir2, { recursive: true });
             if (!fs.existsSync(to)) {
