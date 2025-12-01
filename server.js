@@ -6352,607 +6352,145 @@ function extractYear(meta, fromPath) {
 app.post('/api/rename/apply', requireAuth, async (req, res) => {
   const { plans, dryRun, outputFolder } = req.body || {};
   if (!plans || !Array.isArray(plans)) return res.status(400).json({ error: 'plans required' });
-  // Diagnostic: dump the incoming plans payload to a timestamped file for inspection
+
+  // Diagnostic: dump the incoming plans payload
   try {
     const dumpUser = req.session && req.session.username ? req.session.username : '<anon>';
     const dumpPath = path.join(process.cwd(), 'data', `apply-plans-dump-${Date.now()}.json`);
-    try { fs.writeFileSync(dumpPath, JSON.stringify({ user: dumpUser, plans: plans }, null, 2), { encoding: 'utf8' }); appendLog(`APPLY_DUMP file=${dumpPath}`); } catch (e) { appendLog(`APPLY_DUMP_FAIL err=${e && e.message ? e.message : String(e)}`) }
-  } catch (e) { /* non-fatal */ }
-  // Ensure cached movie/english flags are healed before applying rename plans so folder/year logic is correct
-  try { healCachedEnglishAndMovieFlags(); } catch (e) { /* non-fatal */ }
+    try { fs.writeFileSync(dumpPath, JSON.stringify({ user: dumpUser, plans: plans }, null, 2), { encoding: 'utf8' }); } catch (e) {}
+  } catch (e) {}
+
+  try { healCachedEnglishAndMovieFlags(); } catch (e) {}
+
   const results = [];
-  // helper sleep for transient retries
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  for (const p of plans) {
+
+  // Helper to ensure directory exists with retries
+  const ensureDir = async (dir) => {
+    if (fs.existsSync(dir)) return;
     try {
-      const from = p.fromPath;
-      const to = p.toPath;
-      // Debug: log incoming plan payload details to help diagnose apply mismatches
-      try {
-        appendLog(`APPLY_PLAN_PAYLOAD item=${p.itemId} from=${from} to=${String(to)} templateUsed=${String(p.templateUsed || '')} actions=${JSON.stringify(p.actions || [])}`);
-      } catch (e) {}
-      if (from === to) {
-        results.push({ itemId: p.itemId, status: 'noop' });
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (e) {
+      // retry once after delay
+      await sleep(50);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    }
+  };
+
+  for (const p of plans) {
+    const resultItem = { itemId: p.itemId, status: 'pending' };
+    try {
+      const fromPath = path.resolve(p.fromPath);
+      
+      // STRICTLY use the plan's toPath (Preview WYSIWYG)
+      if (!p.toPath) {
+        throw new Error('Plan missing target path (preview required)');
+      }
+      
+      let toPath = path.resolve(p.toPath);
+
+      // Validation
+      if (fromPath === toPath) {
+        resultItem.status = 'noop';
+        results.push(resultItem);
         continue;
       }
-      // Prefer outputFolder from request (alternative folders feature), then per-user configured output path, else server-wide setting
-      let configuredOut = null;
-      // Also determine configured input root (to prevent linking back into the input folders)
-      let configuredInput = null;
-      try {
-        const username = req.session && req.session.username;
-        // If outputFolder explicitly provided, use it (alternative folders feature)
-        if (outputFolder) {
-          configuredOut = canonicalize(outputFolder);
-        } else if (username && users[username] && users[username].settings && users[username].settings.scan_output_path) {
-          configuredOut = canonicalize(users[username].settings.scan_output_path);
-        } else if (serverSettings && serverSettings.scan_output_path) {
-          configuredOut = canonicalize(serverSettings.scan_output_path);
-        }
-        if (username && users[username] && users[username].settings && users[username].settings.scan_input_path) configuredInput = canonicalize(users[username].settings.scan_input_path);
-        else if (serverSettings && serverSettings.scan_input_path) configuredInput = canonicalize(serverSettings.scan_input_path);
-      } catch (e) { 
-        if (outputFolder) {
-          configuredOut = canonicalize(outputFolder);
-        } else {
-          configuredOut = serverSettings && serverSettings.scan_output_path ? canonicalize(serverSettings.scan_output_path) : null; 
-        }
-        configuredInput = serverSettings && serverSettings.scan_input_path ? canonicalize(serverSettings.scan_input_path) : null;
+
+      if (!fs.existsSync(fromPath)) {
+        resultItem.status = 'error';
+        resultItem.error = 'Source file not found';
+        results.push(resultItem);
+        continue;
       }
-      const toResolved = path.resolve(to);
-      const resultsItem = { itemId: p.itemId };
 
       if (!dryRun) {
-        // Determine if this plan explicitly requested a hardlink (preview sets actions: [{op:'hardlink'}])
-        const requestedHardlink = (p.actions && Array.isArray(p.actions) && p.actions[0] && p.actions[0].op === 'hardlink') || false;
-        const targetUnderConfiguredOut = configuredOut && toResolved.startsWith(path.resolve(configuredOut));
-        const explicitOutputFolderRequested = !!(outputFolder && configuredOut);
-        // If the plan explicitly requested a hardlink, require a configured output path; never hardlink into the input folder
-        if ((requestedHardlink || explicitOutputFolderRequested) && !configuredOut) {
-          appendLog(`HARDLINK_FAIL_NO_OUTPUT from=${from} requestedHardlink=${requestedHardlink} explicitOutput=${explicitOutputFolderRequested}`);
-          throw new Error('Hardlink requested but no configured output path found. Set scan_output_path in settings.');
-        }
-        if (requestedHardlink || targetUnderConfiguredOut || explicitOutputFolderRequested) {
-          // create directories and attempt to create a hard link; do NOT move the original file
-          try {
-            appendLog(`HARDLINK_START from=${from} to=${to} configuredOut=${configuredOut} explicitFolder=${explicitOutputFolderRequested}`);
-            // Prepare effective target path (default to provided toResolved). If rendering succeeds we'll replace it.
-            let effectiveToResolved = toResolved;
-            // If the preview plan already contained a computed toPath under the configured output,
-            // prefer that path (it reflects the preview UI) and skip re-rendering. This prevents
-            // cases where the enrichCache was updated between preview and apply and the season
-            // or other tokens differ unexpectedly.
-            let usePlanToPath = false;
-            try {
-              // If the preview plan provided an explicit toPath, prefer it consistently.
-              // We force-accept the preview name so the applied filesystem target matches
-              // what the UI preview showed. This is defensive: we still resolve the path
-              // and log the use so we can trace any unexpected results.
-              if (p && p.toPath) {
-                try {
-                  const candidate = path.resolve(p.toPath);
-                  effectiveToResolved = candidate;
-                  usePlanToPath = true;
-                  try { appendLog(`APPLY_FORCE_USE_PLAN topath=${candidate}`) } catch (e) {}
-                } catch (e) {
-                  try { appendLog(`APPLY_PLAN_CHECK_ERR err=${e && e.message ? e.message : String(e)}`) } catch (ee) {}
-                }
-              }
-            } catch (e) { try { appendLog(`APPLY_PLAN_CHECK_ERR err=${e && e.message ? e.message : String(e)}`) } catch (ee) {} }
+        const parentDir = path.dirname(toPath);
+        await ensureDir(parentDir);
 
-            // Re-render filename from enrichment and template if available to ensure TMDb-based names are used
-            if (!usePlanToPath) {
-            try {
-              const enrichment = enrichCache[from] || {};
-              const key = from;
-              const tmpl = (p.templateUsed) ? p.templateUsed : (enrichment && enrichment.extraGuess && enrichment.extraGuess.rename_template) || serverSettings.rename_template || '{title}';
-              // build tokens similar to previewRename
-              const ext2 = path.extname(from);
-              function pad(n){ return String(n).padStart(2,'0') }
-              
-              // Check if we have an AniDB raw episode number that should be preserved
-              const anidbRawEpisode2 = enrichment && enrichment.extraGuess && enrichment.extraGuess.anidb && enrichment.extraGuess.anidb.episodeNumberRaw;
-              const shouldUseAnidbRaw2 = anidbRawEpisode2 && /^[SCTPO]\d+$/i.test(String(anidbRawEpisode2));
-              
-              try {
-                if (enrichment && enrichment.extraGuess && enrichment.extraGuess.anidb) {
-                  console.log('[DEBUG] AniDB raw episode check (apply):', {
-                    hasAnidb: true,
-                    episodeNumberRaw: enrichment.extraGuess.anidb.episodeNumberRaw,
-                    anidbRawEpisode2,
-                    shouldUseAnidbRaw2,
-                    enrichmentEpisode: enrichment.episode,
-                    enrichmentSeason: enrichment.season
-                  });
-                }
-              } catch (e) {}
-              
-              let epLabel2 = ''
-              if (enrichment && enrichment.episodeRange) {
-                epLabel2 = enrichment.season != null ? `S${pad(enrichment.season)}E${enrichment.episodeRange}` : `E${enrichment.episodeRange}`
-              } else if (shouldUseAnidbRaw2) {
-                // Use AniDB's raw episode format (S2, C1, etc.)
-                epLabel2 = enrichment.season != null ? `S${pad(enrichment.season)}E${String(anidbRawEpisode2).toUpperCase()}` : `E${String(anidbRawEpisode2).toUpperCase()}`
-              } else if (enrichment && enrichment.episode != null) {
-                epLabel2 = enrichment.season != null ? `S${pad(enrichment.season)}E${pad(enrichment.episode)}` : `E${pad(enrichment.episode)}`
-              }
-              let episodeTitleToken2 = enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : ''
-              // Fallback: if provider returned a renderedName that includes an episode suffix, try to extract it
-              try {
-                if (!episodeTitleToken2 && enrichment && enrichment.provider && enrichment.provider.renderedName) {
-                  const pr = String(enrichment.provider.renderedName).replace(/\.[^/.]+$/, '');
-                  // split on common separator and pick last segment if it looks like an episode title (not just ep label)
-                  const parts = pr.split(/\s[-–—:]\s/);
-                  if (parts && parts.length > 1) {
-                    const cand = parts[parts.length - 1].trim();
-                    if (cand && !isNoiseLike(cand) && !isEpisodeTokenCandidate(cand) && cand.length > 1) {
-                      episodeTitleToken2 = cand;
-                    }
-                  }
-                }
-              } catch (e) { /* best-effort fallback */ }
-              const seasonToken2 = (enrichment && enrichment.season != null) ? String(enrichment.season) : ''
-              const episodeToken2 = (enrichment && enrichment.episode != null) ? String(enrichment.episode) : ''
-              const episodeRangeToken2 = (enrichment && enrichment.episodeRange) ? String(enrichment.episodeRange) : ''
-              const tmdbIdToken2 = (enrichment && enrichment.tmdb && enrichment.tmdb.raw && (enrichment.tmdb.raw.id || enrichment.tmdb.raw.seriesId)) ? String(enrichment.tmdb.raw.id || enrichment.tmdb.raw.seriesId) : ''
-              const isMovie2 = determineIsMovie(enrichment)
-              const rawTitle2 = (enrichment && (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title))) ? (enrichment.title || (enrichment.extraGuess && enrichment.extraGuess.title)) : path.basename(from, ext2)
-              // reuse cleaning logic from preview to avoid duplicated episode labels/titles in rendered filenames
-              const resolvedSeriesTitle2 = resolveSeriesTitle(enrichment, rawTitle2, from, episodeTitleToken2, { preferExact: true });
-              const englishSeriesTitle2 = extractEnglishSeriesTitle(enrichment);
-              const renderBaseTitle2 = englishSeriesTitle2 || resolvedSeriesTitle2 || rawTitle2;
-              
-              // Format episode number for title - use AniDB raw format if available
-              let episodeForTitle2 = '';
-              if (enrichment && enrichment.episode != null) {
-                if (shouldUseAnidbRaw2) {
-                  episodeForTitle2 = enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(anidbRawEpisode2).toUpperCase()}` : `E${String(anidbRawEpisode2).toUpperCase()}`;
-                } else {
-                  episodeForTitle2 = enrichment.season != null ? `S${String(enrichment.season).padStart(2,'0')}E${String(enrichment.episode).padStart(2,'0')}` : `E${String(enrichment.episode).padStart(2,'0')}`;
-                }
-              }
-              
-              const titleToken2 = cleanTitleForRender(renderBaseTitle2, episodeForTitle2, (enrichment && (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle))) ? (enrichment.episodeTitle || (enrichment.extraGuess && enrichment.extraGuess.episodeTitle)) : '');
-              let yearToken2 = ''
-              try {
-                if (enrichment && (enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year))) {
-                  yearToken2 = String(enrichment.year || (enrichment.extraGuess && enrichment.extraGuess.year) || '')
-                } else if (enrichment && enrichment.provider && enrichment.provider.year) {
-                  yearToken2 = String(enrichment.provider.year)
-                } else {
-                  yearToken2 = String(extractYear(enrichment, from) || '')
-                }
-              } catch (e) { yearToken2 = '' }
-              if (yearToken2 === 'undefined') yearToken2 = ''
-              const folderYear2 = (isMovie2 === true && yearToken2) ? yearToken2 : ''
-              const outputRoot = configuredOut ? path.resolve(configuredOut) : path.resolve(path.dirname(toResolved))
-              // Prefer englishSeriesTitle2 (which already has Season suffix stripped) over enrichment.seriesTitleEnglish
-              const seriesBase2 = englishSeriesTitle2 || (enrichment && (enrichment.seriesTitleEnglish || enrichment.seriesTitle)) || resolvedSeriesTitle2 || titleToken2 || rawTitle2 || '';
-              const aliasResolved2 = getSeriesAlias(seriesBase2);
-              let baseFolderName2;
-              if (aliasResolved2) {
-                baseFolderName2 = stripEpisodeArtifactsForFolder(String(aliasResolved2).trim());
-              } else {
-                baseFolderName2 = stripEpisodeArtifactsForFolder(String(stripSeasonNumberSuffix(seriesBase2)).trim());
-              }
-              if (!baseFolderName2) baseFolderName2 = stripEpisodeArtifactsForFolder(path.basename(from, ext2) || rawTitle2 || titleToken2);
-              let sanitizedBaseFolder2 = sanitize(baseFolderName2);
-              if (!sanitizedBaseFolder2) {
-                const fallbackFolderTitle2 = stripEpisodeArtifactsForFolder(titleToken2) || stripEpisodeArtifactsForFolder(rawTitle2) || 'Untitled';
-                sanitizedBaseFolder2 = sanitize(fallbackFolderTitle2) || 'Untitled';
-              }
-              // If this is not a movie, strip any trailing year from the provider title so series folders don't include a year
-              if (!folderYear2) {
-                try { sanitizedBaseFolder2 = stripTrailingYear(sanitizedBaseFolder2) } catch (e) {}
-              }
-              const titleFolder2 = folderYear2 ? `${sanitizedBaseFolder2} (${folderYear2})` : sanitizedBaseFolder2;
-              const seasonFolder2 = (isMovie2 === true || !(enrichment && enrichment.season != null)) ? '' : `Season ${String(enrichment.season).padStart(2,'0')}`;
-              const targetFolder2 = seasonFolder2 ? path.join(outputRoot, titleFolder2, seasonFolder2) : path.join(outputRoot, titleFolder2);
-              const nameWithoutExtRaw2 = String(tmpl || '{title}').replace('{title}', sanitize(titleToken2))
-                .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
-                .replace('{year}', sanitize(yearToken2))
-                .replace('{epLabel}', sanitize(epLabel2))
-                .replace('{episodeTitle}', sanitize(episodeTitleToken2))
-                .replace('{season}', sanitize(seasonToken2))
-                .replace('{episode}', sanitize(episodeToken2))
-                .replace('{episodeRange}', sanitize(episodeRangeToken2))
-  .replace('{tmdbId}', sanitize(tmdbIdToken2));
-              // strip season-like suffixes from the title token in the final filename
-              try {
-                const cleanTitleToken2 = stripSeasonNumberSuffix(titleToken2 || '');
-                // replace the sanitized {title} again with cleaned one to ensure strip applied
-                nameWithoutExtRaw2 = String(nameWithoutExtRaw2).replace(sanitize(titleToken2 || ''), sanitize(cleanTitleToken2 || ''));
-              } catch (e) {}
-              const nameWithoutExt2 = String(nameWithoutExtRaw2)
-                .replace(/\s*\(\s*\)\s*/g, '')
-                .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
-                .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
-                .replace(/\s{2,}/g, ' ')
-                .trim();
-              const safeNameWithoutExt2 = nameWithoutExt2 || sanitize(titleToken2) || sanitize(path.basename(key, path.extname(key))) || 'Untitled';
-              const ensuredNameWithoutExt2 = ensureRenderedNameHasYear(safeNameWithoutExt2, yearToken2);
-              // build final basename with extension and set effective target
-              try {
-                const finalBasename2 = `${ensuredNameWithoutExt2}${ext2}`;
-                effectiveToResolved = path.resolve(targetFolder2, finalBasename2);
-                appendLog(`HARDLINK_RERENDER targetFolder=${targetFolder2} basename=${finalBasename2} effective=${effectiveToResolved}`);
-              } catch (e) { /* ignore and leave effectiveToResolved as toResolved */ }
-            } catch (renderErr) {
-              // fallback: keep effectiveToResolved as toResolved
-              effectiveToResolved = toResolved;
-            }
-            } else {
-              // using the preview plan's toPath; ensure we still canonicalize any oddities
-              try { effectiveToResolved = path.resolve(effectiveToResolved); } catch (e) {}
-            }
-            // helper: ensure source and destination live on the same filesystem/device
-            function nearestExistingParent(dir) {
-              let cur = dir;
-              try {
-                while (cur && !fs.existsSync(cur)) {
-                  const parent = path.dirname(cur);
-                  if (!parent || parent === cur) break;
-                  cur = parent;
-                }
-              } catch (e) { cur = null }
-              return cur && fs.existsSync(cur) ? cur : null;
-            }
-            function assertSameDevice(srcPath, destPath) {
-              try {
-                const srcStat = fs.statSync(srcPath);
-                const destParent = nearestExistingParent(path.dirname(destPath));
-                if (!destParent) return true; // cannot determine, allow attempt
-                const destStat = fs.statSync(destParent);
-                if (typeof srcStat.dev !== 'undefined' && typeof destStat.dev !== 'undefined') {
-                  return srcStat.dev === destStat.dev;
-                }
-                return true;
-              } catch (e) { return true }
-            }
-
-            // Defensive: never create provider-driven hardlinks inside the configured input path
-            try {
-              if (configuredInput) {
-                const inpResolved = path.resolve(configuredInput);
-                if (String(effectiveToResolved || '').startsWith(inpResolved)) {
-                  appendLog(`HARDLINK_REFUSE_INPUT from=${from} to=${effectiveToResolved} configuredInput=${inpResolved}`);
-                  throw new Error('Refusing to create hardlink inside configured input path');
-                }
-              }
-            } catch (e) { throw e }
-
-              // If the preview plan's path was used, ensure the season folder matches any S## token in the filename
-              try {
-                const finalBasenameCheck = path.basename(effectiveToResolved || toResolved);
-                // look for SxxEyy pattern in filename
-                const sMatch = String(finalBasenameCheck || '').match(/S(\d{2})E\d{2}/i);
-                if (sMatch && sMatch[1]) {
-                  const fileSeasonNum = Number(sMatch[1]);
-                  const parentDir = path.dirname(effectiveToResolved || toResolved) || '';
-                  const parentName = path.basename(parentDir || '');
-                  if (/^Season\s*\d{1,2}$/i.test(parentName)) {
-                    const parentNum = Number(parentName.replace(/[^0-9]/g, '')) || 0;
-                    if (fileSeasonNum && parentNum && fileSeasonNum !== parentNum) {
-                      // swap season folder to match file's Sxx
-                      const grandParent = path.dirname(parentDir);
-                      const newSeasonFolder = `Season ${String(fileSeasonNum).padStart(2,'0')}`;
-                      const newParent = path.join(grandParent, newSeasonFolder);
-                      const newEffective = path.join(newParent, path.basename(effectiveToResolved || toResolved));
-                      appendLog(`APPLY_FIX_SEASON fromParent=${parentName} toParent=${newSeasonFolder} fileSeason=${fileSeasonNum} pathBefore=${effectiveToResolved} pathAfter=${newEffective}`);
-                      effectiveToResolved = newEffective;
-                    }
-                  }
-                }
-              } catch (e) { /* best-effort */ }
-
-              // Ensure destination parent exists and enforce per-OS filename component limits
-              try {
-                // Best-effort: truncate final basename to OS limits before mkdir/link
-                try {
-                  const osKey = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.client_os) ? users[req.session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
-                  const isWindows = String(osKey || '').toLowerCase() === 'windows';
-                  const maxComponentLen = getMaxFilenameLengthForOS(osKey) || 255;
-                  // Windows MAX_PATH is 260. Use 258 for safety. Linux/Mac usually 4096+.
-                  const maxTotalPath = isWindows ? 258 : 4096;
-
-                  try {
-                    const parentDir = path.dirname(effectiveToResolved || toResolved) || '';
-                    const base = path.basename(effectiveToResolved || toResolved) || '';
-                    const extA = path.extname(base) || '';
-                    const nameNoExt = base.slice(0, base.length - extA.length) || '';
-                    
-                    // Calculate available space for the filename component based on total path limit
-                    // parentDir + separator + filename <= maxTotalPath
-                    const parentLen = parentDir.length;
-                    // Ensure we leave at least a tiny budget (10 chars) even if path is deep, though it will likely fail later if too deep.
-                    const availableForBase = Math.max(10, maxTotalPath - parentLen - 1);
-                    
-                    // The effective limit for the name part (without extension) is the min of:
-                    // 1. The OS component limit (e.g. 230 or 255) minus extension length
-                    // 2. The available space in the total path minus extension length
-                    const effectiveLimit = Math.min(maxComponentLen, availableForBase) - extA.length;
-
-                    if (nameNoExt && effectiveLimit > 0 && nameNoExt.length > effectiveLimit) {
-                      const truncated = truncateFilenameComponent(nameNoExt, effectiveLimit);
-                      const newBase = `${truncated}${extA}`;
-                      const newEffective = path.resolve(parentDir, newBase);
-                      appendLog(`HARDLINK_TRUNCATED original=${base} truncated=${newBase} maxComponent=${maxComponentLen} maxTotal=${maxTotalPath} parentLen=${parentLen} effectiveLimit=${effectiveLimit}`);
-                      effectiveToResolved = newEffective;
-                    }
-                  } catch (e) { /* ignore truncation errors */ }
-                } catch (e) { /* ignore */ }
-                const parentDir = path.dirname(effectiveToResolved);
-                if (parentDir && !fs.existsSync(parentDir)) {
-                  try { fs.mkdirSync(parentDir, { recursive: true }); appendLog(`HARDLINK_MKDIR created parent=${parentDir}`); } catch (e) { appendLog(`HARDLINK_MKDIR_FAIL parent=${parentDir} err=${e && e.message ? e.message : String(e)}`); }
-                }
-              } catch (e) { appendLog(`HARDLINK_MKDIR_EXCEPTION effective=${effectiveToResolved} err=${e && e.message ? e.message : String(e)}`); }
-
-              if (!fs.existsSync(effectiveToResolved)) {
-              // fail early if cross-device (hardlinks won't work across mounts)
-              if (!assertSameDevice(from, effectiveToResolved)) {
-                appendLog(`HARDLINK_CROSS_DEVICE from=${from} to=${effectiveToResolved}`);
-                const err = new Error('Cross-device link not supported: source and target are on different filesystems');
-                throw err;
-              }
-              // Attempt hardlink with transient retries for filesystem contention errors
-              const transientCodes = new Set(['EMFILE','EAGAIN','EBUSY','EACCES','ENFILE']);
-              let linkErrFinal = null;
-              for (let attempt = 0; attempt < 4; attempt++) {
-                try {
-                  fs.linkSync(from, effectiveToResolved);
-                  resultsItem.status = 'hardlinked';
-                  resultsItem.to = effectiveToResolved;
-                  appendLog(`HARDLINK_OK from=${from} to=${effectiveToResolved}`);
-                  linkErrFinal = null;
-                  break;
-                } catch (linkErr2) {
-                  linkErrFinal = linkErr2;
-                  appendLog(`HARDLINK_FAIL_ATTEMPT from=${from} to=${effectiveToResolved} attempt=${attempt} err=${linkErr2 && linkErr2.message ? linkErr2.message : String(linkErr2)}`);
-                  // collect diagnostics on first failure
-                  if (attempt === 0) {
-                    try {
-                      const exists = fs.existsSync(from);
-                      appendLog(`HARDLINK_DIAG_EXISTS from=${from} exists=${exists}`);
-                      const resolvedFrom = path.resolve(from);
-                      const canonicalFrom = canonicalize(from);
-                      appendLog(`HARDLINK_DIAG_PATHS resolved=${resolvedFrom} canonical=${canonicalFrom}`);
-                      const parentDir = path.dirname(from);
-                      function findNearestExisting(dir) {
-                        let cur = dir;
-                        try {
-                          while (cur && !fs.existsSync(cur)) {
-                            const p = path.dirname(cur);
-                            if (!p || p === cur) break;
-                            cur = p;
-                          }
-                        } catch (e) { cur = null }
-                        return cur && fs.existsSync(cur) ? cur : null;
-                      }
-                      const nearest = findNearestExisting(parentDir);
-                      appendLog(`HARDLINK_DIAG_PARENT parentExists=${fs.existsSync(parentDir)} nearestExisting=${nearest}`);
-                      if (nearest) {
-                        try { const list = fs.readdirSync(nearest).slice(0,40).join(', '); appendLog(`HARDLINK_DIAG_NEAREST_LIST nearest=${nearest} sample=${list}`); } catch (e) {}
-                      }
-                    } catch (ee) {}
-                  }
-                  // If transient, wait then retry; otherwise stop retrying
-                  if (linkErr2 && linkErr2.code && transientCodes.has(linkErr2.code)) {
-                    // small backoff
-                    await sleep(100 * (attempt + 1));
-                    continue;
-                  }
-                  break;
-                }
-              }
-              if (linkErrFinal) {
-                // after retries, still failed
-                appendLog(`HARDLINK_FAIL from=${from} to=${effectiveToResolved} finalErr=${linkErrFinal && linkErrFinal.message ? linkErrFinal.message : String(linkErrFinal)}`);
-                throw linkErrFinal;
-              }
-            } else {
-              // target already exists - check if it's a file or directory
-              try {
-                const stat = fs.statSync(effectiveToResolved);
-                appendLog(`HARDLINK_SKIP_EXISTS to=${effectiveToResolved} isFile=${stat.isFile()} isDir=${stat.isDirectory()} size=${stat.size}`);
-              } catch (e) {
-                appendLog(`HARDLINK_SKIP_EXISTS to=${effectiveToResolved} statErr=${e && e.message ? e.message : String(e)}`);
-              }
-              resultsItem.status = 'exists';
-              resultsItem.to = effectiveToResolved;
-            }
-
-              // mark applied in enrich cache and persist (use canonicalized keys)
-              try {
-                const fromKey = canonicalize(from);
-              enrichCache[fromKey] = enrichCache[fromKey] || {};
-              enrichCache[fromKey].applied = true;
-              enrichCache[fromKey].hidden = true;
-              enrichCache[fromKey].appliedAt = Date.now();
-              enrichCache[fromKey].appliedTo = effectiveToResolved || toResolved;
-              const finalBasename = path.basename(effectiveToResolved || toResolved);
-              enrichCache[fromKey].renderedName = finalBasename;
-              // metadataFilename: rendered filename without the extension
-              enrichCache[fromKey].metadataFilename = finalBasename.replace(new RegExp(path.extname(finalBasename) + '$'), '')
-              // index target path as a lightweight mapping (do NOT copy applied/hidden flags)
-              try {
-                const targetKey = canonicalize(effectiveToResolved || toResolved)
-                renderedIndex[targetKey] = {
-                  source: from,
-                  renderedName: finalBasename,
-                  appliedTo: effectiveToResolved || toResolved,
-                  metadataFilename: enrichCache[fromKey].metadataFilename,
-                  provider: enrichCache[fromKey].provider || null,
-                  parsed: enrichCache[fromKey].parsed || null
-                };
-                // record mapping metadataFilename -> targetKey for quick lookup
-                try {
-                  const metaName = enrichCache[fromKey].metadataFilename
-                  if (metaName) renderedIndex[metaName] = targetKey
-                } catch (e) {}
-              } catch (e) {}
-                try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
-              try { if (db) db.setKV('renderedIndex', renderedIndex); else writeJson(renderedIndexFile, renderedIndex); } catch (e) {}
-            } catch (e) { appendLog(`HARDLINK_MARK_FAIL from=${from} err=${e.message}`) }
-          } catch (err) {
-            // bubble up to outer error handler
-            throw err
-          }
+        if (fs.existsSync(toPath)) {
+          resultItem.status = 'exists';
+          resultItem.to = toPath;
         } else {
-          // default behavior: preserve original file; attempt to hardlink into target, fallback to copy
-          try {
-            // Ensure final basename respects OS filename limits to avoid ENAMETOOLONG
+          // Hardlink with retry for "fails first time" issues
+          let linked = false;
+          let lastErr = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
             try {
-              const osKey = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.client_os) ? users[req.session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
-              const isWindows = String(osKey || '').toLowerCase() === 'windows';
-              const maxComponentLen = getMaxFilenameLengthForOS(osKey) || 255;
-              const maxTotalPath = isWindows ? 258 : 4096;
-
-              try {
-                const parentDir = path.dirname(to) || '';
-                const base = path.basename(to) || '';
-                const extB = path.extname(base) || '';
-                const nameNoExtB = base.slice(0, base.length - extB.length) || '';
-                
-                const parentLen = parentDir.length;
-                const availableForBase = Math.max(10, maxTotalPath - parentLen - 1);
-                const effectiveLimit = Math.min(maxComponentLen, availableForBase) - extB.length;
-
-                if (nameNoExtB && effectiveLimit > 0 && nameNoExtB.length > effectiveLimit) {
-                  const truncatedB = truncateFilenameComponent(nameNoExtB, effectiveLimit);
-                  const newBaseB = `${truncatedB}${extB}`;
-                  const newTo = path.join(parentDir, newBaseB);
-                  appendLog(`HARDLINK_TRUNCATED_FALLBACK original=${base} truncated=${newBaseB} maxComponent=${maxComponentLen} maxTotal=${maxTotalPath} parentLen=${parentLen} effectiveLimit=${effectiveLimit}`);
-                  to = newTo;
-                }
-              } catch (e) { /* ignore truncation issues */ }
-            } catch (e) {}
-            const toDir2 = path.dirname(to);
-            if (!fs.existsSync(toDir2)) fs.mkdirSync(toDir2, { recursive: true });
-            if (!fs.existsSync(to)) {
-              // fail early if cross-device (hardlinks won't work across mounts)
-              function nearestExistingParent2(dir) {
-                let cur = dir;
-                try {
-                  while (cur && !fs.existsSync(cur)) {
-                    const parent = path.dirname(cur);
-                    if (!parent || parent === cur) break;
-                    cur = parent;
-                  }
-                } catch (e) { cur = null }
-                return cur && fs.existsSync(cur) ? cur : null;
+              fs.linkSync(fromPath, toPath);
+              linked = true;
+              break;
+            } catch (err) {
+              lastErr = err;
+              if (err.code === 'EEXIST') {
+                linked = true; // effectively success
+                break;
               }
-              try {
-                const srcStat2 = fs.statSync(from);
-                const destParent2 = nearestExistingParent2(path.dirname(to));
-                if (destParent2) {
-                  const destStat2 = fs.statSync(destParent2);
-                  if (typeof srcStat2.dev !== 'undefined' && typeof destStat2.dev !== 'undefined' && srcStat2.dev !== destStat2.dev) {
-                    appendLog(`HARDLINK_CROSS_DEVICE from=${from} to=${to}`);
-                    throw new Error('Cross-device link not supported: source and target are on different filesystems');
-                  }
-                }
-              } catch (e) {
-                // if we couldn't stat, proceed and let linkSync surface the error
-              }
-
-              // Defensive: refuse hardlink into configured input root
-              try {
-                if (configuredInput) {
-                  const inpResolved2 = path.resolve(configuredInput);
-                  const toResolved2 = path.resolve(to);
-                  if (String(toResolved2).startsWith(inpResolved2)) {
-                    appendLog(`HARDLINK_REFUSE_INPUT from=${from} to=${toResolved2} configuredInput=${inpResolved2}`);
-                    throw new Error('Refusing to create hardlink inside configured input path');
-                  }
-                }
-              } catch (e) { throw e }
-              try {
-                fs.linkSync(from, to);
-                resultsItem.status = 'hardlinked';
-                resultsItem.to = to;
-                appendLog(`HARDLINK_OK from=${from} to=${to}`);
-              } catch (linkErr2) {
-                // Do NOT fallback to copy. Hardlink must succeed or the operation fails.
-                appendLog(`HARDLINK_FAIL from=${from} to=${to} linkErr=${linkErr2 && linkErr2.message ? linkErr2.message : String(linkErr2)}`);
-                // Diagnostics for ENOENT / mount problems
-                try {
-                  const exists = fs.existsSync(from);
-                  appendLog(`HARDLINK_DIAG_EXISTS from=${from} exists=${exists}`);
-                  const resolvedFrom = path.resolve(from);
-                  const canonicalFrom = canonicalize(from);
-                  appendLog(`HARDLINK_DIAG_PATHS resolved=${resolvedFrom} canonical=${canonicalFrom}`);
-                  const parentDir = path.dirname(from);
-                  function findNearestExisting2(dir) {
-                    let cur = dir;
-                    try {
-                      while (cur && !fs.existsSync(cur)) {
-                        const p = path.dirname(cur);
-                        if (!p || p === cur) break;
-                        cur = p;
-                      }
-                    } catch (e) { cur = null }
-                    return cur && fs.existsSync(cur) ? cur : null;
-                  }
-                  const nearest = findNearestExisting2(parentDir);
-                  appendLog(`HARDLINK_DIAG_PARENT parentExists=${fs.existsSync(parentDir)} nearestExisting=${nearest}`);
-                  if (nearest) {
-                    try { const list = fs.readdirSync(nearest).slice(0,40).join(', '); appendLog(`HARDLINK_DIAG_NEAREST_LIST nearest=${nearest} sample=${list}`); } catch (e) {}
-                  }
-                } catch (ee) {}
-                throw linkErr2;
-              }
-            } else {
-              resultsItem.status = 'exists';
-              resultsItem.to = to;
-              appendLog(`HARDLINK_SKIP_EXISTS to=${to}`);
+              // Wait and retry
+              await sleep(100 * (attempt + 1));
             }
+          }
 
-            // mark applied in enrich cache and persist (use canonicalized keys)
-            try {
-              const fromKey = canonicalize(from);
-              enrichCache[fromKey] = enrichCache[fromKey] || {};
-              enrichCache[fromKey].applied = true;
-              enrichCache[fromKey].hidden = true;
-              enrichCache[fromKey].appliedAt = Date.now();
-              enrichCache[fromKey].appliedTo = to;
-              const finalBasename = path.basename(to);
-              enrichCache[fromKey].renderedName = finalBasename;
-              enrichCache[fromKey].metadataFilename = finalBasename.replace(new RegExp(path.extname(finalBasename) + '$'), '')
-              // index target path as a lightweight mapping (do NOT copy applied/hidden flags)
-              try {
-                const targetKey = canonicalize(to)
-                renderedIndex[targetKey] = {
-                  source: from,
-                  renderedName: finalBasename,
-                  appliedTo: to,
-                  metadataFilename: enrichCache[fromKey].metadataFilename,
-                  provider: enrichCache[fromKey].provider || null,
-                  parsed: enrichCache[fromKey].parsed || null
-                };
-                // record mapping metadataFilename -> targetKey for quick lookup
-                try {
-                  const metaName = enrichCache[fromKey].metadataFilename
-                  if (metaName) renderedIndex[metaName] = targetKey
-                } catch (e) {}
-              } catch (e) {}
-              try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
-              try { if (db) db.setKV('renderedIndex', renderedIndex); else writeJson(renderedIndexFile, renderedIndex); } catch (e) {}
-            } catch (e) { appendLog(`HARDLINK_MARK_FAIL from=${from} err=${e.message}`) }
-          } catch (err) {
-            throw err
+          if (!linked) {
+            throw lastErr || new Error('Hardlink failed after retries');
+          }
+
+          resultItem.status = 'hardlinked';
+          resultItem.to = toPath;
+          appendLog(`HARDLINK_SUCCESS from=${fromPath} to=${toPath}`);
+
+          // Update Cache/DB
+          try {
+            const fromKey = canonicalize(fromPath);
+            enrichCache[fromKey] = enrichCache[fromKey] || {};
+            enrichCache[fromKey].applied = true;
+            enrichCache[fromKey].hidden = true;
+            enrichCache[fromKey].appliedAt = Date.now();
+            enrichCache[fromKey].appliedTo = toPath;
+            
+            const finalBasename = path.basename(toPath);
+            enrichCache[fromKey].renderedName = finalBasename;
+            enrichCache[fromKey].metadataFilename = finalBasename.replace(path.extname(finalBasename), '');
+
+            // Update renderedIndex
+            const targetKey = canonicalize(toPath);
+            renderedIndex[targetKey] = {
+                source: fromPath,
+                renderedName: finalBasename,
+                appliedTo: toPath,
+                metadataFilename: enrichCache[fromKey].metadataFilename,
+                provider: enrichCache[fromKey].provider || null,
+                parsed: enrichCache[fromKey].parsed || null
+            };
+            
+            // Persist immediately to avoid data loss
+            if (db) {
+                db.setKV('enrichCache', enrichCache);
+                db.setKV('renderedIndex', renderedIndex);
+            }
+          } catch (dbErr) {
+            appendLog(`DB_UPDATE_FAIL ${dbErr.message}`);
           }
         }
       } else {
-        resultsItem.status = 'dryrun';
-        resultsItem.to = to;
+        resultItem.status = 'dry-run';
+        resultItem.to = toPath;
       }
+      results.push(resultItem);
 
-      results.push(resultsItem);
-    } catch (err) {
-      appendLog(`RENAME_FAIL item=${p.itemId} err=${err.message}`);
-      results.push({ itemId: p.itemId, status: 'error', error: err.message });
+    } catch (e) {
+      resultItem.status = 'error';
+      resultItem.error = e.message;
+      appendLog(`APPLY_ERROR item=${p.itemId} err=${e.message}`);
+      results.push(resultItem);
     }
   }
+
+  // Final bulk save if no DB
+  if (!db) {
+      try { writeJson(enrichStoreFile, enrichCache); } catch (e) {}
+      try { writeJson(renderedIndexFile, renderedIndex); } catch (e) {}
+  }
+
   res.json({ results });
 });
 function performUnapprove({ requestedPaths = null, count = 10, username = null } = {}) {
