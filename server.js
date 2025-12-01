@@ -5604,6 +5604,10 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     const dump = (plans || []).slice(0, 50).map(p => ({ itemId: p.itemId, from: p.fromPath, to: p.toPath, templateUsed: p.templateUsed }));
     appendLog(`PREVIEW_PLANS user=${uname} count=${(plans||[]).length} payload=${JSON.stringify(dump)}`);
   } catch (e) { /* non-fatal debug logging */ }
+  
+  // Ensure any side-effect updates (English titles, movie flags) are persisted immediately
+  try { persistEnrichCacheNow(); } catch (e) {}
+
   res.json({ plans });
 });
 
@@ -6500,6 +6504,9 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
   if (!db) {
       try { writeJson(enrichStoreFile, enrichCache); } catch (e) {}
       try { writeJson(renderedIndexFile, renderedIndex); } catch (e) {}
+  } else {
+      // Ensure everything is flushed even if per-item saves were used
+      try { persistEnrichCacheNow(); } catch (e) {}
   }
 
   res.json({ results });
