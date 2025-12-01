@@ -5516,7 +5516,7 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   // contain episode information (SxxExx or episode title), prefer the user/template render
   // so previews include per-episode labels and the apply step won't collapse multiple
   // episodes into the same series-level filename.
-  let nameWithoutExtRaw;
+  let nameWithoutExtRaw = null;
   if (meta && meta.provider && meta.provider.renderedName) {
     // strip extension and insert year if provider-rendered name is missing it
     let providerName = String(meta.provider.renderedName).replace(/\.[^/.]+$/, '');
@@ -5550,7 +5550,9 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     } catch (e) {
       nameWithoutExtRaw = providerName;
     }
-  } else {
+  }
+  
+  if (!nameWithoutExtRaw) {
     nameWithoutExtRaw = baseNameTemplate
   .replace('{title}', sanitize(stripSeasonNumberSuffix(title)))
       .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
