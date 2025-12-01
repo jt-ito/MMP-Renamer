@@ -5278,14 +5278,10 @@ app.get('/api/enrich/hide-events', requireAuth, (req, res) => {
       }
     } catch (e) { /* continue to normal path */ }
 
-    try { appendLog(`HIDE_EVENTS_REQ user=${uname} since=${since} hideEventsLen=${Array.isArray(hideEvents) ? hideEvents.length : 'na'}`) } catch (e) {}
-
     // defensive: ensure hideEvents is an array
     const he = Array.isArray(hideEvents) ? hideEvents : []
     const ev = he.filter(e => (e && e.ts && e.ts > since))
     const resp = { ok: true, events: ev || [] }
-
-    try { appendLog(`HIDE_EVENTS_RESP user=${uname} since=${since} matched=${(ev && ev.length) || 0}`) } catch (e) {}
 
     try { hideEventsClientCache.set(clientKey, { ts: since, resp, lastHit: now }) } catch (e) {}
     return res.json(resp)
