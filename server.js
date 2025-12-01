@@ -6516,23 +6516,7 @@ function performUnapprove({ requestedPaths = null, count = 10, username = null }
   const shouldDeleteHardlinks = resolveDeleteHardlinksSetting(username);
   const hardlinkTargets = new Map();
   const canonicalTargets = new Set();
-
-  const collectTargets = (entry, sourceCanonicalKey) => {
-    if (!entry || !entry.appliedTo) return;
-    const list = Array.isArray(entry.appliedTo) ? entry.appliedTo : [entry.appliedTo];
-    for (const raw of list) {
-      if (!raw) continue;
-      try {
-        const resolved = path.resolve(raw);
-        const canonicalTarget = canonicalize(resolved);
-        if (!canonicalTarget || canonicalTarget === sourceCanonicalKey) continue;
-        canonicalTargets.add(canonicalTarget);
-        if (!hardlinkTargets.has(canonicalTarget)) {
-          hardlinkTargets.set(canonicalTarget, { resolved, original: raw });
-        }
-      } catch (e) { /* ignore invalid paths */ }
-    }
-  };
+  const restoredItems = [];
 
   const dropRenderedIndexTarget = (canonicalTarget) => {
     try {
@@ -6560,7 +6544,46 @@ function performUnapprove({ requestedPaths = null, count = 10, username = null }
     try {
       const entry = enrichCache[key];
       if (!entry) return;
-      collectTargets(entry, key);
+      
+      // Determine if we need to restore a moved file or delete a hardlink
+      const sourceExists = fs.existsSync(key);
+      const appliedTo = entry.appliedTo;
+      
+      if (appliedTo) {
+        const list = Array.isArray(appliedTo) ? appliedTo : [appliedTo];
+        for (const raw of list) {
+          if (!raw) continue;
+          try {
+            const resolved = path.resolve(raw);
+            const canonicalTarget = canonicalize(resolved);
+            if (!canonicalTarget || canonicalTarget === key) continue;
+            
+            // If source is missing and target exists, this was likely a move (rename).
+            // We must restore the file by moving it back.
+            if (!sourceExists && fs.existsSync(resolved)) {
+              try {
+                const sourceDir = path.dirname(key);
+                if (!fs.existsSync(sourceDir)) fs.mkdirSync(sourceDir, { recursive: true });
+                fs.renameSync(resolved, key);
+                appendLog(`UNAPPROVE_RESTORE_MOVE from=${resolved} to=${key}`);
+                // Since we moved it back, we don't delete the target (it's gone)
+                // and we don't treat it as a hardlink target.
+                dropRenderedIndexTarget(canonicalTarget);
+              } catch (err) {
+                appendLog(`UNAPPROVE_RESTORE_FAIL from=${resolved} to=${key} err=${err.message}`);
+              }
+            } else {
+              // Source exists (hardlink case) or target missing.
+              // Schedule for deletion if configured.
+              canonicalTargets.add(canonicalTarget);
+              if (!hardlinkTargets.has(canonicalTarget)) {
+                hardlinkTargets.set(canonicalTarget, { resolved, original: raw });
+              }
+            }
+          } catch (e) { /* ignore invalid paths */ }
+        }
+      }
+
       let updated = false;
       if (entry.applied) {
         entry.applied = false;
@@ -6575,7 +6598,11 @@ function performUnapprove({ requestedPaths = null, count = 10, username = null }
         entry.hidden = false;
         updated = true;
       }
-      if (updated && !changed.includes(key)) changed.push(key);
+      if (updated) {
+        if (!changed.includes(key)) changed.push(key);
+        // Track item to restore to scans
+        restoredItems.push(key);
+      }
     } catch (e) {}
   }
 
@@ -6605,6 +6632,9 @@ function performUnapprove({ requestedPaths = null, count = 10, username = null }
       const info = hardlinkTargets.get(canonicalTarget);
       if (!info || !info.resolved) continue;
       try {
+        // Check if file still exists (might have been moved back already if logic was mixed, but here we separated it)
+        if (!fs.existsSync(info.resolved)) continue;
+        
         const stat = fs.lstatSync(info.resolved);
         if (stat.isDirectory()) {
           hardlinkErrors.push({ path: info.resolved, error: 'target is a directory' });
@@ -6624,6 +6654,35 @@ function performUnapprove({ requestedPaths = null, count = 10, username = null }
 
   if (renderedIndexMutated) {
     try { if (db) db.setKV('renderedIndex', renderedIndex); else writeJson(renderedIndexFile, renderedIndex); } catch (e) {}
+  }
+
+  // Inject restored items back into active scans so they appear immediately in UI
+  if (restoredItems.length > 0) {
+    try {
+      const scanIds = Object.keys(scans || {});
+      let scansUpdated = false;
+      for (const sid of scanIds) {
+        const s = scans[sid];
+        if (!s || !Array.isArray(s.items)) continue;
+        let modified = false;
+        for (const key of restoredItems) {
+          // Check if already present
+          const exists = s.items.some(it => canonicalize(it.canonicalPath) === key);
+          if (!exists) {
+            // Add it back
+            s.items.push({ id: uuidv4(), canonicalPath: key, scannedAt: Date.now() });
+            modified = true;
+          }
+        }
+        if (modified) {
+          s.totalCount = s.items.length;
+          scansUpdated = true;
+        }
+      }
+      if (scansUpdated) {
+        try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); } catch (e) {}
+      }
+    } catch (e) { appendLog(`UNAPPROVE_SCAN_UPDATE_FAIL err=${e.message}`); }
   }
 
   return { changed, deletedHardlinks, hardlinkErrors, shouldDeleteHardlinks };
