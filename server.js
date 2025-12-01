@@ -4500,7 +4500,20 @@ app.get('/api/scan/:scanId/search', requireAuth, (req, res) => {
     }
     const total = matched.length;
     const slice = matched.slice(offset, offset + limit);
-    return res.json({ items: slice, offset, limit, total });
+    // Attach cached enrichment to search results so client can render preview names immediately
+    const enrichedSlice = slice.map(it => {
+      const copy = { ...it };
+      try {
+        const key = canonicalize(copy.canonicalPath || '');
+        const raw = enrichCache[key] || null;
+        if (raw) {
+          const normalized = normalizeEnrichEntry(raw);
+          if (normalized) copy.enrichment = normalized;
+        }
+      } catch (e) {}
+      return copy;
+    });
+    return res.json({ items: enrichedSlice, offset, limit, total });
   } catch (e) { return res.status(500).json({ error: e.message }) }
 })
 

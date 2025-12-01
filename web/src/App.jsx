@@ -1206,7 +1206,21 @@ export default function App() {
         }
       } else {
         const r = await searchScan(q, 0, batchSize)
-        const results = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+        const newEnrich = {}
+        let hasNew = false
+        if (r.items && r.items.length) {
+          for (const it of r.items) {
+            if (it.enrichment) {
+              newEnrich[it.canonicalPath] = it.enrichment
+              hasNew = true
+            }
+          }
+          if (hasNew) setEnrichCache(prev => ({ ...prev, ...newEnrich }))
+        }
+        const results = (r.items || []).filter(it => { 
+          const e = newEnrich[it.canonicalPath] || (enrichCache && enrichCache[it.canonicalPath]); 
+          return !(e && (e.hidden === true || e.applied === true)) 
+        })
         setItems(results)
         setTotal(r.total || 0)
       }
@@ -1283,10 +1297,18 @@ export default function App() {
             // If baseline is too large, fall back to server-side search
             if (allItems.length > MAX_IN_MEMORY_SEARCH) {
               const r = await searchScan(searchQuery, 0, batchSize)
-              const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+              if (r.items && r.items.length) {
+                const newEnrich = {}
+                let hasNew = false
+                for (const it of r.items) {
+                  if (it.enrichment) { newEnrich[it.canonicalPath] = it.enrichment; hasNew = true }
+                }
+                if (hasNew) setEnrichCache(prev => ({ ...prev, ...newEnrich }))
+              }
+              const filtered = (r.items || []).filter(it => { const e = it.enrichment || (enrichCache && enrichCache[it.canonicalPath]); return !(e && (e.hidden === true || e.applied === true)) })
               setItems(filtered)
               setTotal(r.total || 0)
-              for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+              for (const it of filtered || []) if (!enrichCache[it.canonicalPath] && !it.enrichment) enrichOne && enrichOne(it)
             } else {
               const lowered = q.toLowerCase()
               const filtered = allItems.filter(it => matchesQuery(it, lowered)).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
@@ -1298,10 +1320,18 @@ export default function App() {
         } else {
           // perform search with cancellation via searchScan
           const r = await searchScan(searchQuery, 0, batchSize)
-          const filtered = (r.items || []).filter(it => { const e = enrichCache && enrichCache[it.canonicalPath]; return !(e && (e.hidden === true || e.applied === true)) })
+          if (r.items && r.items.length) {
+            const newEnrich = {}
+            let hasNew = false
+            for (const it of r.items) {
+              if (it.enrichment) { newEnrich[it.canonicalPath] = it.enrichment; hasNew = true }
+            }
+            if (hasNew) setEnrichCache(prev => ({ ...prev, ...newEnrich }))
+          }
+          const filtered = (r.items || []).filter(it => { const e = it.enrichment || (enrichCache && enrichCache[it.canonicalPath]); return !(e && (e.hidden === true || e.applied === true)) })
           setItems(filtered)
           setTotal(r.total || 0)
-          for (const it of filtered || []) if (!enrichCache[it.canonicalPath]) enrichOne && enrichOne(it)
+          for (const it of filtered || []) if (!enrichCache[it.canonicalPath] && !it.enrichment) enrichOne && enrichOne(it)
         }
       } catch (e) {}
     }, 300)
