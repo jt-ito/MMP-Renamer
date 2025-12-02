@@ -2428,6 +2428,8 @@ function LogsPanel({ logs, refresh, pushToast }) {
   )
 }
 
+const DEFAULT_ROW_HEIGHT = 90
+
 function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null }) {
   const listRef = useRef(null)
   const containerRef = useRef(null)
@@ -2463,12 +2465,13 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   }, [])
   
   const getItemSize = (index) => {
-    return rowHeights.current[index] || 120
+    return rowHeights.current[index] || DEFAULT_ROW_HEIGHT
   }
 
   const setItemSize = (index, size) => {
-    if (rowHeights.current[index] !== size) {
-      rowHeights.current[index] = size
+    const nextSize = Math.max(DEFAULT_ROW_HEIGHT, size || 0)
+    if (rowHeights.current[index] !== nextSize) {
+      rowHeights.current[index] = nextSize
       if (listRef.current) {
         listRef.current.resetAfterIndex(index)
       }
@@ -2488,8 +2491,9 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   
   useEffect(() => {
     if (rowRef.current) {
-      const height = rowRef.current.getBoundingClientRect().height
-      setItemSize(index, height)
+      const el = rowRef.current
+      const measured = Math.ceil(el.scrollHeight || el.getBoundingClientRect().height || DEFAULT_ROW_HEIGHT)
+      setItemSize(index, measured)
     }
   }, [index, it, enrichment, isSelected, loading])
   
