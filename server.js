@@ -6404,6 +6404,12 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
       
       let toPath = path.resolve(p.toPath);
 
+      // If an explicit output folder override was provided (e.g. via "Apply to..." UI),
+      // re-base the target path to be inside that folder, preserving the planned filename.
+      if (outputFolder && typeof outputFolder === 'string') {
+        toPath = path.join(outputFolder, path.basename(toPath));
+      }
+
       // Validation
       if (fromPath === toPath) {
         resultItem.status = 'noop';
