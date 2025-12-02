@@ -2432,10 +2432,6 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const listRef = useRef(null)
   const containerRef = useRef(null)
   const [listHeight, setListHeight] = useState(700)
-  const [isDragging, setIsDragging] = useState(false)
-  const [dragStartIndex, setDragStartIndex] = useState(null)
-  const [dragCurrentIndex, setDragCurrentIndex] = useState(null)
-  const dragInitialSelected = useRef({})
   const lastClickedIndex = useRef(null)
   const selectionUtilsRef = useRef(null)
 
@@ -2448,58 +2444,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     }).catch(() => { selectionUtilsRef.current = null })
   }, [])
   
-  // Handle drag selection
-  useEffect(() => {
-    if (!selectMode || !isDragging || dragStartIndex === null || dragCurrentIndex === null) return
-    const start = Math.min(dragStartIndex, dragCurrentIndex)
-    const end = Math.max(dragStartIndex, dragCurrentIndex)
-    // Use helper when available
-    const selFn = selectionUtilsRef.current
-    if (selFn && typeof selFn === 'function') {
-      const paths = selFn(items, start, end)
-      for (const p of paths || []) toggleSelect(p, true)
-    } else {
-      for (let i = start; i <= end; i++) {
-        const item = items[i]
-        if (item && item.canonicalPath) {
-          toggleSelect(item.canonicalPath, true)
-        }
-      }
-    }
-  }, [isDragging, dragStartIndex, dragCurrentIndex, items, selectMode, toggleSelect])
-  
-  // Handle mouse up globally to end drag
-  useEffect(() => {
-    if (!selectMode) return
-    
-    const handleMouseUp = () => {
-      setIsDragging(false)
-      setDragStartIndex(null)
-      setDragCurrentIndex(null)
-      dragInitialSelected.current = {}
-    }
-    
-    document.addEventListener('mouseup', handleMouseUp)
-    return () => document.removeEventListener('mouseup', handleMouseUp)
-  }, [selectMode])
-  
-  const handleRowMouseDown = (ev, index) => {
-    if (!selectMode) return
-    // Only start a drag on left-button down and when not holding Shift
-    if (ev && ev.button !== 0) return
-    if (ev && ev.shiftKey) return
-    // record last clicked index on mousedown to be resilient across scroll/virtualization
-    lastClickedIndex.current = index
-    setIsDragging(true)
-    setDragStartIndex(index)
-    setDragCurrentIndex(index)
-    dragInitialSelected.current = { ...selected }
-  }
-  
-  const handleRowMouseEnter = (index) => {
-    if (!selectMode || !isDragging) return
-    setDragCurrentIndex(index)
-  }
+
 
   // Measure container height dynamically
   useEffect(() => {
@@ -2524,7 +2469,6 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const loadingState = it && loadingEnrich[it.canonicalPath]
   const loading = Boolean(loadingState)
   const isSelected = !!(selectMode && it && selected?.[it.canonicalPath])
-  const isRangeSelecting = isDragging && dragStartIndex !== null && dragCurrentIndex !== null && dragStartIndex !== dragCurrentIndex
 
   // Only use the two canonical outputs: parsed and provider
   const parsed = enrichment?.parsed || null
@@ -2576,7 +2520,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
       }
       // Update last clicked index for future shift-clicks
       lastClickedIndex.current = index
-    } else if (!isDragging) {
+    } else {
       // Normal click - always toggle selection, even if already selected and lastClickedIndex matches
       toggleSelect(it.canonicalPath, !isSelected)
       // Update last clicked index for future shift-clicks
@@ -2589,8 +2533,6 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
         className={"row" + (selectMode ? ' row-select-mode' : '') + (isSelected ? ' row-selected' : '')}
         style={style}
         onClick={handleRowClick}
-        onMouseDown={(ev) => handleRowMouseDown(ev, index)}
-        onMouseEnter={() => handleRowMouseEnter(index)}
         role={selectMode ? 'button' : undefined}
         tabIndex={selectMode ? 0 : undefined}
         onKeyDown={ev => {
