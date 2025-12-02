@@ -2462,6 +2462,19 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     return () => resizeObserver.disconnect()
   }, [])
   
+  const getItemSize = (index) => {
+    return rowHeights.current[index] || 120
+  }
+
+  const setItemSize = (index, size) => {
+    if (rowHeights.current[index] !== size) {
+      rowHeights.current[index] = size
+      if (listRef.current) {
+        listRef.current.resetAfterIndex(index)
+      }
+    }
+  }
+  
   const Row = ({ index, style }) => {
   const it = items[index]
   const rawEnrichment = it ? enrichCache?.[it.canonicalPath] : null
@@ -2680,19 +2693,6 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   function onItemsRendered(info) {
     const visibleStopIndex = info.visibleStopIndex ?? info.visibleRange?.[1]
     if (typeof visibleStopIndex === 'number' && visibleStopIndex >= items.length - 3) onNearEnd && onNearEnd()
-  }
-
-  const getItemSize = (index) => {
-    return rowHeights.current[index] || 120
-  }
-
-  const setItemSize = (index, size) => {
-    if (rowHeights.current[index] !== size) {
-      rowHeights.current[index] = size
-      if (listRef.current) {
-        listRef.current.resetAfterIndex(index)
-      }
-    }
   }
 
   return (
