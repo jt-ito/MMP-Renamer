@@ -2481,6 +2481,11 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const enrichment = normalizeEnrichResponse(rawEnrichment)
   const rowRef = useRef(null)
   
+  // Declare loading and isSelected before using in useEffect dependencies
+  const loadingState = it && loadingEnrich[it.canonicalPath]
+  const loading = Boolean(loadingState)
+  const isSelected = !!(selectMode && it && selected?.[it.canonicalPath])
+  
   useEffect(() => {
     if (rowRef.current) {
       const height = rowRef.current.getBoundingClientRect().height
@@ -2489,9 +2494,6 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   }, [index, it, enrichment, isSelected, loading])
   
   useEffect(() => { if (it && !rawEnrichment) enrichOne && enrichOne(it) }, [it?.canonicalPath, rawEnrichment, enrichOne])
-  const loadingState = it && loadingEnrich[it.canonicalPath]
-  const loading = Boolean(loadingState)
-  const isSelected = !!(selectMode && it && selected?.[it.canonicalPath])
 
   // Only use the two canonical outputs: parsed and provider
   const parsed = enrichment?.parsed || null
