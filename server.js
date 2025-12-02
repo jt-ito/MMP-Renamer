@@ -4808,10 +4808,15 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
   if (!force && parsedCache[key] && !tmdbKeyEarly) {
       const pc = parsedCache[key]
       const epTitle = (enrichCache[key] && enrichCache[key].provider && enrichCache[key].provider.episodeTitle) ? enrichCache[key].provider.episodeTitle : ''
-      // build normalized entry
+      // build normalized entry - preserve existing provider block if it has a renderedName (preview)
       const parsedBlock = { title: pc.title, parsedName: pc.parsedName, season: pc.season, episode: pc.episode, timestamp: Date.now() }
-      const providerBlock = (enrichCache[key] && enrichCache[key].provider) ? enrichCache[key].provider : null
-  const normalized = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, provider: providerBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
+      const existingProvider = (enrichCache[key] && enrichCache[key].provider) ? enrichCache[key].provider : null
+      // If provider block exists and has renderedName, use the provider's parsedName instead of raw parsed
+      const effectiveParsedBlock = (existingProvider && existingProvider.renderedName && existingProvider.parsedName) 
+        ? { title: existingProvider.title || pc.title, parsedName: existingProvider.parsedName, season: existingProvider.season != null ? existingProvider.season : pc.season, episode: existingProvider.episode != null ? existingProvider.episode : pc.episode, timestamp: Date.now() }
+        : parsedBlock
+      const providerBlock = existingProvider
+  const normalized = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: effectiveParsedBlock, provider: providerBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
   updateEnrichCache(key, normalized);
   try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
       return res.json({ parsed: normalized.parsed || null, provider: normalized.provider || null })
