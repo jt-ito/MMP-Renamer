@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react'
 import axios from 'axios'
-import { FixedSizeList as List } from 'react-window'
+import { VariableSizeList as List } from 'react-window'
 import normalizeEnrichResponse from './normalizeEnrichResponse'
 import ToastContainer from './components/Toast'
 import Settings from './Settings'
@@ -2434,6 +2434,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const [listHeight, setListHeight] = useState(700)
   const lastClickedIndex = useRef(null)
   const selectionUtilsRef = useRef(null)
+  const rowHeights = useRef({})
 
   useEffect(() => {
     // dynamically import selection utils (CommonJS module) and cache
@@ -2465,6 +2466,15 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const it = items[index]
   const rawEnrichment = it ? enrichCache?.[it.canonicalPath] : null
   const enrichment = normalizeEnrichResponse(rawEnrichment)
+  const rowRef = useRef(null)
+  
+  useEffect(() => {
+    if (rowRef.current) {
+      const height = rowRef.current.getBoundingClientRect().height
+      setItemSize(index, height)
+    }
+  }, [index, it, enrichment, isSelected, loading])
+  
   useEffect(() => { if (it && !rawEnrichment) enrichOne && enrichOne(it) }, [it?.canonicalPath, rawEnrichment, enrichOne])
   const loadingState = it && loadingEnrich[it.canonicalPath]
   const loading = Boolean(loadingState)
@@ -2530,6 +2540,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
 
     return (
       <div
+        ref={rowRef}
         className={"row" + (selectMode ? ' row-select-mode' : '') + (isSelected ? ' row-selected' : '')}
         style={style}
         onClick={handleRowClick}
@@ -2671,9 +2682,22 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     if (typeof visibleStopIndex === 'number' && visibleStopIndex >= items.length - 3) onNearEnd && onNearEnd()
   }
 
+  const getItemSize = (index) => {
+    return rowHeights.current[index] || 120
+  }
+
+  const setItemSize = (index, size) => {
+    if (rowHeights.current[index] !== size) {
+      rowHeights.current[index] = size
+      if (listRef.current) {
+        listRef.current.resetAfterIndex(index)
+      }
+    }
+  }
+
   return (
     <div ref={containerRef} style={{ flex: 1, minHeight: 0 }}>
-      <List ref={listRef} height={listHeight} itemCount={items.length} itemSize={90} width={'100%'} onItemsRendered={onItemsRendered}>
+      <List ref={listRef} height={listHeight} itemCount={items.length} itemSize={getItemSize} width={'100%'} onItemsRendered={onItemsRendered}>
       {Row}
     </List>
     </div>

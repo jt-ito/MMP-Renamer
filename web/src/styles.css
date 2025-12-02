@@ -295,7 +295,7 @@ select.form-input:focus {
 
 
 /* Allow rows to grow vertically when titles span multiple lines and avoid clipping */
-.row { display:flex; justify-content:space-between; align-items:flex-start; padding:16px; min-height:72px; box-sizing:border-box; border-bottom:1px solid var(--bg-600); background: var(--bg-700); gap:12px }
+.row { display:flex; justify-content:space-between; align-items:flex-start; padding:16px; min-height:72px; height:auto; box-sizing:border-box; border-bottom:1px solid var(--bg-600); background: var(--bg-700); gap:12px }
 .row:nth-child(even) { background: var(--bg-800) }
 .row.row-select-mode { cursor: pointer; transition: background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease }
 .row.row-select-mode:hover { background: rgba(96,165,250,0.08) }
