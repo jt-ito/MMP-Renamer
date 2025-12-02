@@ -3949,9 +3949,17 @@ function doProcessParsedItem(it, session) {
         try { parsedRendered = parsedRendered.replace(/\s*\(\s*\)\s*/g, '').replace(/\s*[-–—]\s*$/g, '').replace(/\s{2,}/g, ' ').trim(); } catch (e) {}
         const parsedBlock = { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, episodeRange: parsed.episodeRange || null, timestamp: now };
         parsedCache[key] = Object.assign({}, parsedCache[key] || {}, parsedBlock);
-        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { parsed: parsedBlock, sourceId: 'parsed-cache', cachedAt: now }));
+        // Preserve existing provider block if it exists (don't overwrite provider data during rescans)
+        const existingProvider = (enrichCache[key] && enrichCache[key].provider) ? enrichCache[key].provider : null;
+        const updatePayload = { parsed: parsedBlock, sourceId: 'parsed-cache', cachedAt: now };
+        if (existingProvider) updatePayload.provider = existingProvider;
+        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, updatePayload));
       } catch (e) {
-        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeRange: parsed.episodeRange || null, episodeTitle: '', language: 'en', timestamp: now }));
+        // Preserve existing provider block even in error path
+        const existingProvider = (enrichCache[key] && enrichCache[key].provider) ? enrichCache[key].provider : null;
+        const fallbackPayload = { sourceId: 'local-parser', title: parsed.title, parsedName: parsed.parsedName, season: parsed.season, episode: parsed.episode, episodeRange: parsed.episodeRange || null, episodeTitle: '', language: 'en', timestamp: now };
+        if (existingProvider) fallbackPayload.provider = existingProvider;
+        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, fallbackPayload));
       }
     }
   } catch (e) { appendLog(`PARSE_ITEM_FAIL path=${it && it.canonicalPath} err=${e && e.message ? e.message : String(e)}`) }
