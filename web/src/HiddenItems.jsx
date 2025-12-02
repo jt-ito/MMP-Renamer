@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import axios from 'axios'
 
 const API = (p) => `/api${p}`
@@ -21,6 +21,8 @@ export default function HiddenItems({ pushToast }) {
   const [selected, setSelected] = useState({})
   const [bulkUnapproving, setBulkUnapproving] = useState(false)
   const [rowUnapproving, setRowUnapproving] = useState({})
+  const [searchQuery, setSearchQuery] = useState('')
+  const lastClickedIndex = useRef(null)
 
   const fetchItems = useCallback(async () => {
     setLoading(true)
@@ -49,26 +51,66 @@ export default function HiddenItems({ pushToast }) {
     fetchItems()
   }, [fetchItems])
 
+  const filteredItems = useMemo(() => {
+    if (!searchQuery) return items
+    const q = searchQuery.toLowerCase()
+    return items.filter(item => {
+      const name = item.providerTitle || item.parsedTitle || item.basename || item.path || ''
+      return name.toLowerCase().includes(q) || item.path.toLowerCase().includes(q)
+    })
+  }, [items, searchQuery])
+
   const selectedPaths = useMemo(() => Object.keys(selected || {}).filter(k => selected[k]), [selected])
 
-  const toggleSelect = (path) => {
+  const toggleSelect = (path, val) => {
     setSelected(prev => {
       const next = { ...(prev || {}) }
-      if (next[path]) delete next[path]
-      else next[path] = true
+      if (val === false) delete next[path]
+      else if (val === true) next[path] = true
+      else {
+        if (next[path]) delete next[path]
+        else next[path] = true
+      }
       return next
     })
   }
 
   const selectAll = () => {
-    if (!items.length) return
-    const allSelected = selectedPaths.length === items.length
+    if (!filteredItems.length) return
+    const allSelected = filteredItems.every(it => selected[it.path])
     if (allSelected) {
-      setSelected({})
+      setSelected(prev => {
+        const next = { ...prev }
+        for (const item of filteredItems) delete next[item.path]
+        return next
+      })
     } else {
-      const next = {}
-      for (const item of items) next[item.path] = true
-      setSelected(next)
+      setSelected(prev => {
+        const next = { ...prev }
+        for (const item of filteredItems) next[item.path] = true
+        return next
+      })
+    }
+  }
+
+  const handleRowClick = (item, index, ev) => {
+    // ignore clicks originating from action buttons or the checkbox container
+    const interactive = ev.target.closest('button') || ev.target.closest('a') || ev.target.closest('input')
+    if (interactive) return
+
+    if (ev.shiftKey && lastClickedIndex.current !== null) {
+      ev.preventDefault()
+      const start = Math.min(lastClickedIndex.current, index)
+      const end = Math.max(lastClickedIndex.current, index)
+      const subset = filteredItems.slice(start, end + 1)
+      setSelected(prev => {
+        const next = { ...prev }
+        subset.forEach(it => next[it.path] = true)
+        return next
+      })
+    } else {
+      toggleSelect(item.path)
+      lastClickedIndex.current = index
     }
   }
 
@@ -126,15 +168,22 @@ export default function HiddenItems({ pushToast }) {
           disabled={!selectedPaths.length || bulkUnapproving}
         >Unapprove selected</button>
         <button className='btn-ghost small' onClick={selectAll} disabled={!items.length}>
-          {selectedPaths.length === items.length && items.length ? 'Clear' : 'Select all'}
+          {filteredItems.length > 0 && filteredItems.every(it => selected[it.path]) ? 'Clear' : 'Select all'}
         </button>
-        <div style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--muted)' }}>{items.length} total</div>
+        <input
+          type="text"
+          placeholder="Search..."
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+          style={{ marginLeft: 8, padding: '4px 8px', borderRadius: 4, border: '1px solid var(--bg-600)', background: 'var(--bg-700)', color: 'var(--fg)', fontSize: 13, width: 200 }}
+        />
+        <div style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--muted)' }}>{filteredItems.length} {filteredItems.length !== items.length ? `(of ${items.length})` : 'total'}</div>
       </div>
       {loading ? (
   <div style={{ marginTop: 24 }}>Loading...</div>
       ) : error ? (
         <div style={{ marginTop: 24, color: '#ffb4b4' }}>{error}</div>
-      ) : !items.length ? (
+      ) : !filteredItems.length ? (
         <div style={{ marginTop: 24 }}>No hidden or applied items found.</div>
       ) : (
         <div className='form-card hidden-list' style={{ marginTop: 18, padding: 14 }}>
@@ -151,17 +200,27 @@ export default function HiddenItems({ pushToast }) {
                 </tr>
               </thead>
               <tbody>
-                {items.map(item => {
+                {filteredItems.map((item, index) => {
                   const status = item.applied ? 'Applied' : 'Hidden'
                   const disabled = !!rowUnapproving[item.path]
                   const displayName = item.providerTitle || item.parsedTitle || item.basename || item.path
                   return (
-                    <tr key={item.path} style={{ borderBottom: '1px solid var(--bg-700)', height: 68 }}>
+                    <tr 
+                      key={item.path} 
+                      style={{ 
+                        borderBottom: '1px solid var(--bg-700)', 
+                        height: 68, 
+                        cursor: 'pointer',
+                        background: selected[item.path] ? 'rgba(96,165,250,0.14)' : 'transparent'
+                      }}
+                      onClick={(ev) => handleRowClick(item, index, ev)}
+                    >
                       <td style={{ padding: '12px 14px' }}>
                         <input
                           type='checkbox'
                           checked={!!selected[item.path]}
                           onChange={() => toggleSelect(item.path)}
+                          onClick={e => e.stopPropagation()}
                         />
                       </td>
                       <td style={{ padding: '12px 14px', fontSize: 15 }}>
