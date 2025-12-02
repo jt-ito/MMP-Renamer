@@ -6410,9 +6410,31 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
       let toPath = path.resolve(p.toPath);
 
       // If an explicit output folder override was provided (e.g. via "Apply to..." UI),
-      // re-base the target path to be inside that folder, preserving the planned filename.
+      // re-base the target path to be inside that folder, preserving the folder structure
+      // (series folder, season folder) from the preview.
       if (outputFolder && typeof outputFolder === 'string') {
-        toPath = path.join(outputFolder, path.basename(toPath));
+        // Extract the relative path from the original preview by finding the portion
+        // after the configured output path. This preserves Series/Season folder structure.
+        const username = req.session && req.session.username ? req.session.username : null;
+        const userOutput = username && users[username] && users[username].settings && users[username].settings.scan_output_path 
+          ? users[username].settings.scan_output_path 
+          : null;
+        const configuredOutput = userOutput || (serverSettings && serverSettings.scan_output_path) || '';
+        
+        let relativePath = path.basename(toPath); // fallback to just filename
+        if (configuredOutput) {
+          try {
+            const resolvedConfigOutput = path.resolve(configuredOutput);
+            const resolvedToPath = path.resolve(p.toPath);
+            if (resolvedToPath.startsWith(resolvedConfigOutput)) {
+              relativePath = path.relative(resolvedConfigOutput, resolvedToPath);
+            }
+          } catch (e) {
+            // If relative path extraction fails, fall back to basename
+          }
+        }
+        
+        toPath = path.join(outputFolder, relativePath);
       }
 
       // Validation
