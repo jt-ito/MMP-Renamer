@@ -3804,19 +3804,41 @@ function renderProviderName(data, key, session) {
 
 function getMaxFilenameLengthForOS(osKey) {
   const key = String(osKey || 'linux').toLowerCase();
-  // Common max filename length per filesystem (component length)
-  // Windows/NTFS: 255 limit, but total path is 260. Use a safer limit (230) to allow for folder depth.
-  if (key === 'windows') return 230;
-  if (key === 'mac' || key === 'macos' || key === 'darwin') return 255;
-  return 255; // default for linux and unknown
+  // Common max filename length per filesystem (component length in bytes)
+  // Most filesystems have a 255-byte limit for the basename component.
+  // Use conservative limits to account for UTF-8 multi-byte characters and filesystem overhead.
+  // Windows/NTFS: 255 byte limit for basename. Use 200 to be safe with Unicode and path depth.
+  if (key === 'windows') return 200;
+  // macOS (APFS/HFS+): 255 UTF-8 bytes for basename
+  if (key === 'mac' || key === 'macos' || key === 'darwin') return 240;
+  // Linux (ext4/xfs/btrfs): 255 byte limit for basename
+  return 240; // default for linux and unknown - conservative for UTF-8
 }
 
 function truncateFilenameComponent(name, maxLen) {
   if (!name) return name;
   const s = String(name);
   if (!maxLen || s.length <= maxLen) return s;
-  // preserve start and end pieces if possible: "Base - S01E01 - Episode" -> keep start and end
-  // but to keep it simple, truncate at maxLen-1 and append ellipsis
+  
+  // Try to intelligently truncate long episode titles while preserving key metadata
+  // Pattern: "Series Title (Year) - S01E01 - Very Long Episode Title"
+  // Goal: Keep "Series Title (Year) - S01E01" intact, truncate episode title
+  const episodeLabelMatch = s.match(/^(.*?\s-\s(?:S\d{2})?E\d{1,3}(?:[SCTPO]\d+)?)\s-\s(.+)$/i);
+  if (episodeLabelMatch) {
+    const prefix = episodeLabelMatch[1]; // "Series Title (Year) - S01E01"
+    const episodeTitle = episodeLabelMatch[2]; // "Very Long Episode Title"
+    
+    // If the prefix alone is under the limit, truncate only the episode title
+    if (prefix.length < maxLen - 5) { // -5 for " - " + ellipsis
+      const remainingLen = maxLen - prefix.length - 3; // -3 for " - "
+      if (remainingLen > 10) { // Only if we have meaningful space for episode title
+        const truncatedEpTitle = episodeTitle.slice(0, remainingLen - 1) + '…';
+        return `${prefix} - ${truncatedEpTitle}`;
+      }
+    }
+  }
+  
+  // Fallback: simple truncation with ellipsis
   const ell = '…';
   const keep = Math.max(1, maxLen - ell.length);
   return s.slice(0, keep) + ell;
@@ -5593,17 +5615,24 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
       .replace(/(^\s*-\s*)|(\s*-\s*$)/g, '')
       .replace(/\s{2,}/g, ' ')
       .trim();
-    const fileName = (nameWithoutExt + ext).trim();
+    // Apply filename length truncation to the complete basename (before extension)
+    let truncatedNameWithoutExt = nameWithoutExt;
+    try {
+      const osKey = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.client_os) ? users[req.session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
+      const maxLen = getMaxFilenameLengthForOS(osKey) || 255;
+      // Account for extension length in the limit
+      const extLen = ext ? ext.length : 0;
+      const maxBasenameLen = Math.max(1, maxLen - extLen);
+      if (truncatedNameWithoutExt && truncatedNameWithoutExt.length > maxBasenameLen) {
+        truncatedNameWithoutExt = truncateFilenameComponent(truncatedNameWithoutExt, maxBasenameLen);
+      }
+    } catch (e) {}
+    
+    const fileName = (truncatedNameWithoutExt + ext).trim();
     // If an output path is configured, plan a hardlink under that path preserving a Jellyfin-friendly layout
     let toPath;
     if (effectiveOutput) {
-      let finalFileName = nameWithoutExt;
-      try {
-        const osKey = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.client_os) ? users[req.session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
-        const maxLen = getMaxFilenameLengthForOS(osKey) || 255;
-        if (finalFileName && finalFileName.length > maxLen) finalFileName = truncateFilenameComponent(finalFileName, maxLen);
-      } catch (e) {}
-      finalFileName = (finalFileName + ext).replace(/\\/g, '/');
+      const finalFileName = fileName.replace(/\\/g, '/');
       toPath = path.join(folder, finalFileName).replace(/\\/g, '/');
     } else {
       toPath = path.join(path.dirname(fromPath), fileName).replace(/\\/g, '/');
