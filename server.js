@@ -4287,8 +4287,17 @@ app.post('/api/scan', requireAuth, async (req, res) => {
         const prior = loadScanCache();
         if (prior && prior.initialScanAt && currentCache && !currentCache.initialScanAt) currentCache.initialScanAt = prior.initialScanAt;
       } catch (e) {}
-      // remove stale entries
-      for (const r of (removed || [])) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
+      // remove stale entries (but preserve enrichCache for applied/hidden items so they don't reappear)
+      for (const r of (removed || [])) {
+        try {
+          const e = enrichCache[r] || null;
+          // Keep enrichCache entry if item was applied or hidden (prevents reappearance)
+          if (!e || (!e.applied && !e.hidden)) {
+            delete enrichCache[r];
+          }
+          delete parsedCache[r];
+        } catch (e) {}
+      }
       // process new/changed items
       for (const it of (toProcess || [])) doProcessParsedItem(it, session);
       // persist current cache map (currentCache is { files, dirs })
@@ -4417,8 +4426,17 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
       // incremental returns { toProcess, currentCache, removed }
       const { toProcess, currentCache, removed } = inc || {};
       changedItems = Array.isArray(toProcess) ? toProcess.slice(0) : [];
-      // remove stale entries
-      for (const r of (removed || [])) { try { delete enrichCache[r]; delete parsedCache[r]; } catch (e) {} }
+      // remove stale entries (but preserve enrichCache for applied/hidden items)
+      for (const r of (removed || [])) {
+        try {
+          const e = enrichCache[r] || null;
+          // Keep enrichCache entry if item was applied or hidden (prevents reappearance)
+          if (!e || (!e.applied && !e.hidden)) {
+            delete enrichCache[r];
+          }
+          delete parsedCache[r];
+        } catch (e) {}
+      }
       // do minimal parsing for new/changed entries
       for (const it of (toProcess || [])) doProcessParsedItem(it, req.session || {});
       // persist new cache and build items array from currentCache, prioritizing fresh items first
