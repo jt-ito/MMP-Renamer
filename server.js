@@ -4852,8 +4852,12 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
     try { appendLog(`TMDB_KEY_RESOLVED usingKey=${tmdbKeyEarly ? 'yes' : 'no'}`) } catch (e) {}
 
     // If we have a parsedCache entry and not forcing a provider refresh, return a lightweight enrichment
-    // unless an authoritative provider key is present — in that case perform an external lookup so provider results can override parsed.
-  if (!force && parsedCache[key] && !tmdbKeyEarly) {
+    // Check if we already have complete provider data - if so, use it even if TMDb key is present
+    // This prevents losing provider metadata (e.g., AniDB) when TMDb is also configured
+    const existingEnrichEarly = enrichCache[key] || null;
+    const hasCompleteProvider = existingEnrichEarly && existingEnrichEarly.provider && existingEnrichEarly.provider.renderedName;
+    
+  if (!force && parsedCache[key] && (!tmdbKeyEarly || hasCompleteProvider)) {
       const pc = parsedCache[key]
       const epTitle = (enrichCache[key] && enrichCache[key].provider && enrichCache[key].provider.episodeTitle) ? enrichCache[key].provider.episodeTitle : ''
       // build normalized entry - preserve existing provider block if it has a renderedName (preview)
