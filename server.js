@@ -301,10 +301,8 @@ function verifyCsrfToken(req, res, next) {
     if (expectedBuffer.length !== providedBuffer.length || !crypto.timingSafeEqual(expectedBuffer, providedBuffer)) {
       throw new Error('token mismatch');
     }
-    if (req.session) {
-      req.session.csrfToken = crypto.randomBytes(32).toString('hex');
-      res.locals.csrfToken = req.session.csrfToken;
-    }
+    // Don't regenerate CSRF token on every request - keep it stable for the session
+    // This prevents race conditions when multiple requests are in flight
     return next();
   } catch (err) {
     try { appendLog(`CSRF_REJECT path=${req && req.originalUrl ? req.originalUrl : req.url}`); } catch (e) {}
