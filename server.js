@@ -4471,7 +4471,25 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
 });
 
 app.get('/api/scan/:scanId', requireAuth, (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
-app.get('/api/scan/:scanId/items', requireAuth, (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); const offset = parseInt(req.query.offset || '0', 10); const limit = Math.min(parseInt(req.query.limit || '50', 10), 500); const slice = s.items.slice(offset, offset + limit); res.json({ items: slice, offset, limit, total: s.totalCount }); });
+app.get('/api/scan/:scanId/items', requireAuth, (req, res) => { 
+  const s = scans[req.params.scanId]; 
+  if (!s) return res.status(404).json({ error: 'scan not found' }); 
+  
+  // Filter out applied/hidden items
+  const filteredItems = (s.items || []).filter(it => {
+    try {
+      const k = canonicalize(it.canonicalPath);
+      const e = enrichCache[k] || null;
+      if (e && (e.hidden || e.applied)) return false;
+      return true;
+    } catch (err) { return true; }
+  });
+  
+  const offset = parseInt(req.query.offset || '0', 10); 
+  const limit = Math.min(parseInt(req.query.limit || '50', 10), 500); 
+  const slice = filteredItems.slice(offset, offset + limit); 
+  res.json({ items: slice, offset, limit, total: filteredItems.length }); 
+});
 
 // Return the most recent scan artifact optionally filtered by libraryId. Useful when client lost lastScanId.
 app.get('/api/scan/latest', requireAuth, (req, res) => {
@@ -4869,7 +4887,7 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
   const normalized = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: effectiveParsedBlock, provider: providerBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
   updateEnrichCache(key, normalized);
   try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
-      return res.json({ parsed: normalized.parsed || null, provider: normalized.provider || null })
+      return res.json({ enrichment: enrichCache[key] })
     }
 
     // otherwise perform authoritative external enrich (used by rescan/force)
