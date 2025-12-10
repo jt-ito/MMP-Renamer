@@ -5576,6 +5576,8 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     baseFolderName = stripEpisodeArtifactsForFolder(String(stripSeasonNumberSuffix(seriesBase)).trim());
   }
   if (!baseFolderName) baseFolderName = stripEpisodeArtifactsForFolder(path.basename(fromPath, path.extname(fromPath)) || rawTitle || title);
+  // Normalize folder name to consistent title-case to prevent duplicates from capitalization variance
+  try { baseFolderName = titleCase(baseFolderName); } catch (e) {}
   let sanitizedBaseFolder = sanitize(baseFolderName);
   if (!sanitizedBaseFolder) {
     const fallbackFolderTitle = stripEpisodeArtifactsForFolder(title) || stripEpisodeArtifactsForFolder(rawTitle) || 'Untitled';
@@ -6893,11 +6895,12 @@ app.get('/api/rename/hidden', requireAuth, requireAdmin, (req, res) => {
   }
 })
 
-// List duplicate items grouped by preview name (case-insensitive) OR ED2K hash
+// List duplicate items grouped by preview name (case-insensitive) OR ED2K hash OR series+season+episode
 app.get('/api/rename/duplicates', requireAuth, requireAdmin, (req, res) => {
   try {
     const groupsByPreview = new Map();
     const groupsByHash = new Map();
+    const groupsByMetadata = new Map();
 
     const derivePreviewName = (key, entry) => {
       try {
@@ -6907,6 +6910,18 @@ app.get('/api/rename/duplicates', requireAuth, requireAdmin, (req, res) => {
         // Do not fall back to parsed names here; duplicates should be based on provider-rendered previews only
         return path.basename(key);
       } catch (e) { return path.basename(key); }
+    };
+
+    const deriveMetadataKey = (entry) => {
+      try {
+        const normalized = normalizeEnrichEntry(entry || {}) || {};
+        const seriesTitle = normalized.seriesTitleExact || normalized.seriesTitle || normalized.title || null;
+        const season = normalized.season != null ? normalized.season : null;
+        const episode = normalized.episode != null ? normalized.episode : null;
+        if (!seriesTitle || season == null || episode == null) return null;
+        const seriesNorm = normalizeForCache(seriesTitle);
+        return `${seriesNorm}::S${String(season).padStart(2,'0')}E${String(episode).padStart(2,'0')}`;
+      } catch (e) { return null; }
     };
 
     const resolveHash = (key, entry) => {
@@ -6939,6 +6954,7 @@ app.get('/api/rename/duplicates', requireAuth, requireAdmin, (req, res) => {
       if (!entry) continue;
       const previewNameRaw = derivePreviewName(key, entry);
       const previewKey = previewNameRaw ? previewNameRaw.toLowerCase() : null;
+      const metadataKey = deriveMetadataKey(entry);
       const hash = resolveHash(key, entry);
       const parsed = entry.parsed || {};
       const provider = entry.provider || {};
@@ -6956,6 +6972,7 @@ app.get('/api/rename/duplicates', requireAuth, requireAdmin, (req, res) => {
 
       if (previewKey) addItem(groupsByPreview, previewKey, meta, { previewName: previewNameRaw || null, previewKey });
       if (hash) addItem(groupsByHash, hash, meta, { previewName: previewNameRaw || null });
+      if (metadataKey) addItem(groupsByMetadata, metadataKey, meta, { previewName: previewNameRaw || null });
     }
 
     const previewGroups = Array.from(groupsByPreview.values())
@@ -6969,8 +6986,11 @@ app.get('/api/rename/duplicates', requireAuth, requireAdmin, (req, res) => {
     const hashGroups = Array.from(groupsByHash.entries())
       .map(([k, v]) => ({ groupType: 'hash', hash: k, previewName: v.items[0]?.previewName || null, items: v.items }))
       .filter(g => g.items.length > 1);
+    const metadataGroups = Array.from(groupsByMetadata.entries())
+      .map(([k, v]) => ({ groupType: 'metadata', metadataKey: k, previewName: v.items[0]?.previewName || null, items: v.items }))
+      .filter(g => g.items.length > 1);
 
-    const deduped = [...previewGroups, ...hashGroups];
+    const deduped = [...previewGroups, ...hashGroups, ...metadataGroups];
     deduped.sort((a, b) => b.items.length - a.items.length || (a.previewName || '').localeCompare(b.previewName || ''));
     res.json({ groups: deduped, total: deduped.length, generatedAt: Date.now() });
   } catch (e) {

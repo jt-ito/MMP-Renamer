@@ -69,9 +69,10 @@ export default function Duplicates({ pushToast }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                   <div style={{ fontWeight: 600, fontSize: 15 }}>{group.previewName || '(no preview name)'}</div>
                   {group.hash ? <div style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--muted)' }}>{group.hash}</div> : null}
+                  {group.metadataKey ? <div style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--muted)' }}>{group.metadataKey}</div> : null}
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>Count: {group.items?.length || 0}</div>
                   <div style={{ fontSize: 12, color: 'var(--muted)', padding: '2px 6px', border: '1px solid var(--bg-600)', borderRadius: 6 }}>
-                    {group.groupType === 'hash' ? 'Hash match' : 'Preview name match'}
+                    {group.groupType === 'hash' ? 'Hash match' : (group.groupType === 'metadata' ? 'Series+Season+Episode match' : 'Preview name match')}
                   </div>
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8 }}>
