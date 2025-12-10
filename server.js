@@ -3742,7 +3742,10 @@ function renderProviderName(data, key, session) {
     const userTemplate = (session && session.username && users[session.username] && users[session.username].settings && users[session.username].settings.rename_template) ? users[session.username].settings.rename_template : null;
     const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
     // Prefer English title when available from AniList metadata
-    const rawTitle = data.seriesTitleEnglish || data.title || '';
+    let rawTitle = data.seriesTitleEnglish || data.title || '';
+    if (!data.seriesTitleEnglish && isLikelyRomajiTitle(rawTitle, data)) {
+      rawTitle = normalizeRomajiParticlesCase(rawTitle);
+    }
     // Final stripping guard: ensure season-like suffixes ("2nd Season", "Season 2", etc.)
     // are removed from the title used for rendering so top-level folders don't inherit
     // ordinal-season text. Use existing helper `stripSeasonNumberSuffix` for consistency.
@@ -6203,6 +6206,49 @@ function cleanTitleForRender(t, epLabel, epTitle) {
     s = s.replace(/^[\-–—:\s]+|[\-–—:\s]+$/g, '').trim();
   } catch (e) { /* best-effort */ }
   return s || String(t).trim();
+}
+
+function isLikelyRomajiTitle(title, meta) {
+  try {
+    if (!title) return false;
+    const t = String(title).trim();
+    if (!t) return false;
+    // If provider explicitly marked title source as romaji, trust it
+    if (meta && (meta.titleSource === 'romaji' || meta.anidbTitleSource === 'romaji')) return true;
+    // Heuristic: romaji often mixes lowercase particles like "wa", "no", "ni", etc. Capitalized particles are a sign of inconsistent casing
+    const particles = ['wa','no','ni','to','de','e','kara','made','ga','wo','ya','mo'];
+    const words = t.split(/\s+/);
+    const hasCapParticle = words.some((w, idx) => {
+      if (idx === 0) return false; // allow first word capitalization
+      const core = w.replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, '');
+      if (!core) return false;
+      return particles.includes(core.toLowerCase()) && /^[A-Z][a-z]+$/.test(core);
+    });
+    // If we see capitalized particles, treat as romaji needing normalization
+    if (hasCapParticle) return true;
+    // Additional hint: presence of long vowels/romaji-specific punctuation
+    if (/ou|uu|aa|ei/.test(t) && /\b[Ww]a\b/.test(t)) return true;
+    return false;
+  } catch (e) { return false; }
+}
+
+function normalizeRomajiParticlesCase(title) {
+  if (!title) return title;
+  const particles = new Set(['wa','no','ni','to','de','e','kara','made','ga','wo','ya','mo']);
+  const tokens = String(title).split(/(\s+)/); // keep whitespace separators
+  let seenWord = false;
+  const normalized = tokens.map(tok => {
+    if (!tok || /^(\s+)$/.test(tok)) return tok;
+    const core = tok.replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, '');
+    if (!core) return tok;
+    const lower = core.toLowerCase();
+    if (seenWord && particles.has(lower) && /^[A-Z][a-z]+$/.test(core)) {
+      return tok.replace(core, lower);
+    }
+    seenWord = true;
+    return tok;
+  });
+  return normalized.join('').replace(/\s{2,}/g, ' ').trim();
 }
 
 function determineIsMovie(meta) {
