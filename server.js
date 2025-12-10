@@ -6910,8 +6910,7 @@ app.get('/api/rename/duplicates', requireAuth, requireAdmin, (req, res) => {
         const normalized = normalizeEnrichEntry(entry || {}) || {};
         if (normalized.provider && normalized.provider.renderedName) return normalized.provider.renderedName;
         if (entry && entry.renderedName) return entry.renderedName;
-        if (normalized.parsed && normalized.parsed.parsedName) return normalized.parsed.parsedName;
-        if (normalized.parsed && normalized.parsed.title) return normalized.parsed.title;
+        // Do not fall back to parsed names here; duplicates should be based on provider-rendered previews only
         return path.basename(key);
       } catch (e) { return path.basename(key); }
     };
