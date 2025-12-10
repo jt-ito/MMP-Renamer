@@ -5568,12 +5568,26 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   // or numbered canonical titles (e.g. "Kaiju No. 8") are preserved as-is.
   // Prefer englishSeriesTitle (which already has Season suffix stripped) over meta.seriesTitleEnglish
   const seriesBase = englishSeriesTitle || (meta && (meta.seriesTitleEnglish || meta.seriesTitle)) || resolvedSeriesTitle || title || rawTitle || '';
+  // DEBUG: Check seriesBase before processing
+  if (seriesBase && (seriesBase.toLowerCase().includes('nee') || seriesBase.toLowerCase().includes('shiyo'))) {
+    try { appendLog(`FOLDER_NAME_DEBUG seriesBase=${seriesBase.slice(0,200)}`); } catch (e) {}
+  }
   const aliasResolved = getSeriesAlias(seriesBase);
   let baseFolderName;
   if (aliasResolved) {
     baseFolderName = stripEpisodeArtifactsForFolder(String(aliasResolved).trim());
+    if (baseFolderName && (baseFolderName.toLowerCase().includes('nee') || baseFolderName.toLowerCase().includes('shiyo'))) {
+      try { appendLog(`FOLDER_NAME_DEBUG after_stripEpisode_alias=${baseFolderName.slice(0,200)}`); } catch (e) {}
+    }
   } else {
-    baseFolderName = stripEpisodeArtifactsForFolder(String(stripSeasonNumberSuffix(seriesBase)).trim());
+    const afterSeasonStrip = stripSeasonNumberSuffix(seriesBase);
+    if (afterSeasonStrip && (afterSeasonStrip.toLowerCase().includes('nee') || afterSeasonStrip.toLowerCase().includes('shiyo'))) {
+      try { appendLog(`FOLDER_NAME_DEBUG after_stripSeason=${afterSeasonStrip.slice(0,200)}`); } catch (e) {}
+    }
+    baseFolderName = stripEpisodeArtifactsForFolder(String(afterSeasonStrip).trim());
+    if (baseFolderName && (baseFolderName.toLowerCase().includes('nee') || baseFolderName.toLowerCase().includes('shiyo'))) {
+      try { appendLog(`FOLDER_NAME_DEBUG after_stripEpisode=${baseFolderName.slice(0,200)}`); } catch (e) {}
+    }
   }
   if (!baseFolderName) baseFolderName = stripEpisodeArtifactsForFolder(path.basename(fromPath, path.extname(fromPath)) || rawTitle || title);
   // DEBUG: Track title truncation
@@ -6613,6 +6627,15 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
           resultItem.status = 'hardlinked';
           resultItem.to = toPath;
           appendLog(`HARDLINK_SUCCESS from=${fromPath} to=${toPath}`);
+
+          // Clear enrichCache for source file to force re-enrichment on next scan
+          try {
+            const sourceKey = canonicalize(fromPath);
+            if (enrichCache[sourceKey]) {
+              delete enrichCache[sourceKey];
+              appendLog(`HARDLINK_CLEAR_CACHE path=${fromPath}`);
+            }
+          } catch (e) { /* non-fatal */ }
 
           // Update Cache/DB
           try {
