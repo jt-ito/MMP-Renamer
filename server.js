@@ -6931,9 +6931,13 @@ app.get('/api/rename/duplicates', requireAuth, requireAdmin, (req, res) => {
       return h;
     };
 
-    const addItem = (map, groupKey, meta) => {
-      if (!map.has(groupKey)) map.set(groupKey, { key: groupKey, items: [] });
-      map.get(groupKey).items.push(meta);
+    const addItem = (map, groupKey, meta, ctx = {}) => {
+      if (!groupKey) return;
+      if (!map.has(groupKey)) map.set(groupKey, { key: groupKey, items: [], ...ctx });
+      const group = map.get(groupKey);
+      if (ctx.previewName && !group.previewName) group.previewName = ctx.previewName;
+      if (ctx.previewKey && !group.previewKey) group.previewKey = ctx.previewKey;
+      group.items.push(meta);
     };
 
     for (const key of Object.keys(enrichCache || {})) {
@@ -6956,12 +6960,17 @@ app.get('/api/rename/duplicates', requireAuth, requireAdmin, (req, res) => {
         parsedTitle: parsed.parsedName || parsed.title || null
       };
 
-      if (previewKey) addItem(groupsByPreview, previewKey, meta);
-      if (hash) addItem(groupsByHash, hash, meta);
+      if (previewKey) addItem(groupsByPreview, previewKey, meta, { previewName: previewNameRaw || null, previewKey });
+      if (hash) addItem(groupsByHash, hash, meta, { previewName: previewNameRaw || null });
     }
 
-    const previewGroups = Array.from(groupsByPreview.entries())
-      .map(([k, v]) => ({ groupType: 'preview', previewName: v.items[0]?.previewName || k, previewKey: k, items: v.items }))
+    const previewGroups = Array.from(groupsByPreview.values())
+      .map((v) => ({
+        groupType: 'preview',
+        previewName: v.previewName || v.items[0]?.previewName || v.previewKey || v.key,
+        previewKey: v.previewKey || v.key,
+        items: v.items
+      }))
       .filter(g => g.items.length > 1);
     const hashGroups = Array.from(groupsByHash.entries())
       .map(([k, v]) => ({ groupType: 'hash', hash: k, previewName: v.items[0]?.previewName || null, items: v.items }))
