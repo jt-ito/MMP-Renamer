@@ -5568,41 +5568,18 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   // or numbered canonical titles (e.g. "Kaiju No. 8") are preserved as-is.
   // Prefer englishSeriesTitle (which already has Season suffix stripped) over meta.seriesTitleEnglish
   const seriesBase = englishSeriesTitle || (meta && (meta.seriesTitleEnglish || meta.seriesTitle)) || resolvedSeriesTitle || title || rawTitle || '';
-  // DEBUG: Check seriesBase before processing
-  if (seriesBase && (seriesBase.toLowerCase().includes('nee') || seriesBase.toLowerCase().includes('shiyo'))) {
-    try { appendLog(`FOLDER_NAME_DEBUG seriesBase=${seriesBase.slice(0,200)}`); } catch (e) {}
-  }
   const aliasResolved = getSeriesAlias(seriesBase);
   let baseFolderName;
   if (aliasResolved) {
     baseFolderName = stripEpisodeArtifactsForFolder(String(aliasResolved).trim());
-    if (baseFolderName && (baseFolderName.toLowerCase().includes('nee') || baseFolderName.toLowerCase().includes('shiyo'))) {
-      try { appendLog(`FOLDER_NAME_DEBUG after_stripEpisode_alias=${baseFolderName.slice(0,200)}`); } catch (e) {}
-    }
   } else {
     const afterSeasonStrip = stripSeasonNumberSuffix(seriesBase);
-    if (afterSeasonStrip && (afterSeasonStrip.toLowerCase().includes('nee') || afterSeasonStrip.toLowerCase().includes('shiyo'))) {
-      try { appendLog(`FOLDER_NAME_DEBUG after_stripSeason=${afterSeasonStrip.slice(0,200)}`); } catch (e) {}
-    }
     baseFolderName = stripEpisodeArtifactsForFolder(String(afterSeasonStrip).trim());
-    if (baseFolderName && (baseFolderName.toLowerCase().includes('nee') || baseFolderName.toLowerCase().includes('shiyo'))) {
-      try { appendLog(`FOLDER_NAME_DEBUG after_stripEpisode=${baseFolderName.slice(0,200)}`); } catch (e) {}
-    }
   }
   if (!baseFolderName) baseFolderName = stripEpisodeArtifactsForFolder(path.basename(fromPath, path.extname(fromPath)) || rawTitle || title);
-  // DEBUG: Track title truncation
-  if (baseFolderName && (baseFolderName.toLowerCase().includes('nee') || baseFolderName.toLowerCase().includes('shiyo'))) {
-    try { appendLog(`FOLDER_NAME_DEBUG before_titleCase=${baseFolderName.slice(0,200)}`); } catch (e) {}
-  }
   // Normalize folder name to consistent title-case to prevent duplicates from capitalization variance
   try { baseFolderName = titleCase(baseFolderName); } catch (e) {}
-  if (baseFolderName && (baseFolderName.toLowerCase().includes('nee') || baseFolderName.toLowerCase().includes('shiyo'))) {
-    try { appendLog(`FOLDER_NAME_DEBUG after_titleCase=${baseFolderName.slice(0,200)}`); } catch (e) {}
-  }
   let sanitizedBaseFolder = sanitize(baseFolderName);
-  if (baseFolderName && (baseFolderName.toLowerCase().includes('nee') || baseFolderName.toLowerCase().includes('shiyo'))) {
-    try { appendLog(`FOLDER_NAME_DEBUG after_sanitize=${sanitizedBaseFolder.slice(0,200)} original=${baseFolderName.slice(0,200)}`); } catch (e) {}
-  }
   if (!sanitizedBaseFolder) {
     const fallbackFolderTitle = stripEpisodeArtifactsForFolder(title) || stripEpisodeArtifactsForFolder(rawTitle) || 'Untitled';
     sanitizedBaseFolder = sanitize(fallbackFolderTitle) || 'Untitled';
