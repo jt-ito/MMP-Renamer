@@ -9,6 +9,7 @@ import Register from './Register'
 import Users from './Users'
 import Notifications from './Notifications'
 import HiddenItems from './HiddenItems'
+import Duplicates from './Duplicates'
 
 function IconRefresh(){
   return (
@@ -2277,6 +2278,9 @@ export default function App() {
             {auth && auth.role === 'admin' && (
               <button className="btn-ghost" onClick={() => (window.location.hash = route === '#/hidden' ? '#/' : '#/hidden')}>Hidden items</button>
             )}
+            {auth && auth.role === 'admin' && (
+              <button className="btn-ghost" onClick={() => (window.location.hash = route === '#/duplicates' ? '#/' : '#/duplicates')}>Duplicates</button>
+            )}
             <button className="btn-ghost icon-only" title="Notifications" onClick={() => (window.location.hash = '#/notifications')}>
               {/* compact bell icon - centered and sized to avoid cropping */}
               <svg className="icon" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -2310,6 +2314,10 @@ export default function App() {
           ) : route === '#/hidden' ? (
             <section className="list">
               <HiddenItems pushToast={pushToast} />
+            </section>
+          ) : route === '#/duplicates' ? (
+            <section className="list">
+              <Duplicates pushToast={pushToast} />
             </section>
           ) : route === '#/notifications' ? (
             <section className="list">

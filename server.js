@@ -6899,6 +6899,84 @@ app.get('/api/rename/hidden', requireAuth, requireAdmin, (req, res) => {
   }
 })
 
+// List duplicate items grouped by preview name (case-insensitive) OR ED2K hash
+app.get('/api/rename/duplicates', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const groupsByPreview = new Map();
+    const groupsByHash = new Map();
+
+    const derivePreviewName = (key, entry) => {
+      try {
+        const normalized = normalizeEnrichEntry(entry || {}) || {};
+        if (normalized.provider && normalized.provider.renderedName) return normalized.provider.renderedName;
+        if (entry && entry.renderedName) return entry.renderedName;
+        if (normalized.parsed && normalized.parsed.parsedName) return normalized.parsed.parsedName;
+        if (normalized.parsed && normalized.parsed.title) return normalized.parsed.title;
+        return path.basename(key);
+      } catch (e) { return path.basename(key); }
+    };
+
+    const resolveHash = (key, entry) => {
+      let h = null;
+      try {
+        if (db) {
+          try {
+            const st = fs.existsSync(key) ? fs.statSync(key) : null;
+            h = db.getEd2kHash(key, st ? st.size : null) || null;
+          } catch (e) {}
+        }
+        if (!h && entry && entry.provider && entry.provider.raw && entry.provider.raw.ed2k) {
+          h = entry.provider.raw.ed2k;
+        }
+      } catch (e) { h = null; }
+      return h;
+    };
+
+    const addItem = (map, groupKey, meta) => {
+      if (!map.has(groupKey)) map.set(groupKey, { key: groupKey, items: [] });
+      map.get(groupKey).items.push(meta);
+    };
+
+    for (const key of Object.keys(enrichCache || {})) {
+      const entry = enrichCache[key];
+      if (!entry) continue;
+      const previewNameRaw = derivePreviewName(key, entry);
+      const previewKey = previewNameRaw ? previewNameRaw.toLowerCase() : null;
+      const hash = resolveHash(key, entry);
+      const parsed = entry.parsed || {};
+      const provider = entry.provider || {};
+      const meta = {
+        path: key,
+        basename: path.basename(key),
+        previewName: previewNameRaw || null,
+        applied: entry.applied === true,
+        hidden: entry.hidden === true,
+        appliedTo: entry.appliedTo || null,
+        appliedAt: entry.appliedAt || null,
+        providerTitle: provider.renderedName || provider.title || null,
+        parsedTitle: parsed.parsedName || parsed.title || null
+      };
+
+      if (previewKey) addItem(groupsByPreview, previewKey, meta);
+      if (hash) addItem(groupsByHash, hash, meta);
+    }
+
+    const previewGroups = Array.from(groupsByPreview.entries())
+      .map(([k, v]) => ({ groupType: 'preview', previewName: v.items[0]?.previewName || k, previewKey: k, items: v.items }))
+      .filter(g => g.items.length > 1);
+    const hashGroups = Array.from(groupsByHash.entries())
+      .map(([k, v]) => ({ groupType: 'hash', hash: k, previewName: v.items[0]?.previewName || null, items: v.items }))
+      .filter(g => g.items.length > 1);
+
+    const deduped = [...previewGroups, ...hashGroups];
+    deduped.sort((a, b) => b.items.length - a.items.length || (a.previewName || '').localeCompare(b.previewName || ''));
+    res.json({ groups: deduped, total: deduped.length, generatedAt: Date.now() });
+  } catch (e) {
+    try { appendLog(`DUPLICATES_LIST_FAIL err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
+    res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+})
+
 // Logs endpoints
 app.get('/api/logs/recent', requireAuth, requireAdmin, (req, res) => {
   try {
