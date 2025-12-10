@@ -5771,12 +5771,6 @@ function stripSeasonNumberSuffix(name) {
     // Match patterns like: "Season 2", "Season #2", "- Season 2", "(Season 2)", etc.
     s = s.replace(/\s*[\-–—:\/\(]?\s*(?:Season|Series|Part)\s*(?:#\s*)?(?:\b(?:[0-9]{1,2}|[IVXLC]+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|[0-9]{1,2}(?:st|nd|rd|th))\b)\s*\)?$/i, '').trim();
     
-    // Also handle trailing bare numbers when they look like ' Title 2' (but avoid removing years)
-    // Only strip bare trailing 1-2 digit numbers if the whole string doesn't also end in a 4-digit year
-    if (!/\b\d{4}\b$/.test(s)) {
-      s = s.replace(/\s*[\-–—:\/\(]?\s*(?:#\s*)?(?:\b(?:[0-9]{1,2}|[IVXLC]+)\b)\s*\)?$/i, '').trim();
-    }
-
     // Also strip patterns where the ordinal/number precedes the word 'Season', e.g. '2nd Season' or 'Second Season'
     try {
       // numeric ordinal before 'Season'
