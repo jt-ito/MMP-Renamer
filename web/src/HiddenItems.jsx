@@ -193,6 +193,7 @@ export default function HiddenItems({ pushToast }) {
                 <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--bg-600)' }}>
                   <th style={{ width: 36 }}></th>
                   <th style={{ padding: '12px 14px' }}>Name</th>
+                  <th style={{ padding: '12px 14px' }}>Source</th>
                   <th style={{ padding: '12px 14px' }}>Status</th>
                   <th style={{ padding: '12px 14px' }}>Applied to</th>
                   <th style={{ padding: '12px 14px' }}>Applied at</th>
@@ -227,6 +228,7 @@ export default function HiddenItems({ pushToast }) {
                         <div style={{ fontWeight: 500 }}>{displayName}</div>
                         <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{item.path}</div>
                       </td>
+                      <td style={{ padding: '12px 14px', fontSize: 13, color: 'var(--muted)' }}>{item.path}</td>
                       <td style={{ padding: '12px 14px' }}>{status}</td>
                       <td style={{ padding: '12px 14px', fontSize: 13 }}>{item.appliedTo || '-'}</td>
                       <td style={{ padding: '12px 14px' }}>{formatTimestamp(item.appliedAt)}</td>
