@@ -5746,8 +5746,9 @@ function stripEpisodeArtifactsForFolder(name) {
   try {
     let out = String(name || '').trim();
     if (!out) return out;
-    out = out.replace(/\s*[-–—:]+\s*S\d{1,2}E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
-    out = out.replace(/\s*[-–—:]+\s*E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
+    // Require word boundary before S to avoid matching words starting with S (like "Shiyo")
+    out = out.replace(/\s*[-–—:]+\s*\bS\d{1,2}E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
+    out = out.replace(/\s*[-–—:]+\s*\bE\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
     out = out.replace(/\s*[-–—:]+\s*Episode\s+\d+.*$/i, '');
     return out.trim();
   } catch (e) {
