@@ -5576,9 +5576,19 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     baseFolderName = stripEpisodeArtifactsForFolder(String(stripSeasonNumberSuffix(seriesBase)).trim());
   }
   if (!baseFolderName) baseFolderName = stripEpisodeArtifactsForFolder(path.basename(fromPath, path.extname(fromPath)) || rawTitle || title);
+  // DEBUG: Track title truncation
+  if (baseFolderName && (baseFolderName.toLowerCase().includes('nee') || baseFolderName.toLowerCase().includes('shiyo'))) {
+    try { appendLog(`FOLDER_NAME_DEBUG before_titleCase=${baseFolderName.slice(0,200)}`); } catch (e) {}
+  }
   // Normalize folder name to consistent title-case to prevent duplicates from capitalization variance
   try { baseFolderName = titleCase(baseFolderName); } catch (e) {}
+  if (baseFolderName && (baseFolderName.toLowerCase().includes('nee') || baseFolderName.toLowerCase().includes('shiyo'))) {
+    try { appendLog(`FOLDER_NAME_DEBUG after_titleCase=${baseFolderName.slice(0,200)}`); } catch (e) {}
+  }
   let sanitizedBaseFolder = sanitize(baseFolderName);
+  if (baseFolderName && (baseFolderName.toLowerCase().includes('nee') || baseFolderName.toLowerCase().includes('shiyo'))) {
+    try { appendLog(`FOLDER_NAME_DEBUG after_sanitize=${sanitizedBaseFolder.slice(0,200)} original=${baseFolderName.slice(0,200)}`); } catch (e) {}
+  }
   if (!sanitizedBaseFolder) {
     const fallbackFolderTitle = stripEpisodeArtifactsForFolder(title) || stripEpisodeArtifactsForFolder(rawTitle) || 'Untitled';
     sanitizedBaseFolder = sanitize(fallbackFolderTitle) || 'Untitled';
