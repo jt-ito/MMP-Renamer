@@ -5575,6 +5575,12 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   // Prefer englishSeriesTitle (which already has Season suffix stripped) over meta.seriesTitleEnglish
   // Fall back to romaji for AniDB titles when English is not available
   const seriesBase = englishSeriesTitle || (meta && (meta.seriesTitleEnglish || meta.seriesTitleRomaji || meta.seriesTitle)) || resolvedSeriesTitle || title || rawTitle || '';
+  // DEBUG: Track what contributes to seriesBase for Nee title
+  try {
+    if (fromPath && fromPath.includes('Nee')) {
+      appendLog(`SERIES_BASE_DEBUG path=${fromPath} englishSeriesTitle="${englishSeriesTitle || ''}" meta.seriesTitleEnglish="${meta && meta.seriesTitleEnglish || ''}" meta.seriesTitleRomaji="${meta && meta.seriesTitleRomaji || ''}" meta.seriesTitle="${meta && meta.seriesTitle || ''}" resolvedSeriesTitle="${resolvedSeriesTitle || ''}" title="${title || ''}" rawTitle="${rawTitle || ''}" FINAL_seriesBase="${seriesBase}"`);
+    }
+  } catch (e) {}
   // DEBUG: Track ellipsis preservation
   if (seriesBase && seriesBase.includes('...')) {
     try { appendLog(`ELLIPSIS_DEBUG seriesBase="${seriesBase}"`); } catch (e) {}
@@ -6629,10 +6635,11 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
           appendLog(`HARDLINK_SUCCESS from=${fromPath} to=${toPath}`);
 
           // Clear enrichCache for source file to force re-enrichment on next scan
+          // Preserve existing metadata so applied/hidden entries still show meaningful info
+          let prevEntry = null;
           try {
             const sourceKey = canonicalize(fromPath);
-            // Preserve existing metadata so applied/hidden entries still show meaningful info
-            const prevEntry = enrichCache[sourceKey] ? { ...enrichCache[sourceKey] } : null;
+            prevEntry = enrichCache[sourceKey] ? { ...enrichCache[sourceKey] } : null;
             if (enrichCache[sourceKey]) {
               delete enrichCache[sourceKey];
               appendLog(`HARDLINK_CLEAR_CACHE path=${fromPath}`);
