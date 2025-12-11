@@ -6660,6 +6660,37 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
                 db.setKV('enrichCache', enrichCache);
                 db.setKV('renderedIndex', renderedIndex);
             }
+
+            // Background: remove the applied item from active scans and emit a hide event
+            // so the UI hides it immediately without waiting for the next scan.
+            (async () => {
+              try {
+                const modifiedScanIds = [];
+                const scanIds = Object.keys(scans || {});
+                for (const sid of scanIds) {
+                  const s = scans[sid];
+                  if (!s || !Array.isArray(s.items)) continue;
+                  const before = s.items.length;
+                  s.items = s.items.filter(it => {
+                    try { return canonicalize(it.canonicalPath) !== fromKey; } catch (e) { return true; }
+                  });
+                  if (s.items.length !== before) {
+                    s.totalCount = s.items.length;
+                    modifiedScanIds.push(sid);
+                  }
+                }
+                if (modifiedScanIds.length) {
+                  try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); appendLog(`APPLY_HIDE_UPDATED_SCANS path=${fromPath} ids=${modifiedScanIds.join(',')}`); } catch (e) {}
+                }
+                try {
+                  hideEvents.push({ ts: Date.now(), path: fromKey, originalPath: fromPath, modifiedScanIds });
+                  try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
+                  if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
+                } catch (e) {}
+              } catch (e) {
+                appendLog(`APPLY_HIDE_BG_FAIL path=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+              }
+            })();
           } catch (dbErr) {
             appendLog(`DB_UPDATE_FAIL ${dbErr.message}`);
           }
