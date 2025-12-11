@@ -6625,6 +6625,8 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
           // Clear enrichCache for source file to force re-enrichment on next scan
           try {
             const sourceKey = canonicalize(fromPath);
+            // Preserve existing metadata so applied/hidden entries still show meaningful info
+            const prevEntry = enrichCache[sourceKey] ? { ...enrichCache[sourceKey] } : null;
             if (enrichCache[sourceKey]) {
               delete enrichCache[sourceKey];
               appendLog(`HARDLINK_CLEAR_CACHE path=${fromPath}`);
@@ -6635,6 +6637,16 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
           try {
             const fromKey = canonicalize(fromPath);
             enrichCache[fromKey] = enrichCache[fromKey] || {};
+            // Restore preserved metadata so applied entries aren't blank in UI
+            if (prevEntry) {
+              // Keep lightweight fields only
+              const preserveFields = ['provider','parsed','title','seriesTitle','seriesTitleEnglish','seriesTitleRomaji','seriesTitleExact','originalSeriesTitle','extraGuess','raw'];
+              for (const f of preserveFields) {
+                if (typeof prevEntry[f] !== 'undefined') {
+                  enrichCache[fromKey][f] = prevEntry[f];
+                }
+              }
+            }
             enrichCache[fromKey].applied = true;
             enrichCache[fromKey].hidden = true;
             enrichCache[fromKey].appliedAt = Date.now();
