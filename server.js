@@ -5567,7 +5567,8 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   // Allow an explicit alias to override the computed name (and skip stripping) so known sequels
   // or numbered canonical titles (e.g. "Kaiju No. 8") are preserved as-is.
   // Prefer englishSeriesTitle (which already has Season suffix stripped) over meta.seriesTitleEnglish
-  const seriesBase = englishSeriesTitle || (meta && (meta.seriesTitleEnglish || meta.seriesTitle)) || resolvedSeriesTitle || title || rawTitle || '';
+  // Fall back to romaji for AniDB titles when English is not available
+  const seriesBase = englishSeriesTitle || (meta && (meta.seriesTitleEnglish || meta.seriesTitleRomaji || meta.seriesTitle)) || resolvedSeriesTitle || title || rawTitle || '';
   // DEBUG: Track ellipsis preservation
   if (seriesBase && seriesBase.includes('...')) {
     try { appendLog(`ELLIPSIS_DEBUG seriesBase="${seriesBase}"`); } catch (e) {}
