@@ -5466,6 +5466,12 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     const fromPath = canonicalize(it.canonicalPath);
     const key = fromPath;
     const meta = enrichCache[fromPath] || {};
+  // DEBUG: Log metadata structure at preview time
+  try {
+    if (fromPath && fromPath.includes('Nee')) {
+      appendLog(`PREVIEW_META_DEBUG path=${fromPath} meta.title="${meta.title || ''}" meta.seriesTitle="${meta.seriesTitle || ''}" meta.seriesTitleRomaji="${meta.seriesTitleRomaji || ''}" meta.provider.title="${meta.provider && meta.provider.title || ''}" meta.parsed.title="${meta.parsed && meta.parsed.title || ''}"`);
+    }
+  } catch (e) {}
   // prefer enrichment title (provider token) -> parsed/title/basename
   const rawTitle = (meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath));
   // Prefer explicit year fields on the enrichment entry; if missing, attempt to extract a year
