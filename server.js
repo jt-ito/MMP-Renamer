@@ -5568,6 +5568,10 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   // or numbered canonical titles (e.g. "Kaiju No. 8") are preserved as-is.
   // Prefer englishSeriesTitle (which already has Season suffix stripped) over meta.seriesTitleEnglish
   const seriesBase = englishSeriesTitle || (meta && (meta.seriesTitleEnglish || meta.seriesTitle)) || resolvedSeriesTitle || title || rawTitle || '';
+  // DEBUG: Track ellipsis preservation
+  if (seriesBase && seriesBase.includes('...')) {
+    try { appendLog(`ELLIPSIS_DEBUG seriesBase="${seriesBase}"`); } catch (e) {}
+  }
   const aliasResolved = getSeriesAlias(seriesBase);
   let baseFolderName;
   if (aliasResolved) {
@@ -5577,9 +5581,21 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     baseFolderName = stripEpisodeArtifactsForFolder(String(afterSeasonStrip).trim());
   }
   if (!baseFolderName) baseFolderName = stripEpisodeArtifactsForFolder(path.basename(fromPath, path.extname(fromPath)) || rawTitle || title);
+  // DEBUG: Track ellipsis after stripEpisodeArtifacts
+  if (baseFolderName && baseFolderName.includes('...')) {
+    try { appendLog(`ELLIPSIS_DEBUG after_strip="${baseFolderName}"`); } catch (e) {}
+  }
   // Normalize folder name to consistent title-case to prevent duplicates from capitalization variance
   try { baseFolderName = titleCase(baseFolderName); } catch (e) {}
+  // DEBUG: Track ellipsis after titleCase
+  if (baseFolderName && baseFolderName.includes('...')) {
+    try { appendLog(`ELLIPSIS_DEBUG after_titleCase="${baseFolderName}"`); } catch (e) {}
+  }
   let sanitizedBaseFolder = sanitize(baseFolderName);
+  // DEBUG: Track ellipsis after sanitize
+  if (sanitizedBaseFolder && sanitizedBaseFolder.includes('...')) {
+    try { appendLog(`ELLIPSIS_DEBUG after_sanitize="${sanitizedBaseFolder}"`); } catch (e) {}
+  }
   if (!sanitizedBaseFolder) {
     const fallbackFolderTitle = stripEpisodeArtifactsForFolder(title) || stripEpisodeArtifactsForFolder(rawTitle) || 'Untitled';
     sanitizedBaseFolder = sanitize(fallbackFolderTitle) || 'Untitled';
