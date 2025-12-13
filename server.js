@@ -5466,12 +5466,6 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     const fromPath = canonicalize(it.canonicalPath);
     const key = fromPath;
     const meta = enrichCache[fromPath] || {};
-  // DEBUG: Log metadata structure at preview time
-  try {
-    if (fromPath && fromPath.includes('Nee')) {
-      appendLog(`PREVIEW_META_DEBUG path=${fromPath} meta.title="${meta.title || ''}" meta.seriesTitle="${meta.seriesTitle || ''}" meta.seriesTitleRomaji="${meta.seriesTitleRomaji || ''}" meta.provider.title="${meta.provider && meta.provider.title || ''}" meta.parsed.title="${meta.parsed && meta.parsed.title || ''}"`);
-    }
-  } catch (e) {}
   // prefer enrichment title (provider token) -> parsed/title/basename
   const rawTitle = (meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath));
   // Prefer explicit year fields on the enrichment entry; if missing, attempt to extract a year
@@ -5573,42 +5567,18 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   // Allow an explicit alias to override the computed name (and skip stripping) so known sequels
   // or numbered canonical titles (e.g. "Kaiju No. 8") are preserved as-is.
   // Prefer englishSeriesTitle (which already has Season suffix stripped) over meta.seriesTitleEnglish
-  // Fall back to romaji for AniDB titles when English is not available
-  const seriesBase = englishSeriesTitle || (meta && (meta.seriesTitleEnglish || meta.seriesTitleRomaji || meta.seriesTitle)) || resolvedSeriesTitle || title || rawTitle || '';
-  // DEBUG: Track what contributes to seriesBase for Nee title
-  try {
-    if (fromPath && fromPath.includes('Nee')) {
-      appendLog(`SERIES_BASE_DEBUG path=${fromPath} englishSeriesTitle="${englishSeriesTitle || ''}" meta.seriesTitleEnglish="${meta && meta.seriesTitleEnglish || ''}" meta.seriesTitleRomaji="${meta && meta.seriesTitleRomaji || ''}" meta.seriesTitle="${meta && meta.seriesTitle || ''}" resolvedSeriesTitle="${resolvedSeriesTitle || ''}" title="${title || ''}" rawTitle="${rawTitle || ''}" FINAL_seriesBase="${seriesBase}"`);
-    }
-  } catch (e) {}
-  // DEBUG: Track ellipsis preservation
-  if (seriesBase && seriesBase.includes('...')) {
-    try { appendLog(`ELLIPSIS_DEBUG seriesBase="${seriesBase}"`); } catch (e) {}
-  }
+  const seriesBase = englishSeriesTitle || (meta && (meta.seriesTitleEnglish || meta.seriesTitle)) || resolvedSeriesTitle || title || rawTitle || '';
   const aliasResolved = getSeriesAlias(seriesBase);
   let baseFolderName;
   if (aliasResolved) {
     baseFolderName = stripEpisodeArtifactsForFolder(String(aliasResolved).trim());
   } else {
-    const afterSeasonStrip = stripSeasonNumberSuffix(seriesBase);
-    baseFolderName = stripEpisodeArtifactsForFolder(String(afterSeasonStrip).trim());
+    baseFolderName = stripEpisodeArtifactsForFolder(String(stripSeasonNumberSuffix(seriesBase)).trim());
   }
   if (!baseFolderName) baseFolderName = stripEpisodeArtifactsForFolder(path.basename(fromPath, path.extname(fromPath)) || rawTitle || title);
-  // DEBUG: Track ellipsis after stripEpisodeArtifacts
-  if (baseFolderName && baseFolderName.includes('...')) {
-    try { appendLog(`ELLIPSIS_DEBUG after_strip="${baseFolderName}"`); } catch (e) {}
-  }
   // Normalize folder name to consistent title-case to prevent duplicates from capitalization variance
   try { baseFolderName = titleCase(baseFolderName); } catch (e) {}
-  // DEBUG: Track ellipsis after titleCase
-  if (baseFolderName && baseFolderName.includes('...')) {
-    try { appendLog(`ELLIPSIS_DEBUG after_titleCase="${baseFolderName}"`); } catch (e) {}
-  }
   let sanitizedBaseFolder = sanitize(baseFolderName);
-  // DEBUG: Track ellipsis after sanitize
-  if (sanitizedBaseFolder && sanitizedBaseFolder.includes('...')) {
-    try { appendLog(`ELLIPSIS_DEBUG after_sanitize="${sanitizedBaseFolder}"`); } catch (e) {}
-  }
   if (!sanitizedBaseFolder) {
     const fallbackFolderTitle = stripEpisodeArtifactsForFolder(title) || stripEpisodeArtifactsForFolder(rawTitle) || 'Untitled';
     sanitizedBaseFolder = sanitize(fallbackFolderTitle) || 'Untitled';
@@ -5776,9 +5746,8 @@ function stripEpisodeArtifactsForFolder(name) {
   try {
     let out = String(name || '').trim();
     if (!out) return out;
-    // Require word boundary before S to avoid matching words starting with S (like "Shiyo")
-    out = out.replace(/\s*[-–—:]+\s*\bS\d{1,2}E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
-    out = out.replace(/\s*[-–—:]+\s*\bE\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
+    out = out.replace(/\s*[-–—:]+\s*S\d{1,2}E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
+    out = out.replace(/\s*[-–—:]+\s*E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
     out = out.replace(/\s*[-–—:]+\s*Episode\s+\d+.*$/i, '');
     return out.trim();
   } catch (e) {
@@ -6634,32 +6603,10 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
           resultItem.to = toPath;
           appendLog(`HARDLINK_SUCCESS from=${fromPath} to=${toPath}`);
 
-          // Clear enrichCache for source file to force re-enrichment on next scan
-          // Preserve existing metadata so applied/hidden entries still show meaningful info
-          let prevEntry = null;
-          try {
-            const sourceKey = canonicalize(fromPath);
-            prevEntry = enrichCache[sourceKey] ? { ...enrichCache[sourceKey] } : null;
-            if (enrichCache[sourceKey]) {
-              delete enrichCache[sourceKey];
-              appendLog(`HARDLINK_CLEAR_CACHE path=${fromPath}`);
-            }
-          } catch (e) { /* non-fatal */ }
-
           // Update Cache/DB
           try {
             const fromKey = canonicalize(fromPath);
             enrichCache[fromKey] = enrichCache[fromKey] || {};
-            // Restore preserved metadata so applied entries aren't blank in UI
-            if (prevEntry) {
-              // Keep lightweight fields only
-              const preserveFields = ['provider','parsed','title','seriesTitle','seriesTitleEnglish','seriesTitleRomaji','seriesTitleExact','originalSeriesTitle','extraGuess','raw'];
-              for (const f of preserveFields) {
-                if (typeof prevEntry[f] !== 'undefined') {
-                  enrichCache[fromKey][f] = prevEntry[f];
-                }
-              }
-            }
             enrichCache[fromKey].applied = true;
             enrichCache[fromKey].hidden = true;
             enrichCache[fromKey].appliedAt = Date.now();
@@ -6685,37 +6632,6 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
                 db.setKV('enrichCache', enrichCache);
                 db.setKV('renderedIndex', renderedIndex);
             }
-
-            // Background: remove the applied item from active scans and emit a hide event
-            // so the UI hides it immediately without waiting for the next scan.
-            (async () => {
-              try {
-                const modifiedScanIds = [];
-                const scanIds = Object.keys(scans || {});
-                for (const sid of scanIds) {
-                  const s = scans[sid];
-                  if (!s || !Array.isArray(s.items)) continue;
-                  const before = s.items.length;
-                  s.items = s.items.filter(it => {
-                    try { return canonicalize(it.canonicalPath) !== fromKey; } catch (e) { return true; }
-                  });
-                  if (s.items.length !== before) {
-                    s.totalCount = s.items.length;
-                    modifiedScanIds.push(sid);
-                  }
-                }
-                if (modifiedScanIds.length) {
-                  try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); appendLog(`APPLY_HIDE_UPDATED_SCANS path=${fromPath} ids=${modifiedScanIds.join(',')}`); } catch (e) {}
-                }
-                try {
-                  hideEvents.push({ ts: Date.now(), path: fromKey, originalPath: fromPath, modifiedScanIds });
-                  try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
-                  if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
-                } catch (e) {}
-              } catch (e) {
-                appendLog(`APPLY_HIDE_BG_FAIL path=${fromPath} err=${e && e.message ? e.message : String(e)}`);
-              }
-            })();
           } catch (dbErr) {
             appendLog(`DB_UPDATE_FAIL ${dbErr.message}`);
           }
