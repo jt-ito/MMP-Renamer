@@ -1,18 +1,45 @@
-const express = require('express');
-const helmet = require('helmet');
-const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const { v4: uuidv4 } = require('uuid');
-const tvdb = require('./lib/tvdb');
-const chokidar = require('chokidar');
-const { lookupMetadataWithAniDB, getAniDBCredentials } = require('./lib/meta-providers');
-const bcrypt = require('bcryptjs');
-const cookieParser = require('cookie-parser');
-const cookieSession = require('cookie-session');
-const titleCase = require('./lib/title-case');
-const normalizeApostrophes = require('./lib/normalize-apostrophes');
+const express = require('express')
+const helmet = require('helmet')
+const cors = require('cors')
+const fs = require('fs')
+const path = require('path')
+const crypto = require('crypto')
+const { v4: uuidv4 } = require('uuid')
+const tvdb = require('./lib/tvdb')
+const chokidar = require('chokidar')
+const { lookupMetadataWithAniDB, getAniDBCredentials } = require('./lib/meta-providers')
+const bcrypt = require('bcryptjs')
+const cookieParser = require('cookie-parser')
+const cookieSession = require('cookie-session')
+const titleCase = require('./lib/title-case')
+const normalizeApostrophes = require('./lib/normalize-apostrophes')
+
+// Pre-compiled regex patterns for performance optimization
+const REGEX_NEWLINES = /[\r\n]+/g
+const REGEX_MULTI_SPACE = /\s{2,}/g
+const REGEX_WHITESPACE = /\s+/g
+const REGEX_APOSTROPHES = /[\u2018\u2019\u201A\u201B\u2032\u2035\u275B\u275C\uFF07]/g
+const REGEX_QUOTES = /[\u201C\u201D\u201E\u201F]/g
+const REGEX_DOT_UNDER_DASH_COLON = /[\._\-:]+/g
+const REGEX_NON_ALPHANUM_SPACE = /[^a-z0-9\s]/g
+const REGEX_NON_ALPHANUM = /[^a-z0-9]/g
+const REGEX_NON_ALPHANUM_SPLIT = /[^a-z0-9]+/
+const REGEX_SEASON_PARENS = /\s*\(\s*Season\s*\d{1,2}(?:st|nd|rd|th)?\s*\)\s*$/i
+const REGEX_SEASON_PARENS_YEAR = /\s*\(\s*Season\s*\d{1,2}(?:st|nd|rd|th)?\s*\)\s*(?=\d{4}\b)/i
+const REGEX_SEASON_SUFFIX = /\s+Season\s+\d{1,2}(?:st|nd|rd|th)?\s*$/i
+const REGEX_ORDINAL_SEASON = /\s+\d{1,2}(?:st|nd|rd|th)?\s+Season\s*$/i
+const REGEX_WORD_SEASON = /\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+Season\s*$/i
+const REGEX_SEASON_WORD = /\s+Season\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s*$/i
+const REGEX_WORD_SEASON_YEAR = /\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+Season\s*(?=\d{4}\b)/i
+const REGEX_SEASON_WORD_YEAR = /\s+Season\s+(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s*(?=\d{4}\b)/i
+const REGEX_SXX_SUFFIX = /\s+S\d{1,2}(?:E\d{1,3})?\s*$/i
+const REGEX_SXXEXX = /\bS\d{1,2}E\d{1,3}\b/ig
+const REGEX_SXX = /\bS\d{1,2}\b/ig
+const REGEX_EXX = /\bE\d{1,3}\b/ig
+const REGEX_NXN = /\b\d{1,2}x\d{1,3}\b/ig
+const REGEX_EPISODE = /\bEp(?:isode)?\.?\s*\d{1,3}\b/ig
+const REGEX_BRACKETS = /\[[^\]]+\]/g
+const REGEX_SEASON_KEYWORD = /\bseason\b/i
 
 // External API integration removed: TMDb-related helpers and https monkey-patch
 // have been disabled to eliminate external HTTP calls. The metaLookup function
@@ -77,13 +104,13 @@ function normalizeProviderId(value) {
 }
 
 function truncateProviderDetail(value, maxLength = 120) {
-  if (!value) return '';
+  if (!value) return ''
   const clean = String(value)
-    .replace(/[\r\n]+/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-  if (!clean.length) return '';
-  return clean.length > maxLength ? `${clean.slice(0, maxLength - 1)}…` : clean;
+    .replace(REGEX_NEWLINES, ' ')
+    .replace(REGEX_MULTI_SPACE, ' ')
+    .trim()
+  if (!clean.length) return ''
+  return clean.length > maxLength ? `${clean.slice(0, maxLength - 1)}…` : clean
 }
 
 function assignProviderSourceMetadata(target, meta = {}) {
