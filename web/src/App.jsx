@@ -173,12 +173,18 @@ export default function App() {
         nextOutputFolders = Array.isArray(detail.outputFolders) ? detail.outputFolders : []
       } else {
         const storedFolders = localStorage.getItem('output_folders')
+        console.log('[DEBUG] refreshOutputDestinations - localStorage output_folders:', storedFolders)
         if (storedFolders) {
           const parsed = JSON.parse(storedFolders)
+          console.log('[DEBUG] refreshOutputDestinations - parsed folders:', parsed)
           nextOutputFolders = Array.isArray(parsed) ? parsed : []
         }
       }
-    } catch (e) { nextOutputFolders = [] }
+    } catch (e) { 
+      console.error('[DEBUG] refreshOutputDestinations - error:', e)
+      nextOutputFolders = [] 
+    }
+    console.log('[DEBUG] refreshOutputDestinations - final nextOutputFolders:', nextOutputFolders)
     setAlternativeOutputFolders(nextOutputFolders)
     return { outputPath: nextOutputPath, outputFolders: nextOutputFolders }
   }, [])
@@ -1544,8 +1550,18 @@ export default function App() {
       ? refreshedFolders
       : (Array.isArray(alternativeOutputFolders) ? alternativeOutputFolders : [])
 
+    console.log('[DEBUG] selectOutputFolder - activeAlternatives:', activeAlternatives)
+    console.log('[DEBUG] selectOutputFolder - alternativeOutputFolders state:', alternativeOutputFolders)
+    console.log('[DEBUG] selectOutputFolder - refreshedFolders:', refreshedFolders)
+
     if (!activeAlternatives.length) {
       return { cancelled: false, path: null }
+    }
+
+    // Ensure the modal has the latest folder data by updating state immediately
+    // This fixes the bug where only the first alternative folder was shown
+    if (refreshedFolders && refreshedFolders.length > 0) {
+      setAlternativeOutputFolders(refreshedFolders)
     }
 
     return await new Promise((resolve) => {
@@ -2026,6 +2042,7 @@ export default function App() {
                   <span className="folder-option-icon" aria-hidden="true">&gt;</span>
                 </div>
               </button>
+              {console.log('[DEBUG] Rendering alternativeOutputFolders:', alternativeOutputFolders)}
               {alternativeOutputFolders && alternativeOutputFolders.map((folder, idx) => (
                 <button
                   type="button"
