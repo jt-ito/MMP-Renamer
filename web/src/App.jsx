@@ -137,7 +137,6 @@ export default function App() {
   const [metaPhase, setMetaPhase] = useState(false)
   const [metaProgress, setMetaProgress] = useState(0)
   const [theme, setTheme] = useLocalState('theme', 'dark')
-  const [applyAsFilename, setApplyAsFilename] = useLocalState('applyAsFilename', false)
   const [folderSelectorApplyAsFilename, setFolderSelectorApplyAsFilename] = useState(false)
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState({})
@@ -1547,7 +1546,7 @@ export default function App() {
 
   // Show folder selector modal and wait for user selection
   const selectOutputFolder = React.useCallback(async (paths = []) => {
-    setFolderSelectorApplyAsFilename(applyAsFilename)
+    setFolderSelectorApplyAsFilename(false)
     const refreshed = refreshOutputDestinations()
     const refreshedFolders = refreshed && Array.isArray(refreshed.outputFolders) ? refreshed.outputFolders : null
     const activeAlternatives = Array.isArray(refreshedFolders) && refreshedFolders.length
@@ -1559,7 +1558,7 @@ export default function App() {
     console.log('[DEBUG] selectOutputFolder - refreshedFolders:', refreshedFolders)
 
     if (!activeAlternatives.length) {
-      return { cancelled: false, path: null, applyAsFilename }
+      return { cancelled: false, path: null, applyAsFilename: false }
     }
 
     // Ensure the modal has the latest folder data by updating state immediately
@@ -1581,7 +1580,7 @@ export default function App() {
       })
       setFolderSelectorOpen(true)
     })
-  }, [alternativeOutputFolders, refreshOutputDestinations, applyAsFilename])
+  }, [alternativeOutputFolders, refreshOutputDestinations])
 
   async function applyRename(plans, dryRun = false, outputFolder = null) {
     // send plans to server; server will consult its configured scan_output_path to decide hardlink behavior
@@ -2045,7 +2044,6 @@ export default function App() {
                   setFolderSelectorOpen(false)
                   if (folderSelectorCallback) {
                     const choice = { cancelled: false, path: null, applyAsFilename: folderSelectorApplyAsFilename }
-                    setApplyAsFilename(folderSelectorApplyAsFilename)
                     folderSelectorCallback(choice)
                   }
                 }}
@@ -2068,7 +2066,6 @@ export default function App() {
                     setFolderSelectorOpen(false)
                     if (folderSelectorCallback) {
                       const choice = { cancelled: false, path: folder.path || '', applyAsFilename: folderSelectorApplyAsFilename }
-                      setApplyAsFilename(folderSelectorApplyAsFilename)
                       folderSelectorCallback(choice)
                     }
                   }}
@@ -2183,7 +2180,7 @@ export default function App() {
                           return
                         }
                         const selectedFolderPath = selection.path ?? null
-                        const useFilenameAsTitle = selection.applyAsFilename ?? applyAsFilename
+                        const useFilenameAsTitle = selection.applyAsFilename ?? false
                         
                         pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
                         const plans = await previewRename(selItems, undefined, { useFilenameAsTitle })
@@ -2663,7 +2660,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               try {
                 safeSetLoadingEnrich(prev => ({ ...prev, [it.canonicalPath]: true }))
                 let selectedFolderPath = null
-                let useFilenameAsTitle = applyAsFilename
+                let useFilenameAsTitle = false
                 if (selectOutputFolder) {
                   const selection = await selectOutputFolder([it.canonicalPath])
                   if (!selection || selection.cancelled) {
@@ -2671,7 +2668,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     return
                   }
                   selectedFolderPath = selection.path ?? null
-                  useFilenameAsTitle = selection.applyAsFilename ?? applyAsFilename
+                  useFilenameAsTitle = selection.applyAsFilename ?? false
                 }
 
                 const plans = await previewRename([it], undefined, { useFilenameAsTitle })
