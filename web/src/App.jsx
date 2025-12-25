@@ -121,7 +121,6 @@ export default function App() {
   const [folderSelectorOpen, setFolderSelectorOpen] = useState(false)
   const [folderSelectorCallback, setFolderSelectorCallback] = useState(null)
   const [folderSelectorPaths, setFolderSelectorPaths] = useState([])
-  const [folderSelectorApplyAsFilename, setFolderSelectorApplyAsFilename] = useState(applyAsFilename)
   const [defaultOutputPath, setDefaultOutputPath] = useState(() => {
     try { return localStorage.getItem('scan_output_path') || '' } catch (e) { return '' }
   })
@@ -139,6 +138,7 @@ export default function App() {
   const [metaProgress, setMetaProgress] = useState(0)
   const [theme, setTheme] = useLocalState('theme', 'dark')
   const [applyAsFilename, setApplyAsFilename] = useLocalState('applyAsFilename', false)
+  const [folderSelectorApplyAsFilename, setFolderSelectorApplyAsFilename] = useState(false)
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState({})
   const [searchQuery, setSearchQuery] = useState('')
