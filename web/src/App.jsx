@@ -137,6 +137,7 @@ export default function App() {
   const [metaPhase, setMetaPhase] = useState(false)
   const [metaProgress, setMetaProgress] = useState(0)
   const [theme, setTheme] = useLocalState('theme', 'dark')
+  const [applyAsFilename, setApplyAsFilename] = useLocalState('applyAsFilename', false)
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState({})
   const [searchQuery, setSearchQuery] = useState('')
@@ -1352,14 +1353,15 @@ export default function App() {
     return () => { try { if (typeof window !== 'undefined' && window.__CLIENT_ACTIVE_SEARCH__) window.__CLIENT_ACTIVE_SEARCH__ = false } catch (e) {} }
   }, [searchQuery])
 
-  async function previewRename(selected, template) {
-  // include configured output path from local storage (client preference), server will also accept its persisted setting
-  const outputPath = (() => { try { return localStorage.getItem('scan_output_path') || '' } catch { return '' } })()
-  const outputFolders = (() => { try { const stored = localStorage.getItem('output_folders'); return stored ? JSON.parse(stored) : [] } catch { return [] } })()
-  const effectiveTemplate = template || (() => { try { return localStorage.getItem('rename_template') || renameTemplate } catch { return renameTemplate } })()
-  // Only send canonicalPath to reduce payload size (server looks up enrichment from cache)
-  const itemPaths = selected.map(it => ({ canonicalPath: it.canonicalPath }))
-  const r = await axios.post(API('/rename/preview'), { items: itemPaths, template: effectiveTemplate, outputPath })
+  async function previewRename(selected, template, options = {}) {
+    const { useFilenameAsTitle = false } = options || {}
+    // include configured output path from local storage (client preference), server will also accept its persisted setting
+    const outputPath = (() => { try { return localStorage.getItem('scan_output_path') || '' } catch { return '' } })()
+    const outputFolders = (() => { try { const stored = localStorage.getItem('output_folders'); return stored ? JSON.parse(stored) : [] } catch { return [] } })()
+    const effectiveTemplate = template || (() => { try { return localStorage.getItem('rename_template') || renameTemplate } catch { return renameTemplate } })()
+    // Only send canonicalPath to reduce payload size (server looks up enrichment from cache)
+    const itemPaths = selected.map(it => ({ canonicalPath: it.canonicalPath }))
+    const r = await axios.post(API('/rename/preview'), { items: itemPaths, template: effectiveTemplate, outputPath, useFilenameAsTitle })
     return r.data.plans
   }
 
@@ -2167,7 +2169,7 @@ export default function App() {
                         const selectedFolderPath = selection.path ?? null
                         
                         pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
-                        const plans = await previewRename(selItems)
+                        const plans = await previewRename(selItems, undefined, { useFilenameAsTitle: applyAsFilename })
                         await applyRename(plans, false, selectedFolderPath)
                         setSelected(prev => {
                           if (!prev) return {}
@@ -2368,6 +2370,7 @@ export default function App() {
             <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
               previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
               selectOutputFolder={selectOutputFolder}
+              applyAsFilename={applyAsFilename} setApplyAsFilename={setApplyAsFilename}
               selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
               providerKey={providerKey} hideOne={hideOnePath}
               searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching} />
@@ -2455,7 +2458,7 @@ function LogsPanel({ logs, refresh, pushToast }) {
 
 const DEFAULT_ROW_HEIGHT = 90
 
-function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null }) {
+function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null, applyAsFilename = false, setApplyAsFilename = () => {} }) {
   const listRef = useRef(null)
   const containerRef = useRef(null)
   const [listHeight, setListHeight] = useState(700)
@@ -2643,7 +2646,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               let successShown = false
               try {
                 safeSetLoadingEnrich(prev => ({ ...prev, [it.canonicalPath]: true }))
-                const plans = await previewRename([it])
+                const plans = await previewRename([it], undefined, { useFilenameAsTitle: applyAsFilename })
 
                 let selectedFolderPath = null
                 if (selectOutputFolder) {
@@ -2716,6 +2719,17 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
           >
             {loading ? <Spinner/> : <><IconCopy/> <span>Hide</span></>}
           </button>
+          <div className="apply-option" style={{ marginTop: 6, fontSize: 12 }} onClick={ev => ev.stopPropagation()}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={!!applyAsFilename}
+                onChange={e => setApplyAsFilename(!!e.target.checked)}
+                onClick={ev => ev.stopPropagation()}
+              />
+              <span>Apply as filename</span>
+            </label>
+          </div>
         </div>
       </div>
     )

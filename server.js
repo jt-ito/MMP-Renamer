@@ -5407,8 +5407,9 @@ app.get('/api/scan/:scanId/progress', requireAuth, (req, res) => {
 
 // Rename preview (generate plan)
 app.post('/api/rename/preview', requireAuth, async (req, res) => {
-  const { items, template, outputPath } = req.body || {};
+  const { items, template, outputPath, useFilenameAsTitle } = req.body || {};
   if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'items required' });
+  const applyFilenameAsTitle = coerceBoolean(useFilenameAsTitle);
   // resolve effective output path: request overrides per-user setting -> server setting
   let effectiveOutput = '';
   try {
@@ -5509,6 +5510,7 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     }
   } catch (e) { year = '' }
     const ext = path.extname(fromPath);
+    const filenameBase = sanitize(path.basename(fromPath, ext));
   // support {year} token in template; choose effective template in order: request -> user setting -> server setting -> default
   const userTemplate = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.rename_template) ? users[req.session.username].settings.rename_template : null;
   const baseNameTemplate = template || userTemplate || serverSettings.rename_template || '{title}';
@@ -5631,7 +5633,9 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   // so previews include per-episode labels and the apply step won't collapse multiple
   // episodes into the same series-level filename.
   let nameWithoutExtRaw = null;
-  if (meta && meta.provider && meta.provider.renderedName) {
+  if (applyFilenameAsTitle && filenameBase) {
+    nameWithoutExtRaw = filenameBase;
+  } else if (meta && meta.provider && meta.provider.renderedName) {
     // strip extension and insert year if provider-rendered name is missing it
     let providerName = String(meta.provider.renderedName).replace(/\.[^/.]+$/, '');
     try {
@@ -5677,6 +5681,9 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
       .replace('{episode}', sanitize(episodeToken))
       .replace('{episodeRange}', sanitize(episodeRangeToken))
   .replace('{tmdbId}', sanitize(tmdbIdToken));
+  }
+  if (!nameWithoutExtRaw && filenameBase) {
+    nameWithoutExtRaw = filenameBase;
   }
     // Clean up common artifact patterns from empty tokens: stray parentheses, repeated separators
     const nameWithoutExt = String(nameWithoutExtRaw)
