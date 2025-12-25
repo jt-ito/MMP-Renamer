@@ -5444,6 +5444,10 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   
   // Check which items need enrichment and enrich them
   const enrichPromises = items.map(async (it) => {
+    // Skip enrichment entirely when using filename as title
+    if (applyFilenameAsTitle) {
+      return;
+    }
     const fromPath = canonicalize(it.canonicalPath);
     const existing = enrichCache[fromPath] || null;
     const prov = existing && existing.provider ? existing.provider : null;
@@ -5624,7 +5628,8 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   } catch (e) {}
   const titleFolder = folderYear ? `${sanitizedBaseFolder} (${folderYear})` : sanitizedBaseFolder;
   const seasonFolder = (!isMovie && meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
-  const folder = seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder);
+  // When using filename as title, skip series/season folder structure and place at output root
+  const folder = applyFilenameAsTitle ? effectiveOutput : (seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder));
 
   // Render template with preferência to enrichment-provided tokens.
   // If the provider returned a renderedName (TMDb), prefer that exact rendered string for preview.
