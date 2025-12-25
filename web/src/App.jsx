@@ -121,6 +121,7 @@ export default function App() {
   const [folderSelectorOpen, setFolderSelectorOpen] = useState(false)
   const [folderSelectorCallback, setFolderSelectorCallback] = useState(null)
   const [folderSelectorPaths, setFolderSelectorPaths] = useState([])
+  const [folderSelectorApplyAsFilename, setFolderSelectorApplyAsFilename] = useState(applyAsFilename)
   const [defaultOutputPath, setDefaultOutputPath] = useState(() => {
     try { return localStorage.getItem('scan_output_path') || '' } catch (e) { return '' }
   })
@@ -1546,6 +1547,7 @@ export default function App() {
 
   // Show folder selector modal and wait for user selection
   const selectOutputFolder = React.useCallback(async (paths = []) => {
+    setFolderSelectorApplyAsFilename(applyAsFilename)
     const refreshed = refreshOutputDestinations()
     const refreshedFolders = refreshed && Array.isArray(refreshed.outputFolders) ? refreshed.outputFolders : null
     const activeAlternatives = Array.isArray(refreshedFolders) && refreshedFolders.length
@@ -1557,7 +1559,7 @@ export default function App() {
     console.log('[DEBUG] selectOutputFolder - refreshedFolders:', refreshedFolders)
 
     if (!activeAlternatives.length) {
-      return { cancelled: false, path: null }
+      return { cancelled: false, path: null, applyAsFilename }
     }
 
     // Ensure the modal has the latest folder data by updating state immediately
@@ -1579,7 +1581,7 @@ export default function App() {
       })
       setFolderSelectorOpen(true)
     })
-  }, [alternativeOutputFolders, refreshOutputDestinations])
+  }, [alternativeOutputFolders, refreshOutputDestinations, applyAsFilename])
 
   async function applyRename(plans, dryRun = false, outputFolder = null) {
     // send plans to server; server will consult its configured scan_output_path to decide hardlink behavior
@@ -2014,6 +2016,16 @@ export default function App() {
         >
           <div className="modal-card folder-selector-modal" onClick={ev => ev.stopPropagation()}>
             <h3>Select Output Folder</h3>
+            <div style={{ position: 'absolute', top: 12, right: 12 }}>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                <input
+                  type="checkbox"
+                  checked={!!folderSelectorApplyAsFilename}
+                  onChange={e => setFolderSelectorApplyAsFilename(!!e.target.checked)}
+                />
+                <span>Apply as filename</span>
+              </label>
+            </div>
             <p className="folder-selector-subtitle">Choose where to apply the rename{folderSelectorPaths && folderSelectorPaths.length > 1 ? 's' : ''}.</p>
             {folderSelectorPaths && folderSelectorPaths.length ? (
               <div className="folder-selector-context">
@@ -2032,7 +2044,9 @@ export default function App() {
                 onClick={() => {
                   setFolderSelectorOpen(false)
                   if (folderSelectorCallback) {
-                    folderSelectorCallback({ cancelled: false, path: null })
+                    const choice = { cancelled: false, path: null, applyAsFilename: folderSelectorApplyAsFilename }
+                    setApplyAsFilename(folderSelectorApplyAsFilename)
+                    folderSelectorCallback(choice)
                   }
                 }}
               >
@@ -2053,7 +2067,9 @@ export default function App() {
                   onClick={() => {
                     setFolderSelectorOpen(false)
                     if (folderSelectorCallback) {
-                      folderSelectorCallback({ cancelled: false, path: folder.path || '' })
+                      const choice = { cancelled: false, path: folder.path || '', applyAsFilename: folderSelectorApplyAsFilename }
+                      setApplyAsFilename(folderSelectorApplyAsFilename)
+                      folderSelectorCallback(choice)
                     }
                   }}
                 >
@@ -2167,9 +2183,10 @@ export default function App() {
                           return
                         }
                         const selectedFolderPath = selection.path ?? null
+                        const useFilenameAsTitle = selection.applyAsFilename ?? applyAsFilename
                         
                         pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
-                        const plans = await previewRename(selItems, undefined, { useFilenameAsTitle: applyAsFilename })
+                        const plans = await previewRename(selItems, undefined, { useFilenameAsTitle })
                         await applyRename(plans, false, selectedFolderPath)
                         setSelected(prev => {
                           if (!prev) return {}
@@ -2370,7 +2387,6 @@ export default function App() {
             <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
               previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
               selectOutputFolder={selectOutputFolder}
-              applyAsFilename={applyAsFilename} setApplyAsFilename={setApplyAsFilename}
               selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
               providerKey={providerKey} hideOne={hideOnePath}
               searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching} />
@@ -2458,7 +2474,7 @@ function LogsPanel({ logs, refresh, pushToast }) {
 
 const DEFAULT_ROW_HEIGHT = 90
 
-function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null, applyAsFilename = false, setApplyAsFilename = () => {} }) {
+function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null }) {
   const listRef = useRef(null)
   const containerRef = useRef(null)
   const [listHeight, setListHeight] = useState(700)
@@ -2646,9 +2662,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               let successShown = false
               try {
                 safeSetLoadingEnrich(prev => ({ ...prev, [it.canonicalPath]: true }))
-                const plans = await previewRename([it], undefined, { useFilenameAsTitle: applyAsFilename })
-
                 let selectedFolderPath = null
+                let useFilenameAsTitle = applyAsFilename
                 if (selectOutputFolder) {
                   const selection = await selectOutputFolder([it.canonicalPath])
                   if (!selection || selection.cancelled) {
@@ -2656,7 +2671,10 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                     return
                   }
                   selectedFolderPath = selection.path ?? null
+                  useFilenameAsTitle = selection.applyAsFilename ?? applyAsFilename
                 }
+
+                const plans = await previewRename([it], undefined, { useFilenameAsTitle })
                 
                 pushToast && pushToast('Preview ready', 'Rename plan generated — applying now')
                 const res = await applyRename(plans, false, selectedFolderPath)
@@ -2719,17 +2737,6 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
           >
             {loading ? <Spinner/> : <><IconCopy/> <span>Hide</span></>}
           </button>
-          <div className="apply-option" style={{ marginTop: 6, fontSize: 12 }} onClick={ev => ev.stopPropagation()}>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={!!applyAsFilename}
-                onChange={e => setApplyAsFilename(!!e.target.checked)}
-                onClick={ev => ev.stopPropagation()}
-              />
-              <span>Apply as filename</span>
-            </label>
-          </div>
         </div>
       </div>
     )
