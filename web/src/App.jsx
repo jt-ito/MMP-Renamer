@@ -3,6 +3,8 @@ import axios from 'axios'
 import { VariableSizeList as List } from 'react-window'
 import normalizeEnrichResponse from './normalizeEnrichResponse'
 import ToastContainer from './components/Toast'
+import FilterBar from './components/FilterBar'
+import KeyboardShortcutsHelp from './components/KeyboardShortcutsHelp'
 import Settings from './Settings'
 import Login from './Login'
 import Register from './Register'
@@ -26,6 +28,12 @@ function IconCopy(){
 function IconApply(){
   return (
     <svg className="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+  )
+}
+
+function IconHelp(){
+  return (
+    <svg className="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6"/><path d="M12 17v-1m0-4c0-1.1.9-2 2-2s2 .9 2 2-.9 2-2 2h-2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
   )
 }
 
@@ -146,6 +154,18 @@ export default function App() {
   const searchTimeoutRef = React.useRef(null)
   const loadingMoreRef = React.useRef(false)
   const [enrichCache, setEnrichCache] = useLocalState('enrichCache', {})
+  // Filter state with localStorage persistence
+  const [filterSortOrder, setFilterSortOrder] = useLocalState('filterSortOrder', 'dateAdded-desc')
+  const [filterProvider, setFilterProvider] = useLocalState('filterProvider', 'all')
+  const [filterShowMode, setFilterShowMode] = useLocalState('filterShowMode', 'all')
+  const [showKeyboardHelp, setShowKeyboardHelp] = useState(false)
+  const [showScrollTop, setShowScrollTop] = useState(false)
+  
+  // Compute filtered and sorted items based on active filters
+  const filteredItems = React.useMemo(() => {
+    return applyFiltersAndSort(items)
+  }, [items, filterSortOrder, filterProvider, filterShowMode, enrichCache])
+  
   const [logs, setLogs] = useState('')
   const [toasts, setToasts] = useState([])
   const [loadingEnrich, setLoadingEnrich] = useState({})
@@ -544,6 +564,74 @@ export default function App() {
       // remove diacritics (Unicode marks) and non-word punctuation
       return n.replace(/\p{M}/gu, '').replace(/[\s\-_.()\[\],;:!"'\/\\]+/g, ' ').toLowerCase().trim()
     } catch (e) { return String(s).toLowerCase() }
+  }
+
+  // Apply filters and sorting to items
+  function applyFiltersAndSort(itemsToFilter) {
+    if (!itemsToFilter || !Array.isArray(itemsToFilter)) return []
+    
+    let filtered = itemsToFilter.slice()
+    
+    // Filter by provider source
+    if (filterProvider && filterProvider !== 'all') {
+      filtered = filtered.filter(it => {
+        const enriched = enrichCache && enrichCache[it.canonicalPath]
+        const norm = normalizeEnrichResponse(enriched)
+        const provider = norm?.provider
+        if (!provider) return false
+        const providerSource = (provider.source || provider.provider || '').toLowerCase()
+        return providerSource === filterProvider.toLowerCase()
+      })
+    }
+    
+    // Filter by show mode (with/without metadata, etc.)
+    if (filterShowMode && filterShowMode !== 'all') {
+      filtered = filtered.filter(it => {
+        const enriched = enrichCache && enrichCache[it.canonicalPath]
+        const norm = normalizeEnrichResponse(enriched)
+        if (filterShowMode === 'withMetadata') {
+          return norm && norm.provider && norm.provider.title
+        } else if (filterShowMode === 'withoutMetadata') {
+          return !norm || !norm.provider || !norm.provider.title
+        } else if (filterShowMode === 'parsedOnly') {
+          return norm && norm.parsed && (!norm.provider || !norm.provider.title)
+        }
+        return true
+      })
+    }
+    
+    // Sort items
+    if (filterSortOrder && filterSortOrder !== 'none') {
+      const origItems = itemsToFilter.slice()
+      filtered.sort((a, b) => {
+        const aPath = a.canonicalPath || ''
+        const bPath = b.canonicalPath || ''
+        const aEnriched = enrichCache && enrichCache[aPath]
+        const bEnriched = enrichCache && enrichCache[bPath]
+        const aNorm = normalizeEnrichResponse(aEnriched)
+        const bNorm = normalizeEnrichResponse(bEnriched)
+        
+        if (filterSortOrder === 'alphabetical-asc' || filterSortOrder === 'alphabetical-desc') {
+          // Sort by title (provider title > parsed title > basename)
+          const aTitle = (aNorm?.provider?.title || aNorm?.parsed?.title || aPath.split('/').pop() || '').toLowerCase()
+          const bTitle = (bNorm?.provider?.title || bNorm?.parsed?.title || bPath.split('/').pop() || '').toLowerCase()
+          const cmp = aTitle.localeCompare(bTitle)
+          return filterSortOrder === 'alphabetical-asc' ? cmp : -cmp
+        } else if (filterSortOrder === 'dateAdded-asc' || filterSortOrder === 'dateAdded-desc') {
+          // Sort by date added (newer items at bottom for asc, top for desc)
+          // Use item index as proxy for date added (items are added chronologically)
+          const aIndex = origItems.indexOf(a)
+          const bIndex = origItems.indexOf(b)
+          return filterSortOrder === 'dateAdded-asc' ? aIndex - bIndex : bIndex - aIndex
+        } else if (filterSortOrder === 'path-asc' || filterSortOrder === 'path-desc') {
+          const cmp = aPath.localeCompare(bPath)
+          return filterSortOrder === 'path-asc' ? cmp : -cmp
+        }
+        return 0
+      })
+    }
+    
+    return filtered
   }
 
   // Build a searchable text blob for an item from canonical path and any enrichment
@@ -1353,6 +1441,46 @@ export default function App() {
     return () => { try { if (typeof window !== 'undefined' && window.__CLIENT_ACTIVE_SEARCH__) window.__CLIENT_ACTIVE_SEARCH__ = false } catch (e) {} }
   }, [searchQuery])
 
+  // Keyboard shortcuts for selection management
+  React.useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Ignore if user is typing in an input field
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return
+      
+      // Escape key: exit select mode
+      if (e.key === 'Escape' && selectMode) {
+        e.preventDefault()
+        setSelectMode(false)
+        setSelected({})
+      }
+      
+      // Ctrl+A: Select all visible items
+      if (e.ctrlKey && e.key === 'a' && selectMode && filteredItems.length > 0) {
+        e.preventDefault()
+        const newSelected = {}
+        for (const it of filteredItems) {
+          if (it && it.canonicalPath) newSelected[it.canonicalPath] = true
+        }
+        setSelected(newSelected)
+      }
+      
+      // Ctrl+D: Deselect all
+      if (e.ctrlKey && e.key === 'd' && selectMode) {
+        e.preventDefault()
+        setSelected({})
+      }
+      
+      // ? or F1: Show keyboard shortcuts help
+      if (e.key === '?' || e.key === 'F1') {
+        e.preventDefault()
+        setShowKeyboardHelp(true)
+      }
+    }
+    
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [selectMode, filteredItems])
+
   async function previewRename(selected, template, options = {}) {
     const { useFilenameAsTitle = false } = options || {}
     // include configured output path from local storage (client preference), server will also accept its persisted setting
@@ -1743,6 +1871,15 @@ export default function App() {
     return () => window.removeEventListener('renamer:unapproved', handler)
   }, [])
 
+  // Scroll to top button visibility
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowScrollTop(window.scrollY > 300)
+    }
+    window.addEventListener('scroll', handleScroll)
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [])
+
   // On mount: if we have a persisted lastScanId, attempt to load it and populate allItems
   useEffect(() => {
     let mounted = true
@@ -2095,6 +2232,15 @@ export default function App() {
           </div>
         </div>
       ) : null}
+      {/* Progress bar at top of page */}
+      {(scanning || metaPhase) && (
+        <div className="top-progress-bar">
+          <div 
+            className="top-progress-bar-fill"
+            style={{ width: `${metaPhase ? metaProgress : scanProgress}%` }}
+          ></div>
+        </div>
+      )}
       <header>
         <h1 
           style={{cursor:'pointer'}} 
@@ -2302,7 +2448,31 @@ export default function App() {
                       title="Rescan selected"
                     >Rescan selected</button>
                 ) : null}
-              <button className={"btn-ghost" + (selectMode ? ' active' : '')} onClick={() => { setSelectMode(s => { if (s) setSelected({}); return !s }) }} title={selectMode ? 'Exit select mode' : 'Select items'}>Select</button>
+              <button className={"btn-ghost" + (selectMode ? ' active' : '')} onClick={() => { setSelectMode(s => { if (s) setSelected({}); return !s }) }} title={selectMode ? 'Exit select mode (Esc)' : 'Select items'}>Select</button>
+              {selectMode && filteredItems.length > 0 && (
+                <>
+                  <button 
+                    className="btn-ghost"
+                    onClick={() => {
+                      const newSelected = {}
+                      for (const it of filteredItems) {
+                        if (it && it.canonicalPath) newSelected[it.canonicalPath] = true
+                      }
+                      setSelected(newSelected)
+                    }}
+                    title="Select all visible items (Ctrl+A)"
+                  >
+                    Select All
+                  </button>
+                  <button 
+                    className="btn-ghost"
+                    onClick={() => setSelected({})}
+                    title="Deselect all items (Ctrl+D)"
+                  >
+                    Deselect All
+                  </button>
+                </>
+              )}
             </div>
             {/* Removed duplicate Rescan button per request; keep Refresh metadata */}
             <button className={"btn-ghost" + (!(lastLibraryId || (scanMeta && scanMeta.libraryId)) ? ' disabled' : '')} onClick={async () => { if (!(lastLibraryId || (scanMeta && scanMeta.libraryId))) return; pushToast && pushToast('Refresh','Server-side refresh started'); try { await refreshScan(scanMeta ? scanMeta.id : lastLibraryId); pushToast && pushToast('Refresh','Server-side refresh complete'); } catch (e) { pushToast && pushToast('Refresh','Refresh failed') } }} title="Refresh metadata server-side" disabled={!(lastLibraryId || (scanMeta && scanMeta.libraryId))}><IconRefresh/> <span>Refresh metadata</span></button>
@@ -2320,6 +2490,9 @@ export default function App() {
                 <path d="M12 22c1.1 0 2-.9 2-2H10c0 1.1.9 2 2 2z" />
                 <path d="M18 16v-5c0-3.07-1.63-5.64-4.5-6.32V4a1.5 1.5 0 10-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z" />
               </svg>
+            </button>
+            <button className="btn-ghost icon-only" title="Keyboard shortcuts (? or F1)" onClick={() => setShowKeyboardHelp(true)}>
+              <IconHelp/>
             </button>
             {auth && auth.role === 'admin' && <button className="btn-ghost" onClick={() => (window.location.hash = '#/users')}>Users</button>}
             {auth && <button className="btn-ghost" onClick={async ()=>{ try { await axios.post(API('/logout')); setAuth(null); pushToast && pushToast('Auth','Logged out') } catch { pushToast && pushToast('Auth','Logout failed') } }}>Logout</button>}
@@ -2372,16 +2545,62 @@ export default function App() {
               ) : (
                 <>
                   {scanMeta ? (
-                    <div>
-                      Found {total} items. Showing {items.length} loaded items.
-                      {metaPhase ? <span className="phase-label">Metadata refresh {metaProgress}%</span> : null}
-                    </div>
+                    <>
+                      <FilterBar
+                        sortOrder={filterSortOrder}
+                        onSortOrderChange={setFilterSortOrder}
+                        provider={filterProvider}
+                        onProviderChange={setFilterProvider}
+                        showMode={filterShowMode}
+                        onShowModeChange={setFilterShowMode}
+                        totalItems={items.length}
+                        filteredItems={filteredItems.length}
+                        onClearFilters={() => {
+                          setFilterSortOrder('dateAdded-desc')
+                          setFilterProvider('all')
+                          setFilterShowMode('all')
+                        }}
+                      />
+                      <div style={{ padding: '12px 20px', fontSize: '14px', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                        <div>
+                          Found {total} items. Showing {filteredItems.length} loaded items.
+                          {metaPhase ? <span className="phase-label">Metadata refresh {metaProgress}%</span> : null}
+                        </div>
+                        {filteredItems.length > 0 && (() => {
+                          const providerCounts = {}
+                          let withMetadata = 0
+                          let withoutMetadata = 0
+                          for (const it of filteredItems) {
+                            const enriched = enrichCache && enrichCache[it.canonicalPath]
+                            const norm = normalizeEnrichResponse(enriched)
+                            if (norm && norm.provider && norm.provider.title) {
+                              withMetadata++
+                              const source = (norm.provider.source || norm.provider.provider || 'unknown').toLowerCase()
+                              providerCounts[source] = (providerCounts[source] || 0) + 1
+                            } else {
+                              withoutMetadata++
+                            }
+                          }
+                          return (
+                            <div style={{ display: 'flex', gap: '12px', fontSize: '12px', flexWrap: 'wrap' }}>
+                              <span style={{ color: 'var(--accent-cta)', fontWeight: 600 }}>{withMetadata} with metadata</span>
+                              {withoutMetadata > 0 && <span style={{ color: 'var(--muted)' }}>{withoutMetadata} without</span>}
+                              {Object.entries(providerCounts).map(([provider, count]) => (
+                                <span key={provider} style={{ padding: '2px 8px', background: 'var(--bg-700)', borderRadius: '4px', fontWeight: 500 }}>
+                                  {provider.toUpperCase()}: {count}
+                                </span>
+                              ))}
+                            </div>
+                          )
+                        })()}
+                      </div>
+                    </>
                   ) : (
-                    <div>No scan yet</div>
+                    <div style={{ padding: '12px 20px' }}>No scan yet</div>
                   )}
 
                   {scanMeta ? (
-            <VirtualizedList items={items} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
+            <VirtualizedList items={filteredItems} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
               previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
               selectOutputFolder={selectOutputFolder}
               selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
@@ -2399,6 +2618,20 @@ export default function App() {
       </main>
 
       <ToastContainer toasts={toasts} remove={(id)=>setToasts(t=>t.filter(x=>x.id!==id))} />
+      <KeyboardShortcutsHelp isOpen={showKeyboardHelp} onClose={() => setShowKeyboardHelp(false)} />
+      
+      {/* Scroll to top button */}
+      {showScrollTop && (
+        <button
+          className="scroll-to-top"
+          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          title="Scroll to top"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="18 15 12 9 6 15"></polyline>
+          </svg>
+        </button>
+      )}
     </div>
   )
 }
@@ -2626,7 +2859,39 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
           </div>
         ) : <div style={{width:36}} /> }
         <div className="meta">
-          <div className="path" style={{marginTop:3}}>{it?.canonicalPath}</div>
+          <div className="path" style={{marginTop:3, display: 'flex', alignItems: 'center', gap: '8px'}}>
+            <span style={{flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis'}}>{it?.canonicalPath}</span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                try {
+                  navigator.clipboard.writeText(it?.canonicalPath || '')
+                  pushToast && pushToast('Copied', 'Path copied to clipboard')
+                } catch (err) {
+                  pushToast && pushToast('Copy Failed', 'Could not copy to clipboard')
+                }
+              }}
+              title="Copy path to clipboard"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--muted)',
+                cursor: 'pointer',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                fontSize: '11px',
+                opacity: 0.6,
+                transition: 'opacity 120ms ease'
+              }}
+              onMouseEnter={(e) => e.target.style.opacity = '1'}
+              onMouseLeave={(e) => e.target.style.opacity = '0.6'}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="9" y="9" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="2"/>
+                <rect x="4" y="4" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="2"/>
+              </svg>
+            </button>
+          </div>
            <div className="title">
             {primary}
             { (useSeason != null || useEpisode != null) ? (
