@@ -4,7 +4,8 @@ import { VariableSizeList as List } from 'react-window'
 import normalizeEnrichResponse from './normalizeEnrichResponse'
 import ToastContainer from './components/Toast'
 import FilterBar from './components/FilterBar'
-import KeyboardShortcutsHelp from './components/KeyboardShortcutsHelp'
+// Lazy load KeyboardShortcutsHelp since it's only shown on user action
+const KeyboardShortcutsHelp = React.lazy(() => import('./components/KeyboardShortcutsHelp'))
 import Settings from './Settings'
 import Login from './Login'
 import Register from './Register'
@@ -162,9 +163,13 @@ export default function App() {
   const [showScrollTop, setShowScrollTop] = useState(false)
   
   // Compute filtered and sorted items based on active filters
-  const filteredItems = React.useMemo(() => {
+  // Use useMemo to compute the filtered list
+  const computedFilteredItems = React.useMemo(() => {
     return applyFiltersAndSort(items)
   }, [items, filterSortOrder, filterProvider, filterShowMode, enrichCache])
+  
+  // Use deferred value to prevent flickering during filter changes
+  const filteredItems = React.useDeferredValue(computedFilteredItems)
   
   const [logs, setLogs] = useState('')
   const [toasts, setToasts] = useState([])
@@ -570,20 +575,29 @@ export default function App() {
   function applyFiltersAndSort(itemsToFilter) {
     if (!itemsToFilter || !Array.isArray(itemsToFilter)) return []
     
+    // Cache normalized responses to avoid repeated calls
+    const normCache = new Map()
+    const getNorm = (it) => {
+      if (!it?.canonicalPath) return null
+      if (normCache.has(it.canonicalPath)) return normCache.get(it.canonicalPath)
+      const enriched = enrichCache && enrichCache[it.canonicalPath]
+      const norm = normalizeEnrichResponse(enriched)
+      normCache.set(it.canonicalPath, norm)
+      return norm
+    }
+    
     let filtered = itemsToFilter.slice()
     
     // Always filter out hidden and applied items
     filtered = filtered.filter(it => {
-      const enriched = enrichCache && enrichCache[it.canonicalPath]
-      const norm = normalizeEnrichResponse(enriched)
+      const norm = getNorm(it)
       return !norm || (!norm.hidden && !norm.applied)
     })
     
     // Filter by provider source
     if (filterProvider && filterProvider !== 'all') {
       filtered = filtered.filter(it => {
-        const enriched = enrichCache && enrichCache[it.canonicalPath]
-        const norm = normalizeEnrichResponse(enriched)
+        const norm = getNorm(it)
         const provider = norm?.provider
         if (!provider) return false
         const providerSource = (provider.source || provider.provider || '').toLowerCase()
@@ -594,8 +608,7 @@ export default function App() {
     // Filter by show mode (with/without metadata, etc.)
     if (filterShowMode && filterShowMode !== 'all') {
       filtered = filtered.filter(it => {
-        const enriched = enrichCache && enrichCache[it.canonicalPath]
-        const norm = normalizeEnrichResponse(enriched)
+        const norm = getNorm(it)
         if (filterShowMode === 'withMetadata') {
           return norm && norm.provider && norm.provider.title
         } else if (filterShowMode === 'withoutMetadata') {
@@ -613,10 +626,8 @@ export default function App() {
       filtered.sort((a, b) => {
         const aPath = a.canonicalPath || ''
         const bPath = b.canonicalPath || ''
-        const aEnriched = enrichCache && enrichCache[aPath]
-        const bEnriched = enrichCache && enrichCache[bPath]
-        const aNorm = normalizeEnrichResponse(aEnriched)
-        const bNorm = normalizeEnrichResponse(bEnriched)
+        const aNorm = getNorm(a)
+        const bNorm = getNorm(b)
         
         if (filterSortOrder === 'alphabetical-asc' || filterSortOrder === 'alphabetical-desc') {
           // Sort by title (provider title > parsed title > basename)
@@ -2573,7 +2584,8 @@ export default function App() {
                           Found {total} items. Showing {filteredItems.length} loaded items.
                           {metaPhase ? <span className="phase-label">Metadata refresh {metaProgress}%</span> : null}
                         </div>
-                        {filteredItems.length > 0 && (() => {
+                        {React.useMemo(() => {
+                          if (filteredItems.length === 0) return null
                           const providerCounts = {}
                           let withMetadata = 0
                           let withoutMetadata = 0
@@ -2604,7 +2616,7 @@ export default function App() {
                               ))}
                             </div>
                           )
-                        })()}
+                        }, [filteredItems, enrichCache])}
                       </div>
                     </>
                   ) : (
@@ -2630,7 +2642,11 @@ export default function App() {
       </main>
 
       <ToastContainer toasts={toasts} remove={(id)=>setToasts(t=>t.filter(x=>x.id!==id))} />
-      <KeyboardShortcutsHelp isOpen={showKeyboardHelp} onClose={() => setShowKeyboardHelp(false)} />
+      {showKeyboardHelp && (
+        <React.Suspense fallback={null}>
+          <KeyboardShortcutsHelp isOpen={showKeyboardHelp} onClose={() => setShowKeyboardHelp(false)} />
+        </React.Suspense>
+      )}
       
       {/* Scroll to top button */}
       {showScrollTop && (
@@ -2764,7 +2780,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     }
   }
   
-  const Row = ({ index, style }) => {
+  // Memoize Row component to prevent unnecessary re-renders
+  const Row = React.useMemo(() => React.memo(({ index, style }) => {
   const it = items[index]
   const rawEnrichment = it ? enrichCache?.[it.canonicalPath] : null
   const enrichment = normalizeEnrichResponse(rawEnrichment)
@@ -3014,7 +3031,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
         </div>
       </div>
     )
-  }
+  }), [items, enrichCache, loadingEnrich, selectMode, selected, toggleSelect, enrichOne, previewRename, applyRename, pushToast, selectOutputFolder, hideOne, setItemSize])
 
   function onItemsRendered(info) {
     const visibleStopIndex = info.visibleStopIndex ?? info.visibleRange?.[1]

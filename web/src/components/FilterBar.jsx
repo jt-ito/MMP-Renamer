@@ -26,7 +26,7 @@ const SHOW_MODE_OPTIONS = [
   { value: 'parsedOnly', label: 'Parsed Only' }
 ]
 
-export default function FilterBar({
+const FilterBar = React.memo(function FilterBar({
   sortOrder,
   onSortOrderChange,
   provider,
@@ -150,4 +150,6 @@ export default function FilterBar({
       </div>
     </div>
   )
-}
+})
+
+export default FilterBar
