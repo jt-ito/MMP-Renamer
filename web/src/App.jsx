@@ -2780,8 +2780,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     }
   }
   
-  // Memoize Row component to prevent unnecessary re-renders
-  const Row = React.memo(({ index, style }) => {
+  const Row = ({ index, style }) => {
   const it = items[index]
   const rawEnrichment = it ? enrichCache?.[it.canonicalPath] : null
   const enrichment = normalizeEnrichResponse(rawEnrichment)
@@ -3031,7 +3030,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
         </div>
       </div>
     )
-  })
+  }
 
   function onItemsRendered(info) {
     const visibleStopIndex = info.visibleStopIndex ?? info.visibleRange?.[1]
