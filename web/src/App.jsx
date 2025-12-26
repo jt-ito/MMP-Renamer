@@ -572,6 +572,13 @@ export default function App() {
     
     let filtered = itemsToFilter.slice()
     
+    // Always filter out hidden and applied items
+    filtered = filtered.filter(it => {
+      const enriched = enrichCache && enrichCache[it.canonicalPath]
+      const norm = normalizeEnrichResponse(enriched)
+      return !norm || (!norm.hidden && !norm.applied)
+    })
+    
     // Filter by provider source
     if (filterProvider && filterProvider !== 'all') {
       filtered = filtered.filter(it => {
@@ -2575,8 +2582,13 @@ export default function App() {
                             const norm = normalizeEnrichResponse(enriched)
                             if (norm && norm.provider && norm.provider.title) {
                               withMetadata++
-                              const source = (norm.provider.source || norm.provider.provider || 'unknown').toLowerCase()
-                              providerCounts[source] = (providerCounts[source] || 0) + 1
+                              // Extract just the provider type without title info
+                              let source = (norm.provider.source || norm.provider.provider || 'unknown')
+                              // Remove anything in parentheses (title info) and trim
+                              source = source.replace(/\s*\([^)]*\)/g, '').trim()
+                              // Extract base provider name (e.g., "ANILIST" from "ANILIST + TVDB")
+                              const baseProvider = source.split(/\s*\+\s*/)[0].toLowerCase()
+                              providerCounts[baseProvider] = (providerCounts[baseProvider] || 0) + 1
                             } else {
                               withoutMetadata++
                             }
@@ -2586,7 +2598,7 @@ export default function App() {
                               <span style={{ color: 'var(--accent-cta)', fontWeight: 600 }}>{withMetadata} with metadata</span>
                               {withoutMetadata > 0 && <span style={{ color: 'var(--muted)' }}>{withoutMetadata} without</span>}
                               {Object.entries(providerCounts).map(([provider, count]) => (
-                                <span key={provider} style={{ padding: '2px 8px', background: 'var(--bg-700)', borderRadius: '4px', fontWeight: 500 }}>
+                                <span key={provider} className="item-stats-badge">
                                   {provider.toUpperCase()}: {count}
                                 </span>
                               ))}
