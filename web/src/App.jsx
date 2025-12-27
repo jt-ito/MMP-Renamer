@@ -49,6 +49,53 @@ const PROVIDER_LABELS = {
   kitsu: 'Kitsu'
 }
 
+function ProviderStats({ filteredItems, enrichCache, total, metaPhase, metaProgress }) {
+  const stats = React.useMemo(() => {
+    if (filteredItems.length === 0) return null
+    const providerCounts = {}
+    let withMetadata = 0
+    let withoutMetadata = 0
+    for (const it of filteredItems) {
+      const enriched = enrichCache && enrichCache[it.canonicalPath]
+      const norm = normalizeEnrichResponse(enriched)
+      if (norm && norm.provider && norm.provider.title) {
+        withMetadata++
+        // Extract just the provider type without title info
+        let source = (norm.provider.source || norm.provider.provider || 'unknown')
+        // Remove anything in parentheses (title info) and trim
+        source = source.replace(/\s*\([^)]*\)/g, '').trim()
+        // Extract base provider name (e.g., "ANILIST" from "ANILIST + TVDB")
+        const baseProvider = source.split(/\s*\+\s*/)[0].toLowerCase()
+        providerCounts[baseProvider] = (providerCounts[baseProvider] || 0) + 1
+      } else {
+        withoutMetadata++
+      }
+    }
+    return { providerCounts, withMetadata, withoutMetadata }
+  }, [filteredItems, enrichCache])
+
+  return (
+    <div style={{ padding: '12px 20px', fontSize: '14px', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+      <div>
+        Found {total} items. Showing {filteredItems.length} loaded items.
+        {metaPhase ? <span className="phase-label">Metadata refresh {metaProgress}%</span> : null}
+      </div>
+      {stats && (
+        <div style={{ display: 'flex', gap: '12px', fontSize: '12px', flexWrap: 'wrap' }}>
+          <span style={{ color: 'var(--accent-cta)', fontWeight: 600 }}>{stats.withMetadata} with metadata</span>
+          {stats.withoutMetadata > 0 && <span style={{ color: 'var(--muted)' }}>{stats.withoutMetadata} without</span>}
+          {Object.entries(stats.providerCounts).map(([provider, count]) => (
+            <span key={provider} className="item-stats-badge">
+              {provider.toUpperCase()}: {count}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 axios.defaults.withCredentials = true
 
 function useLocalState(key, initial) {
@@ -2579,45 +2626,13 @@ export default function App() {
                           setFilterShowMode('all')
                         }}
                       />
-                      <div style={{ padding: '12px 20px', fontSize: '14px', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-                        <div>
-                          Found {total} items. Showing {filteredItems.length} loaded items.
-                          {metaPhase ? <span className="phase-label">Metadata refresh {metaProgress}%</span> : null}
-                        </div>
-                        {React.useMemo(() => {
-                          if (filteredItems.length === 0) return null
-                          const providerCounts = {}
-                          let withMetadata = 0
-                          let withoutMetadata = 0
-                          for (const it of filteredItems) {
-                            const enriched = enrichCache && enrichCache[it.canonicalPath]
-                            const norm = normalizeEnrichResponse(enriched)
-                            if (norm && norm.provider && norm.provider.title) {
-                              withMetadata++
-                              // Extract just the provider type without title info
-                              let source = (norm.provider.source || norm.provider.provider || 'unknown')
-                              // Remove anything in parentheses (title info) and trim
-                              source = source.replace(/\s*\([^)]*\)/g, '').trim()
-                              // Extract base provider name (e.g., "ANILIST" from "ANILIST + TVDB")
-                              const baseProvider = source.split(/\s*\+\s*/)[0].toLowerCase()
-                              providerCounts[baseProvider] = (providerCounts[baseProvider] || 0) + 1
-                            } else {
-                              withoutMetadata++
-                            }
-                          }
-                          return (
-                            <div style={{ display: 'flex', gap: '12px', fontSize: '12px', flexWrap: 'wrap' }}>
-                              <span style={{ color: 'var(--accent-cta)', fontWeight: 600 }}>{withMetadata} with metadata</span>
-                              {withoutMetadata > 0 && <span style={{ color: 'var(--muted)' }}>{withoutMetadata} without</span>}
-                              {Object.entries(providerCounts).map(([provider, count]) => (
-                                <span key={provider} className="item-stats-badge">
-                                  {provider.toUpperCase()}: {count}
-                                </span>
-                              ))}
-                            </div>
-                          )
-                        }, [filteredItems, enrichCache])}
-                      </div>
+                      <ProviderStats 
+                        filteredItems={filteredItems} 
+                        enrichCache={enrichCache} 
+                        total={total} 
+                        metaPhase={metaPhase} 
+                        metaProgress={metaProgress} 
+                      />
                     </>
                   ) : (
                     <div style={{ padding: '12px 20px' }}>No scan yet</div>
