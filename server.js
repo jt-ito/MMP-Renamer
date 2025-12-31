@@ -863,7 +863,10 @@ function normalizeEnrichEntry(entry) {
                               (typeof srcObj.provider === 'string' ? srcObj.provider : null));
     }
     
-    out.title = out.title || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
+    // For multi-part movies, prefer parsed title (which includes "Part X") over provider title
+    const parsedTitle = out.parsed && out.parsed.title;
+    const isMultiPartMovie = parsedTitle && /\bPart\s+\d{1,2}\b/i.test(parsedTitle);
+    out.title = out.title || (isMultiPartMovie ? parsedTitle : (out.provider && out.provider.title)) || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
   out.seriesTitle = entry.seriesTitle || (extraSource && extraSource.seriesTitle) || out.seriesTitle || out.title || null;
   out.seriesTitleExact = entry.seriesTitleExact || (extraSource && (extraSource.seriesTitleExact || extraSource.originalSeriesTitle)) || out.seriesTitleExact || null;
   out.seriesTitleEnglish = entry.seriesTitleEnglish || (extraSource && extraSource.seriesTitleEnglish) || (entry.provider && entry.provider.seriesTitleEnglish) || out.seriesTitleEnglish || null;
