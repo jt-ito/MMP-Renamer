@@ -208,6 +208,8 @@ export default function App() {
   const [filterShowMode, setFilterShowMode] = useLocalState('filterShowMode', 'all')
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false)
   const [showScrollTop, setShowScrollTop] = useState(false)
+  // Context menu state for rescan buttons
+  const [contextMenu, setContextMenu] = useState(null)
   
   // Compute filtered and sorted items based on active filters
   // Use useMemo to compute the filtered list
@@ -273,6 +275,15 @@ export default function App() {
       window.removeEventListener('renamer:settings-output-folders', handleCustom)
     }
   }, [refreshOutputDestinations])
+
+  // Close context menu on click outside
+  useEffect(() => {
+    const handleClickOutside = () => setContextMenu(null)
+    if (contextMenu) {
+      document.addEventListener('click', handleClickOutside)
+      return () => document.removeEventListener('click', handleClickOutside)
+    }
+  }, [contextMenu])
 
   // Debug flag: enable verbose debug logs by setting window.__RENAMER_DEBUG__ = true
   const DEBUG = (typeof window !== 'undefined' && !!window.__RENAMER_DEBUG__) || false
@@ -1138,7 +1149,7 @@ export default function App() {
     }
   }
 
-  async function enrichOne(item, force = false) {
+  async function enrichOne(item, force = false, skipAnimeProviders = false) {
     if (!item) return
     const key = item.canonicalPath
     try {
@@ -1179,7 +1190,7 @@ export default function App() {
 
     // POST to /enrich to generate/update enrichment (force bypasses cache check)
   if (force) safeSetLoadingEnrich(l => ({ ...l, [key]: { status: 'Computing hash & fetching metadata...', stage: 'fetching' } }))
-  const w = await axios.post(API('/enrich'), { path: key, tmdb_api_key: providerKey || undefined, force: force || undefined })
+  const w = await axios.post(API('/enrich'), { path: key, tmdb_api_key: providerKey || undefined, force: force || undefined, skipAnimeProviders: skipAnimeProviders || undefined })
       if (w.data) {
         const norm = normalizeEnrichResponse(w.data.enrichment || w.data)
         if (norm) setEnrichCache(prev => ({ ...prev, [key]: norm }))
@@ -2510,6 +2521,17 @@ export default function App() {
                           pushToast && pushToast('Rescan', 'Rescan failed')
                         }
                       }}
+                      onContextMenu={(ev) => {
+                        ev.preventDefault()
+                        ev.stopPropagation?.()
+                        if (selectedHasLoading) return
+                        setContextMenu({
+                          x: ev.clientX,
+                          y: ev.clientY,
+                          type: 'bulk',
+                          selectedPaths: [...selectedPathsList]
+                        })
+                      }}
                       title="Rescan selected"
                     >Rescan selected</button>
                 ) : null}
@@ -2674,6 +2696,105 @@ export default function App() {
             <polyline points="18 15 12 9 6 15"></polyline>
           </svg>
         </button>
+      )}
+
+      {/* Context menu for rescan buttons */}
+      {contextMenu && (
+        <div
+          className="context-menu"
+          style={{
+            left: contextMenu.x,
+            top: contextMenu.y
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="context-menu-items">
+            <button
+              className="context-menu-item"
+              onClick={async (e) => {
+                e.stopPropagation()
+                setContextMenu(null)
+                if (contextMenu.type === 'single') {
+                  pushToast && pushToast('Rescan', 'Refreshing metadata (TV/Movie mode)...')
+                  await enrichOne(contextMenu.item, true, true)
+                } else if (contextMenu.type === 'bulk') {
+                  const selectedPaths = contextMenu.selectedPaths
+                  if (!selectedPaths.length) return
+                  pushToast && pushToast('Rescan', `Rescanning ${selectedPaths.length} items (TV/Movie mode)...`)
+                  const loadingMap = {}
+                  for (const p of selectedPaths) loadingMap[p] = true
+                  safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
+                  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+                  const RATE_DELAY_MS = 350
+                  let successCount = 0
+                  const failed = []
+                  for (let i = 0; i < selectedPaths.length; i++) {
+                    const path = selectedPaths[i]
+                    try {
+                      const result = await enrichOne({ canonicalPath: path }, true, true)
+                      if (result) successCount += 1
+                      else failed.push(path)
+                    } catch (err) {
+                      failed.push(path)
+                    }
+                    if (i < selectedPaths.length - 1) await sleep(RATE_DELAY_MS)
+                  }
+                  safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+                  const failureCount = failed.length
+                  if (failureCount) {
+                    pushToast && pushToast('Rescan', `Rescanned ${successCount}/${selectedPaths.length} items (${failureCount} failed).`)
+                  } else {
+                    pushToast && pushToast('Rescan', `Rescanned ${selectedPaths.length} items.`)
+                  }
+                }
+              }}
+            >
+              TV/Movie
+            </button>
+            <button
+              className="context-menu-item"
+              onClick={async (e) => {
+                e.stopPropagation()
+                setContextMenu(null)
+                if (contextMenu.type === 'single') {
+                  pushToast && pushToast('Rescan', 'Refreshing metadata (Anime mode)...')
+                  await enrichOne(contextMenu.item, true, false)
+                } else if (contextMenu.type === 'bulk') {
+                  const selectedPaths = contextMenu.selectedPaths
+                  if (!selectedPaths.length) return
+                  pushToast && pushToast('Rescan', `Rescanning ${selectedPaths.length} items (Anime mode)...`)
+                  const loadingMap = {}
+                  for (const p of selectedPaths) loadingMap[p] = true
+                  safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
+                  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+                  const RATE_DELAY_MS = 350
+                  let successCount = 0
+                  const failed = []
+                  for (let i = 0; i < selectedPaths.length; i++) {
+                    const path = selectedPaths[i]
+                    try {
+                      const result = await enrichOne({ canonicalPath: path }, true, false)
+                      if (result) successCount += 1
+                      else failed.push(path)
+                    } catch (err) {
+                      failed.push(path)
+                    }
+                    if (i < selectedPaths.length - 1) await sleep(RATE_DELAY_MS)
+                  }
+                  safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+                  const failureCount = failed.length
+                  if (failureCount) {
+                    pushToast && pushToast('Rescan', `Rescanned ${successCount}/${selectedPaths.length} items (${failureCount} failed).`)
+                  } else {
+                    pushToast && pushToast('Rescan', `Rescanned ${selectedPaths.length} items.`)
+                  }
+                }
+              }}
+            >
+              Anime
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )
@@ -3018,6 +3139,17 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               if (!it) return
               pushToast && pushToast('Rescan','Refreshing metadata...')
               await enrichOne(it, true)
+            }}
+            onContextMenu={(ev) => {
+              ev.preventDefault()
+              ev.stopPropagation?.()
+              if (loading) return
+              setContextMenu({
+                x: ev.clientX,
+                y: ev.clientY,
+                type: 'single',
+                item: it
+              })
             }}
             style={{ minWidth: loading ? '200px' : 'auto' }}
           >

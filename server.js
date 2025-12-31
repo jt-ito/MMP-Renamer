@@ -3100,7 +3100,12 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
     tmdbApiKey: tmdbKey
   });
 
-  const sanitizedOrder = Array.isArray(providerOrder) ? providerOrder.filter(id => METADATA_PROVIDER_IDS.includes(id)) : [];
+  let sanitizedOrder = Array.isArray(providerOrder) ? providerOrder.filter(id => METADATA_PROVIDER_IDS.includes(id)) : [];
+  // If skipAnimeProviders is enabled, filter out anidb and anilist from the provider order
+  if (opts.skipAnimeProviders) {
+    sanitizedOrder = sanitizedOrder.filter(id => id !== 'anidb' && id !== 'anilist');
+    try { appendLog(`SKIP_ANIME_PROVIDERS enabled, filtered order: ${sanitizedOrder.join('|')}`); } catch (e) {}
+  }
   const segments = [];
   let pendingMetaProviders = [];
   for (const providerId of sanitizedOrder) {
@@ -4848,9 +4853,9 @@ app.post('/api/scan/force', requireAdmin, (req, res) => {
 app.get('/api/path/exists', requireAuth, (req, res) => { const p = req.query.path || ''; try { const rp = path.resolve(p); const exists = fs.existsSync(rp); const stat = exists ? fs.statSync(rp) : null; res.json({ exists, isDirectory: stat ? stat.isDirectory() : false, resolved: rp }); } catch (err) { res.json({ exists: false, isDirectory: false, error: err.message }); } });
 
 app.post('/api/enrich', requireAuth, async (req, res) => {
-  const { path: p, tmdb_api_key: tmdb_override, force, forceHash, tvdb_v4_api_key: tvdb_override_v4_api_key, tvdb_v4_user_pin: tvdb_override_v4_user_pin } = req.body;
+  const { path: p, tmdb_api_key: tmdb_override, force, forceHash, tvdb_v4_api_key: tvdb_override_v4_api_key, tvdb_v4_user_pin: tvdb_override_v4_user_pin, skipAnimeProviders } = req.body;
   const key = canonicalize(p || '');
-  appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'} forceHash=${forceHash ? 'yes' : 'no'}`);
+  appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'} forceHash=${forceHash ? 'yes' : 'no'} skipAnimeProviders=${skipAnimeProviders ? 'yes' : 'no'}`);
   try {
     // On forced rescan, clear the entire cache entry except applied/hidden flags
     // so all metadata regenerates with current logic
@@ -4930,7 +4935,7 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
     const tvdbOverride = (tvdb_override_v4_api_key || tvdb_override_v4_user_pin)
       ? { v4ApiKey: tvdb_override_v4_api_key || '', v4UserPin: tvdb_override_v4_user_pin || null }
       : null;
-    const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username, tvdbOverride, forceHash, force });
+    const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username, tvdbOverride, forceHash, force, skipAnimeProviders });
     // Use centralized renderer and updater so rendering logic is consistent
     try {
       if (data && data.title) {

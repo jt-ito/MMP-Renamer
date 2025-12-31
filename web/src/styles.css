@@ -1254,3 +1254,63 @@ button.folder-option:hover {
 .loading-progress-bar { width:100%; height:12px; margin-top:4px; }
 .loading-footnote { font-size:0.85rem; color: var(--muted); margin-top:8px; }
 
+/* Context menu for rescan buttons */
+.context-menu {
+  position: fixed;
+  background: var(--bg-800);
+  border: 1px solid var(--bg-600);
+  border-radius: 10px;
+  box-shadow: 0 10px 32px rgba(0,0,0,0.25);
+  z-index: 10000;
+  min-width: 160px;
+  overflow: hidden;
+}
+
+.context-menu-items {
+  padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.context-menu-item {
+  padding: 10px 16px;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background-color 120ms ease;
+  width: 100%;
+  display: block;
+}
+
+.context-menu-item:hover {
+  background: var(--bg-600);
+}
+
+.context-menu-item:active {
+  background: var(--bg-700);
+}
+
+/* Light theme context menu */
+.light .context-menu {
+  background: rgba(217,234,253,0.98);
+  border: 1px solid rgba(154,166,178,0.5);
+  box-shadow: 0 10px 32px rgba(28,37,52,0.15);
+  backdrop-filter: blur(10px);
+}
+
+.light .context-menu-item {
+  color: var(--accent);
+}
+
+.light .context-menu-item:hover {
+  background: rgba(188,204,220,0.6);
+}
+
+.light .context-menu-item:active {
+  background: rgba(154,166,178,0.4);
+}
+
