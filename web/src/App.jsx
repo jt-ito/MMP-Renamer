@@ -2666,7 +2666,8 @@ export default function App() {
               selectOutputFolder={selectOutputFolder}
               selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
               providerKey={providerKey} hideOne={hideOnePath}
-              searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching} />
+              searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching}
+              setContextMenu={setContextMenu} />
                   ) : null}
                 </>
               )}
@@ -2868,7 +2869,7 @@ function LogsPanel({ logs, refresh, pushToast }) {
 
 const DEFAULT_ROW_HEIGHT = 90
 
-function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null }) {
+function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null, setContextMenu = () => {} }) {
   const listRef = useRef(null)
   const containerRef = useRef(null)
   const [listHeight, setListHeight] = useState(700)
