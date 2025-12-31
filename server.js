@@ -1657,27 +1657,125 @@ async function metaLookup(title, apiKey, opts = {}) {
     } catch (e) { return null }
   }
 
-  // TMDb lightweight search + episode fetch (fallback)
+  // TMDb lightweight search + episode fetch (fallback) - supports both TV shows and movies
   async function searchTmdbAndEpisode(q, tmdbKey, season, episode) {
     if (!tmdbKey) return null
+    
+    // Helper to swap Philosopher's <-> Sorcerer's Stone for Harry Potter
+    const getAlternativeTitle = (title) => {
+      if (!title) return null
+      const titleStr = String(title)
+      if (/philosopher'?s\s+stone/i.test(titleStr)) {
+        return titleStr.replace(/philosopher'?s\s+stone/i, "Sorcerer's Stone")
+      }
+      if (/sorcerer'?s\s+stone/i.test(titleStr)) {
+        return titleStr.replace(/sorcerer'?s\s+stone/i, "Philosopher's Stone")
+      }
+      return null
+    }
+    
     try {
+      const isMovie = (season == null || episode == null)
+      const searchType = isMovie ? 'movie' : 'tv'
+      
       await pace('api.themoviedb.org')
       const qenc = encodeURIComponent(String(q || '').slice(0,200))
-      const searchPath = `/3/search/tv?api_key=${encodeURIComponent(tmdbKey)}&query=${qenc}`
+      const searchPath = `/3/search/${searchType}?api_key=${encodeURIComponent(tmdbKey)}&query=${qenc}`
       const sres = await httpRequest({ hostname: 'api.themoviedb.org', path: searchPath, method: 'GET', headers: { 'Accept': 'application/json' } }, null, 3000)
-      if (!sres || !sres.body) return null
+      if (!sres || !sres.body) {
+        // Try alternative title if original search failed (e.g., Philosopher's <-> Sorcerer's Stone)
+        const altTitle = getAlternativeTitle(q)
+        if (altTitle) {
+          try {
+            await pace('api.themoviedb.org')
+            const altQenc = encodeURIComponent(String(altTitle).slice(0,200))
+            const altSearchPath = `/3/search/${searchType}?api_key=${encodeURIComponent(tmdbKey)}&query=${altQenc}`
+            const altSres = await httpRequest({ hostname: 'api.themoviedb.org', path: altSearchPath, method: 'GET', headers: { 'Accept': 'application/json' } }, null, 3000)
+            if (altSres && altSres.body) {
+              let altSj = null
+              try { altSj = JSON.parse(altSres.body) } catch (e) { altSj = null }
+              const altHits = altSj && altSj.results && Array.isArray(altSj.results) ? altSj.results : []
+              if (altHits.length) {
+                try { appendLog(`META_TMDB_ALT_TITLE_SUCCESS original=${q} alternative=${altTitle} found=yes`) } catch (e) {}
+                const top = altHits[0]
+                const name = top.name || top.original_name || top.title || top.original_title || null
+                const raw = Object.assign({}, top, { source: 'tmdb', media_type: searchType })
+                return { provider: 'tmdb', id: top.id, name, raw }
+              }
+            }
+          } catch (e) { /* ignore alternative title search errors */ }
+        }
+        return null
+      }
+      
       let sj = null
       try { sj = JSON.parse(sres.body) } catch (e) { sj = null }
       const hits = sj && sj.results && Array.isArray(sj.results) ? sj.results : []
-      if (!hits.length) return null
+      
+      if (!hits.length) {
+        // Try alternative title if no results (e.g., Philosopher's <-> Sorcerer's Stone)
+        const altTitle = getAlternativeTitle(q)
+        if (altTitle) {
+          try {
+            await pace('api.themoviedb.org')
+            const altQenc = encodeURIComponent(String(altTitle).slice(0,200))
+            const altSearchPath = `/3/search/${searchType}?api_key=${encodeURIComponent(tmdbKey)}&query=${altQenc}`
+            const altSres = await httpRequest({ hostname: 'api.themoviedb.org', path: altSearchPath, method: 'GET', headers: { 'Accept': 'application/json' } }, null, 3000)
+            if (altSres && altSres.body) {
+              let altSj = null
+              try { altSj = JSON.parse(altSres.body) } catch (e) { altSj = null }
+              const altHits = altSj && altSj.results && Array.isArray(altSj.results) ? altSj.results : []
+              if (altHits.length) {
+                try { appendLog(`META_TMDB_ALT_TITLE_SUCCESS original=${q} alternative=${altTitle} found=yes`) } catch (e) {}
+                const top = altHits[0]
+                const name = top.name || top.original_name || top.title || top.original_title || null
+                const raw = Object.assign({}, top, { source: 'tmdb', media_type: searchType })
+                
+                // For TV shows with season/episode, try to fetch episode details
+                if (!isMovie && season != null && episode != null) {
+                  try {
+                    await pace('api.themoviedb.org')
+                    const epPath = `/3/tv/${encodeURIComponent(top.id)}/season/${encodeURIComponent(season)}/episode/${encodeURIComponent(episode)}?api_key=${encodeURIComponent(tmdbKey)}`
+                    const eres = await httpRequest({ hostname: 'api.themoviedb.org', path: epPath, method: 'GET', headers: { 'Accept': 'application/json' } }, null, 3000)
+                    if (eres && eres.body) {
+                      let ej = null
+                      try { ej = JSON.parse(eres.body) } catch (e) { ej = null }
+                      if (ej && (ej.name || ej.title)) {
+                        const withEpisodeSource = (payload) => {
+                          if (!payload || typeof payload !== 'object') return payload
+                          if (payload.source === 'tmdb') return payload
+                          return Object.assign({ source: 'tmdb' }, payload)
+                        }
+                        return { provider: 'tmdb', id: top.id, name, raw, episode: withEpisodeSource(ej) }
+                      }
+                    }
+                  } catch (e) { /* ignore episode fetch errors */ }
+                }
+                
+                return { provider: 'tmdb', id: top.id, name, raw }
+              }
+            }
+          } catch (e) { /* ignore alternative title search errors */ }
+        }
+        return null
+      }
+      
       const top = hits[0]
-      const name = top.name || top.original_name || top.title || null
-      const raw = Object.assign({}, top, { source: 'tmdb' })
+      const name = top.name || top.original_name || top.title || top.original_title || null
+      const raw = Object.assign({}, top, { source: 'tmdb', media_type: searchType })
+      
       const withEpisodeSource = (payload) => {
         if (!payload || typeof payload !== 'object') return payload
         if (payload.source === 'tmdb') return payload
         return Object.assign({ source: 'tmdb' }, payload)
       }
+      
+      // For movies, just return the movie details
+      if (isMovie) {
+        return { provider: 'tmdb', id: top.id, name, raw }
+      }
+      
+      // For TV shows with season/episode, fetch episode details
       if (season != null && episode != null) {
         try {
           await pace('api.themoviedb.org')
