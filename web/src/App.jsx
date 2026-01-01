@@ -3497,6 +3497,18 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[it.canonicalPath]; return n })
               }
             }}
+            onContextMenu={(ev) => {
+              ev.preventDefault()
+              ev.stopPropagation?.()
+              if (loading) return
+              setContextMenu({
+                x: ev.clientX,
+                y: ev.clientY,
+                type: 'approve',
+                selectedPaths: [it.canonicalPath],
+                item: it
+              })
+            }}
           >
             <IconApply/> <span>Apply</span>
           </button>

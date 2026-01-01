@@ -3924,7 +3924,8 @@ function renderProviderName(data, key, session) {
     // Final stripping guard: ensure season-like suffixes ("2nd Season", "Season 2", etc.)
     // are removed from the title used for rendering so top-level folders don't inherit
     // ordinal-season text. Use existing helper `stripSeasonNumberSuffix` for consistency.
-    const rawTitleStripped = (typeof stripSeasonNumberSuffix === 'function') ? stripSeasonNumberSuffix(rawTitle) : rawTitle;
+    // However, for movies (isMovie=true), don't strip "Part X" since it's part of the canonical title.
+    const rawTitleStripped = (typeof stripSeasonNumberSuffix === 'function' && data.isMovie !== true) ? stripSeasonNumberSuffix(rawTitle) : rawTitle;
     
     // Fallback year logic: if AniList returns null/undefined for year, try to use
     // the fallback provider's year (TVDb/TMDb) or the parsed year from the filename.
