@@ -1708,7 +1708,11 @@ async function metaLookup(title, apiKey, opts = {}) {
               if (altHits.length) {
                 try { appendLog(`META_TMDB_ALT_TITLE_SUCCESS original=${q} alternative=${altTitle} found=yes`) } catch (e) {}
                 const top = altHits[0]
-                const name = top.name || top.original_name || top.title || top.original_title || null
+                let name = top.name || top.original_name || top.title || top.original_title || null
+                // Strip colon before Part N in movie titles
+                if (name && /:\s*Part\s+\d{1,2}\b/i.test(name)) {
+                  name = name.replace(/:\s*(Part\s+\d{1,2}\b)/i, ' $1')
+                }
                 const raw = Object.assign({}, top, { source: 'tmdb', media_type: searchType })
                 return { provider: 'tmdb', id: top.id, name, raw }
               }
@@ -1738,7 +1742,11 @@ async function metaLookup(title, apiKey, opts = {}) {
               if (altHits.length) {
                 try { appendLog(`META_TMDB_ALT_TITLE_SUCCESS original=${q} alternative=${altTitle} found=yes`) } catch (e) {}
                 const top = altHits[0]
-                const name = top.name || top.original_name || top.title || top.original_title || null
+                let name = top.name || top.original_name || top.title || top.original_title || null
+                // Strip colon before Part N in movie titles
+                if (name && /:\s*Part\s+\d{1,2}\b/i.test(name)) {
+                  name = name.replace(/:\s*(Part\s+\d{1,2}\b)/i, ' $1')
+                }
                 const raw = Object.assign({}, top, { source: 'tmdb', media_type: searchType })
                 
                 // For TV shows with season/episode, try to fetch episode details
@@ -1771,7 +1779,11 @@ async function metaLookup(title, apiKey, opts = {}) {
       }
       
       const top = hits[0]
-      const name = top.name || top.original_name || top.title || top.original_title || null
+      let name = top.name || top.original_name || top.title || top.original_title || null
+      // Strip colon before Part N in movie titles
+      if (name && /:\s*Part\s+\d{1,2}\b/i.test(name)) {
+        name = name.replace(/:\s*(Part\s+\d{1,2}\b)/i, ' $1')
+      }
       const raw = Object.assign({}, top, { source: 'tmdb', media_type: searchType })
       
       const withEpisodeSource = (payload) => {
