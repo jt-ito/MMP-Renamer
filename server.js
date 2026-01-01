@@ -5715,7 +5715,9 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   if (aliasResolved) {
     baseFolderName = stripEpisodeArtifactsForFolder(String(aliasResolved).trim());
   } else {
-    baseFolderName = stripEpisodeArtifactsForFolder(String(stripSeasonNumberSuffix(seriesBase)).trim());
+    // For movies, don't strip Part N suffixes; only strip for TV series
+    const shouldStripSeason = !(isMovie === true);
+    baseFolderName = stripEpisodeArtifactsForFolder(shouldStripSeason ? String(stripSeasonNumberSuffix(seriesBase)).trim() : String(seriesBase).trim());
   }
   if (!baseFolderName) baseFolderName = stripEpisodeArtifactsForFolder(path.basename(fromPath, path.extname(fromPath)) || rawTitle || title);
   // Normalize folder name to consistent title-case to prevent duplicates from capitalization variance
@@ -5753,14 +5755,19 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     // strip extension and insert year if provider-rendered name is missing it
     let providerName = String(meta.provider.renderedName).replace(/\.[^/.]+$/, '');
     try {
-      // strip season-like suffix from the leading title portion if present
-      const parts = providerName.split(/\s[-–—:]\s/);
-      if (parts && parts.length > 0) {
-        parts[0] = stripSeasonNumberSuffix(parts[0]);
-        providerName = parts.join(' - ');
-      } else {
-        providerName = stripSeasonNumberSuffix(providerName);
+      // For TV series, strip season-like suffix; for movies, preserve Part N
+      const shouldStripSeason = !(isMovie === true);
+      if (shouldStripSeason) {
+        const parts = providerName.split(/\s[-–—:]\s/);
+        if (parts && parts.length > 0) {
+          parts[0] = stripSeasonNumberSuffix(parts[0]);
+          providerName = parts.join(' - ');
+        } else {
+          providerName = stripSeasonNumberSuffix(providerName);
+        }
       }
+      // Strip any existing year before adding to prevent duplication
+      providerName = stripTrailingYear(providerName);
     } catch (e) {}
     providerName = ensureRenderedNameHasYear(providerName, templateYear);
     // If this looks like a series-level rendered name (no episode tokens) but we
