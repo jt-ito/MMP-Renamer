@@ -871,6 +871,17 @@ function normalizeEnrichEntry(entry) {
     // If parsed title has "Part X" but provider title is missing or lacks it, prefer parsed title for provider
     if (isMultiPartMovie && (!providerTitle || !/\bPart\s+\d{1,2}\b/i.test(providerTitle))) {
       if (out.provider) out.provider.title = parsedTitle;
+    } else if (isMultiPartMovie && providerTitle && /\bPart\s+\d{1,2}\b/i.test(providerTitle)) {
+      // Provider has "Part X" but might use different separator (colon vs space)
+      // Extract Part N from parsed and ensure it's in provider title
+      const parsedPartMatch = parsedTitle.match(/\bPart\s+(\d{1,2})\b/i);
+      const providerPartMatch = providerTitle.match(/\bPart\s+(\d{1,2})\b/i);
+      if (parsedPartMatch && providerPartMatch && parsedPartMatch[1] === providerPartMatch[1]) {
+        // Both have same Part number, keep provider title as-is
+      } else if (parsedPartMatch && !providerPartMatch) {
+        // Provider lost the Part marker somehow, restore from parsed
+        if (out.provider) out.provider.title = parsedTitle;
+      }
     }
     
     out.title = out.title || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
