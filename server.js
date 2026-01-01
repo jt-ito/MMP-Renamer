@@ -865,8 +865,15 @@ function normalizeEnrichEntry(entry) {
     
     // For multi-part movies, prefer parsed title (which includes "Part X") over provider title
     const parsedTitle = out.parsed && out.parsed.title;
+    const providerTitle = out.provider && out.provider.title;
     const isMultiPartMovie = parsedTitle && /\bPart\s+\d{1,2}\b/i.test(parsedTitle);
-    out.title = out.title || (isMultiPartMovie ? parsedTitle : (out.provider && out.provider.title)) || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
+    
+    // If parsed title has "Part X" but provider title doesn't, use parsed title
+    if (isMultiPartMovie && providerTitle && !/\bPart\s+\d{1,2}\b/i.test(providerTitle)) {
+      if (out.provider) out.provider.title = parsedTitle;
+    }
+    
+    out.title = out.title || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
   out.seriesTitle = entry.seriesTitle || (extraSource && extraSource.seriesTitle) || out.seriesTitle || out.title || null;
   out.seriesTitleExact = entry.seriesTitleExact || (extraSource && (extraSource.seriesTitleExact || extraSource.originalSeriesTitle)) || out.seriesTitleExact || null;
   out.seriesTitleEnglish = entry.seriesTitleEnglish || (extraSource && extraSource.seriesTitleEnglish) || (entry.provider && entry.provider.seriesTitleEnglish) || out.seriesTitleEnglish || null;
