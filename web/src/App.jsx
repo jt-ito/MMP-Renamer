@@ -2834,9 +2834,11 @@ export default function App() {
                 <button
                   className="context-menu-item"
                   onClick={async (e) => {
+                    console.log('[Approve Context] TV/Movie mode clicked')
                     e.stopPropagation()
                     setContextMenu(null)
                     const selectedPaths = contextMenu.selectedPaths
+                    console.log('[Approve Context] selectedPaths:', selectedPaths)
                     if (!selectedPaths.length) return
                     
                     // First rescan in TV/Movie mode
@@ -2889,9 +2891,11 @@ export default function App() {
                 <button
                   className="context-menu-item"
                   onClick={async (e) => {
+                    console.log('[Approve Context] Anime mode clicked')
                     e.stopPropagation()
                     setContextMenu(null)
                     const selectedPaths = contextMenu.selectedPaths
+                    console.log('[Approve Context] selectedPaths:', selectedPaths)
                     if (!selectedPaths.length) return
                     
                     // First rescan in Anime mode
