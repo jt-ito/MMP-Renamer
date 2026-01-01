@@ -2392,13 +2392,18 @@ export default function App() {
                     onClick={async () => {
                       try {
                         const selectedPaths = [...selectedPathsList]
+                        console.log('[Approve] selectedPaths:', selectedPaths.length)
                         if (!selectedPaths.length) return
                         const selItems = items.filter(it => selectedPaths.includes(it.canonicalPath))
+                        console.log('[Approve] selItems:', selItems.length)
                         if (!selItems.length) return
                         
                         // Show folder selector if alternative folders are configured
+                        console.log('[Approve] Calling selectOutputFolder...')
                         const selection = await selectOutputFolder(selectedPaths)
+                        console.log('[Approve] Selection result:', selection)
                         if (!selection || selection.cancelled) {
+                          console.log('[Approve] Selection cancelled or null, aborting')
                           return
                         }
                         const selectedFolderPath = selection.path ?? null
