@@ -1190,7 +1190,11 @@ export default function App() {
 
     // POST to /enrich to generate/update enrichment (force bypasses cache check)
   if (force) safeSetLoadingEnrich(l => ({ ...l, [key]: { status: 'Computing hash & fetching metadata...', stage: 'fetching' } }))
-  const w = await axios.post(API('/enrich'), { path: key, tmdb_api_key: providerKey || undefined, force: force || undefined, skipAnimeProviders: skipAnimeProviders || undefined })
+  const payload = { path: key }
+  if (providerKey) payload.tmdb_api_key = providerKey
+  if (force) payload.force = true
+  if (typeof skipAnimeProviders === 'boolean') payload.skipAnimeProviders = skipAnimeProviders
+  const w = await axios.post(API('/enrich'), payload)
       if (w.data) {
         const norm = normalizeEnrichResponse(w.data.enrichment || w.data)
         if (norm) setEnrichCache(prev => ({ ...prev, [key]: norm }))
@@ -2774,6 +2778,29 @@ export default function App() {
                   } else {
                     pushToast && pushToast('Rescan', `Rescanned ${selectedPaths.length} items.`)
                   }
+                } else if (contextMenu.type === 'approve') {
+                  const selectedPaths = contextMenu.selectedPaths
+                  if (!selectedPaths.length) return
+                  try {
+                    const selItems = items.filter(it => selectedPaths.includes(it.canonicalPath))
+                    if (!selItems.length) return
+                    const selection = await selectOutputFolder(selectedPaths)
+                    if (!selection || selection.cancelled) return
+                    const selectedFolderPath = selection.path ?? null
+                    const useFilenameAsTitle = selection.applyAsFilename ?? false
+                    pushToast && pushToast('Approve', `Approving ${selItems.length} items (TV/Movie mode)...`)
+                    const plans = await previewRename(selItems, undefined, { useFilenameAsTitle })
+                    await applyRename(plans, false, selectedFolderPath)
+                    setSelected(prev => {
+                      if (!prev) return {}
+                      const next = { ...prev }
+                      for (const p of selectedPaths) delete next[p]
+                      return next
+                    })
+                    pushToast && pushToast('Approve', 'Approve completed')
+                  } catch (err) {
+                    pushToast && pushToast('Approve', 'Approve failed')
+                  }
                 }
               }}
             >
@@ -2815,6 +2842,29 @@ export default function App() {
                     pushToast && pushToast('Rescan', `Rescanned ${successCount}/${selectedPaths.length} items (${failureCount} failed).`)
                   } else {
                     pushToast && pushToast('Rescan', `Rescanned ${selectedPaths.length} items.`)
+                  }
+                } else if (contextMenu.type === 'approve') {
+                  const selectedPaths = contextMenu.selectedPaths
+                  if (!selectedPaths.length) return
+                  try {
+                    const selItems = items.filter(it => selectedPaths.includes(it.canonicalPath))
+                    if (!selItems.length) return
+                    const selection = await selectOutputFolder(selectedPaths)
+                    if (!selection || selection.cancelled) return
+                    const selectedFolderPath = selection.path ?? null
+                    const useFilenameAsTitle = selection.applyAsFilename ?? false
+                    pushToast && pushToast('Approve', `Approving ${selItems.length} items (Anime mode)...`)
+                    const plans = await previewRename(selItems, undefined, { useFilenameAsTitle })
+                    await applyRename(plans, false, selectedFolderPath)
+                    setSelected(prev => {
+                      if (!prev) return {}
+                      const next = { ...prev }
+                      for (const p of selectedPaths) delete next[p]
+                      return next
+                    })
+                    pushToast && pushToast('Approve', 'Approve completed')
+                  } catch (err) {
+                    pushToast && pushToast('Approve', 'Approve failed')
                   }
                 }
               }}
