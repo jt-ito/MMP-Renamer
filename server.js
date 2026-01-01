@@ -4965,24 +4965,9 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
   const key = canonicalize(p || '');
   appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'} forceHash=${forceHash ? 'yes' : 'no'} skipAnimeProviders=${skipAnimeProviders ? 'yes' : 'no'}`);
   try {
-    // On forced rescan, clear the entire cache entry except applied/hidden flags
-    // so all metadata regenerates with current logic
-    if (force && enrichCache[key]) {
-      const oldApplied = enrichCache[key].applied;
-      const oldAppliedAt = enrichCache[key].appliedAt;
-      const oldAppliedTo = enrichCache[key].appliedTo;
-      const oldHidden = enrichCache[key].hidden;
-      enrichCache[key] = {};
-      if (oldApplied) {
-        enrichCache[key].applied = oldApplied;
-        enrichCache[key].appliedAt = oldAppliedAt;
-        enrichCache[key].appliedTo = oldAppliedTo;
-      }
-      if (oldHidden) enrichCache[key].hidden = oldHidden;
-    }
-    // Also clear parsedCache on forced rescan so filename parsing regenerates
-    if (force && parsedCache[key]) {
-      delete parsedCache[key];
+    // On forced rescan, clear cached enrich/parsed/rendered entries while preserving applied/hidden flags
+    if (force) {
+      purgeCachesForPath(key, { preserveFlags: true, persist: true });
     }
     // prefer existing enrichment when present and not forcing
     // Only short-circuit to cached provider if it appears to be a complete provider hit
@@ -5193,7 +5178,8 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
   const s = scans[req.params.scanId];
   if (!s) return res.status(404).json({ error: 'scan not found' });
   const username = req.session && req.session.username;
-  appendLog(`REFRESH_SCAN_REQUEST scan=${req.params.scanId} by=${username}`);
+  const forceCache = coerceBoolean(req.body && req.body.force);
+  appendLog(`REFRESH_SCAN_REQUEST scan=${req.params.scanId} by=${username} force=${forceCache ? 'yes' : 'no'}`);
   // Prevent concurrent refreshes for the same scanId
   const refreshLockKey = `refreshScan:${req.params.scanId}`;
   if (activeScans.has(refreshLockKey)) {
@@ -5217,6 +5203,7 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
 
   const backgroundRun = async () => {
     const results = [];
+    let renderedIndexMutated = false;
     // Pre-normalize existing enrich cache entries for this scan so title-case
     // changes are applied immediately even if a provider lookup fails later.
     try {
@@ -5231,6 +5218,12 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
       for (const it of s.items) {
         try {
           const key = canonicalize(it.canonicalPath);
+          if (forceCache) {
+            const purgeResult = purgeCachesForPath(key, { preserveFlags: true, persist: false });
+            if (purgeResult) {
+              if (purgeResult.renderedIndex) renderedIndexMutated = true;
+            }
+          }
           let lookup = null;
           let lookupError = null;
           try {
@@ -5340,6 +5333,9 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
       }
       try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
       try { if (db) db.setKV('parsedCache', parsedCache); else writeJson(parsedCacheFile, parsedCache); } catch (e) {}
+      if (renderedIndexMutated) {
+        try { if (db) db.setKV('renderedIndex', renderedIndex); else writeJson(renderedIndexFile, renderedIndex); } catch (e) {}
+      }
       appendLog(`REFRESH_SCAN_COMPLETE scan=${req.params.scanId} items=${results.length}`);
       // Ensure stored scan artifacts reflect applied/hidden flags updated during refresh
       try {
@@ -6262,6 +6258,79 @@ function schedulePersistEnrichCache(delayMs = 500) {
     if (_enrichPersistTimeout) clearTimeout(_enrichPersistTimeout);
     _enrichPersistTimeout = setTimeout(() => { try { persistEnrichCacheNow(); } catch (e) {} }, delayMs);
   } catch (e) { try { persistEnrichCacheNow(); } catch (ee) {} }
+}
+
+// Centralized cache purge for a canonical path. Optionally preserves applied/hidden flags
+// so forced refreshes do not lose approval state, and tracks which caches mutated.
+function purgeCachesForPath(rawKey, { preserveFlags = true, persist = false } = {}) {
+  const result = { enrichCache: false, parsedCache: false, renderedIndex: false };
+  try {
+    const key = canonicalize(rawKey || '');
+    if (!key) return result;
+
+    // Preserve approval/hide flags if requested
+    let keep = null;
+    if (preserveFlags && enrichCache && enrichCache[key]) {
+      const prev = enrichCache[key];
+      const applied = prev && prev.applied;
+      const hidden = prev && prev.hidden;
+      if (applied || hidden) {
+        keep = {};
+        if (applied) {
+          keep.applied = applied;
+          if (typeof prev.appliedAt !== 'undefined') keep.appliedAt = prev.appliedAt;
+          if (typeof prev.appliedTo !== 'undefined') keep.appliedTo = prev.appliedTo;
+        }
+        if (hidden) keep.hidden = hidden;
+      }
+    }
+
+    // Purge enrich cache entry
+    if (enrichCache && Object.prototype.hasOwnProperty.call(enrichCache, key)) {
+      if (keep && Object.keys(keep).length) {
+        enrichCache[key] = keep;
+      } else {
+        delete enrichCache[key];
+      }
+      result.enrichCache = true;
+    }
+
+    // Purge parsed cache entry
+    if (parsedCache && Object.prototype.hasOwnProperty.call(parsedCache, key)) {
+      delete parsedCache[key];
+      result.parsedCache = true;
+    }
+
+    // Drop any renderedIndex entries that reference this source/applied target
+    try {
+      const rKeys = Object.keys(renderedIndex || {});
+      for (const rk of rKeys) {
+        const entry = renderedIndex[rk];
+        let match = false;
+        if (typeof entry === 'string') {
+          try { match = canonicalize(entry) === key; } catch (e) { match = false; }
+        } else if (entry && typeof entry === 'object') {
+          try {
+            if (entry.source && canonicalize(entry.source) === key) match = true;
+            else if (entry.appliedTo && canonicalize(entry.appliedTo) === key) match = true;
+          } catch (e) { match = false; }
+        }
+        if (match) {
+          delete renderedIndex[rk];
+          result.renderedIndex = true;
+        }
+      }
+    } catch (e) { /* best-effort */ }
+
+    if (persist) {
+      try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
+      try { if (db) db.setKV('parsedCache', parsedCache); else writeJson(parsedCacheFile, parsedCache); } catch (e) {}
+      if (result.renderedIndex) {
+        try { if (db) db.setKV('renderedIndex', renderedIndex); else writeJson(renderedIndexFile, renderedIndex); } catch (e) {}
+      }
+    }
+  } catch (e) { /* best-effort */ }
+  return result;
 }
 
 function updateEnrichCacheInMemory(key, nextObj) {
