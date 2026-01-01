@@ -1562,14 +1562,16 @@ export default function App() {
   }, [selectMode, filteredItems])
 
   async function previewRename(selected, template, options = {}) {
-    const { useFilenameAsTitle = false } = options || {}
+    const { useFilenameAsTitle = false, skipAnimeProviders } = options || {}
     // include configured output path from local storage (client preference), server will also accept its persisted setting
     const outputPath = (() => { try { return localStorage.getItem('scan_output_path') || '' } catch { return '' } })()
     const outputFolders = (() => { try { const stored = localStorage.getItem('output_folders'); return stored ? JSON.parse(stored) : [] } catch { return [] } })()
     const effectiveTemplate = template || (() => { try { return localStorage.getItem('rename_template') || renameTemplate } catch { return renameTemplate } })()
     // Only send canonicalPath to reduce payload size (server looks up enrichment from cache)
     const itemPaths = selected.map(it => ({ canonicalPath: it.canonicalPath }))
-    const r = await axios.post(API('/rename/preview'), { items: itemPaths, template: effectiveTemplate, outputPath, useFilenameAsTitle })
+    const payload = { items: itemPaths, template: effectiveTemplate, outputPath, useFilenameAsTitle }
+    if (typeof skipAnimeProviders === 'boolean') payload.skipAnimeProviders = skipAnimeProviders
+    const r = await axios.post(API('/rename/preview'), payload)
     return r.data.plans
   }
 
@@ -2789,7 +2791,7 @@ export default function App() {
                     const selectedFolderPath = selection.path ?? null
                     const useFilenameAsTitle = selection.applyAsFilename ?? false
                     pushToast && pushToast('Approve', `Approving ${selItems.length} items (TV/Movie mode)...`)
-                    const plans = await previewRename(selItems, undefined, { useFilenameAsTitle })
+                    const plans = await previewRename(selItems, undefined, { useFilenameAsTitle, skipAnimeProviders: true })
                     await applyRename(plans, false, selectedFolderPath)
                     setSelected(prev => {
                       if (!prev) return {}
@@ -2854,7 +2856,7 @@ export default function App() {
                     const selectedFolderPath = selection.path ?? null
                     const useFilenameAsTitle = selection.applyAsFilename ?? false
                     pushToast && pushToast('Approve', `Approving ${selItems.length} items (Anime mode)...`)
-                    const plans = await previewRename(selItems, undefined, { useFilenameAsTitle })
+                    const plans = await previewRename(selItems, undefined, { useFilenameAsTitle, skipAnimeProviders: false })
                     await applyRename(plans, false, selectedFolderPath)
                     setSelected(prev => {
                       if (!prev) return {}
@@ -2916,7 +2918,7 @@ export default function App() {
                       const selectedFolderPath = selection.path ?? null
                       const useFilenameAsTitle = selection.applyAsFilename ?? false
                       pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
-                      const plans = await previewRename(selItems, undefined, { useFilenameAsTitle })
+                      const plans = await previewRename(selItems, undefined, { useFilenameAsTitle, skipAnimeProviders: true })
                       await applyRename(plans, false, selectedFolderPath)
                       setSelected(prev => {
                         if (!prev) return {}
@@ -2973,7 +2975,7 @@ export default function App() {
                       const selectedFolderPath = selection.path ?? null
                       const useFilenameAsTitle = selection.applyAsFilename ?? false
                       pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
-                      const plans = await previewRename(selItems, undefined, { useFilenameAsTitle })
+                      const plans = await previewRename(selItems, undefined, { useFilenameAsTitle, skipAnimeProviders: false })
                       await applyRename(plans, false, selectedFolderPath)
                       setSelected(prev => {
                         if (!prev) return {}

@@ -5551,7 +5551,7 @@ app.get('/api/scan/:scanId/progress', requireAuth, (req, res) => {
 
 // Rename preview (generate plan)
 app.post('/api/rename/preview', requireAuth, async (req, res) => {
-  const { items, template, outputPath, useFilenameAsTitle } = req.body || {};
+  const { items, template, outputPath, useFilenameAsTitle, skipAnimeProviders } = req.body || {};
   if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'items required' });
   const applyFilenameAsTitle = coerceBoolean(useFilenameAsTitle);
   // resolve effective output path: request overrides per-user setting -> server setting
@@ -5604,6 +5604,7 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
         const _previewForceHash = (_previewProviderOrder && _previewProviderOrder.length && _previewProviderOrder[0] === 'anidb');
         const _previewOpts = Object.assign({}, { username });
         if (_previewForceHash) _previewOpts.forceHash = true;
+        if (typeof skipAnimeProviders === 'boolean') _previewOpts.skipAnimeProviders = skipAnimeProviders;
         const data = await externalEnrich(fromPath, tmdbKey, _previewOpts);
         if (data) {
           const providerRendered = renderProviderName(data, fromPath, req.session);
