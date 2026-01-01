@@ -2416,7 +2416,18 @@ export default function App() {
                         pushToast && pushToast('Approve', 'Approve completed')
                       } catch (e) { pushToast && pushToast('Approve', 'Approve failed') }
                     }}
-                    title="Approve selected"
+                    onContextMenu={(ev) => {
+                      ev.preventDefault()
+                      ev.stopPropagation?.()
+                      if (selectedHasLoading) return
+                      setContextMenu({
+                        x: ev.clientX,
+                        y: ev.clientY,
+                        type: 'approve',
+                        selectedPaths: [...selectedPathsList]
+                      })
+                    }}
+                    title="Approve selected (right-click for TV/Movie or Anime mode)"
                   >Approve selected</button>
                 ) : null}
                 {selectMode && selectedCount ? (
@@ -2468,7 +2479,18 @@ export default function App() {
                         pushToast && pushToast('Hide', `Hidden ${selectedPaths.length} items${skippedNote}.`)
                       }
                     }}
-                    title="Hide selected"
+                    onContextMenu={(ev) => {
+                      ev.preventDefault()
+                      ev.stopPropagation?.()
+                      if (selectedHasLoading) return
+                      setContextMenu({
+                        x: ev.clientX,
+                        y: ev.clientY,
+                        type: 'hide',
+                        selectedPaths: [...selectedPathsList]
+                      })
+                    }}
+                    title="Hide selected (right-click for TV/Movie or Anime mode)"
                   >Hide selected</button>
                 ) : null}
                 {/* Rescan selected: appears only in select mode and when items are selected; does not reserve space when hidden */}
@@ -2794,6 +2816,286 @@ export default function App() {
             >
               Anime
             </button>
+            {(contextMenu.type === 'approve' || contextMenu.type === 'hide') && (
+              <>
+                <div className="context-menu-divider"></div>
+                <div className="context-menu-section-label">
+                  {contextMenu.type === 'approve' ? 'Approve with' : 'Hide with'}
+                </div>
+              </>
+            )}
+            {contextMenu.type === 'approve' && (
+              <>
+                <button
+                  className="context-menu-item"
+                  onClick={async (e) => {
+                    e.stopPropagation()
+                    setContextMenu(null)
+                    const selectedPaths = contextMenu.selectedPaths
+                    if (!selectedPaths.length) return
+                    
+                    // First rescan in TV/Movie mode
+                    pushToast && pushToast('Approve', `Rescanning ${selectedPaths.length} items (TV/Movie mode)...`)
+                    const loadingMap = {}
+                    for (const p of selectedPaths) loadingMap[p] = true
+                    safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
+                    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+                    const RATE_DELAY_MS = 350
+                    let successCount = 0
+                    const failed = []
+                    for (let i = 0; i < selectedPaths.length; i++) {
+                      const path = selectedPaths[i]
+                      try {
+                        const result = await enrichOne({ canonicalPath: path }, true, true)
+                        if (result) successCount += 1
+                        else failed.push(path)
+                      } catch (err) {
+                        failed.push(path)
+                      }
+                      if (i < selectedPaths.length - 1) await sleep(RATE_DELAY_MS)
+                    }
+                    safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+                    
+                    // Then approve
+                    try {
+                      const selItems = items.filter(it => selectedPaths.includes(it.canonicalPath))
+                      if (!selItems.length) return
+                      const selection = await selectOutputFolder(selectedPaths)
+                      if (!selection || selection.cancelled) return
+                      const selectedFolderPath = selection.path ?? null
+                      const useFilenameAsTitle = selection.applyAsFilename ?? false
+                      pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
+                      const plans = await previewRename(selItems, undefined, { useFilenameAsTitle })
+                      await applyRename(plans, false, selectedFolderPath)
+                      setSelected(prev => {
+                        if (!prev) return {}
+                        const next = { ...prev }
+                        for (const p of selectedPaths) delete next[p]
+                        return next
+                      })
+                      pushToast && pushToast('Approve', 'Approve completed')
+                    } catch (err) {
+                      pushToast && pushToast('Approve', 'Approve failed')
+                    }
+                  }}
+                >
+                  TV/Movie mode (rescan + approve)
+                </button>
+                <button
+                  className="context-menu-item"
+                  onClick={async (e) => {
+                    e.stopPropagation()
+                    setContextMenu(null)
+                    const selectedPaths = contextMenu.selectedPaths
+                    if (!selectedPaths.length) return
+                    
+                    // First rescan in Anime mode
+                    pushToast && pushToast('Approve', `Rescanning ${selectedPaths.length} items (Anime mode)...`)
+                    const loadingMap = {}
+                    for (const p of selectedPaths) loadingMap[p] = true
+                    safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
+                    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+                    const RATE_DELAY_MS = 350
+                    let successCount = 0
+                    const failed = []
+                    for (let i = 0; i < selectedPaths.length; i++) {
+                      const path = selectedPaths[i]
+                      try {
+                        const result = await enrichOne({ canonicalPath: path }, true, false)
+                        if (result) successCount += 1
+                        else failed.push(path)
+                      } catch (err) {
+                        failed.push(path)
+                      }
+                      if (i < selectedPaths.length - 1) await sleep(RATE_DELAY_MS)
+                    }
+                    safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+                    
+                    // Then approve
+                    try {
+                      const selItems = items.filter(it => selectedPaths.includes(it.canonicalPath))
+                      if (!selItems.length) return
+                      const selection = await selectOutputFolder(selectedPaths)
+                      if (!selection || selection.cancelled) return
+                      const selectedFolderPath = selection.path ?? null
+                      const useFilenameAsTitle = selection.applyAsFilename ?? false
+                      pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
+                      const plans = await previewRename(selItems, undefined, { useFilenameAsTitle })
+                      await applyRename(plans, false, selectedFolderPath)
+                      setSelected(prev => {
+                        if (!prev) return {}
+                        const next = { ...prev }
+                        for (const p of selectedPaths) delete next[p]
+                        return next
+                      })
+                      pushToast && pushToast('Approve', 'Approve completed')
+                    } catch (err) {
+                      pushToast && pushToast('Approve', 'Approve failed')
+                    }
+                  }}
+                >
+                  Anime mode (rescan + approve)
+                </button>
+              </>
+            )}
+            {contextMenu.type === 'hide' && (
+              <>
+                <button
+                  className="context-menu-item"
+                  onClick={async (e) => {
+                    e.stopPropagation()
+                    setContextMenu(null)
+                    const selectedPaths = contextMenu.selectedPaths
+                    if (!selectedPaths.length) return
+                    
+                    // First rescan in TV/Movie mode
+                    pushToast && pushToast('Hide', `Rescanning ${selectedPaths.length} items (TV/Movie mode)...`)
+                    const loadingMap = {}
+                    for (const p of selectedPaths) loadingMap[p] = true
+                    safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
+                    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+                    const RATE_DELAY_MS = 350
+                    let successCount = 0
+                    const failed = []
+                    for (let i = 0; i < selectedPaths.length; i++) {
+                      const path = selectedPaths[i]
+                      try {
+                        const result = await enrichOne({ canonicalPath: path }, true, true)
+                        if (result) successCount += 1
+                        else failed.push(path)
+                      } catch (err) {
+                        failed.push(path)
+                      }
+                      if (i < selectedPaths.length - 1) await sleep(RATE_DELAY_MS)
+                    }
+                    safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+                    
+                    // Then hide
+                    try {
+                      successCount = 0
+                      let skippedCount = 0
+                      failed.length = 0
+                      for (const path of selectedPaths) {
+                        loadingMap[path] = true
+                      }
+                      safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
+                      for (const path of selectedPaths) {
+                        try {
+                          const res = await hideOnePath(path, { silent: true })
+                          if (res && res.success) {
+                            successCount += 1
+                          } else if (res && res.skipped) {
+                            successCount += 1
+                            skippedCount += 1
+                          } else {
+                            failed.push(path)
+                          }
+                        } catch (err) {
+                          failed.push(path)
+                        }
+                      }
+                      safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+                      setSelected(prev => {
+                        if (!prev) return {}
+                        const next = { ...prev }
+                        for (const p of selectedPaths) delete next[p]
+                        return next
+                      })
+                      if (failed.length && successCount) {
+                        pushToast && pushToast('Hide', `Hidden ${successCount}/${selectedPaths.length} items (${failed.length} failed).`)
+                      } else if (failed.length && !successCount) {
+                        pushToast && pushToast('Hide', 'Hide failed for all selected items')
+                      } else {
+                        const skippedNote = skippedCount ? ` (${skippedCount} skipped)` : ''
+                        pushToast && pushToast('Hide', `Hidden ${selectedPaths.length} items${skippedNote}.`)
+                      }
+                    } catch (err) {
+                      safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+                      pushToast && pushToast('Hide', 'Hide failed')
+                    }
+                  }}
+                >
+                  TV/Movie mode (rescan + hide)
+                </button>
+                <button
+                  className="context-menu-item"
+                  onClick={async (e) => {
+                    e.stopPropagation()
+                    setContextMenu(null)
+                    const selectedPaths = contextMenu.selectedPaths
+                    if (!selectedPaths.length) return
+                    
+                    // First rescan in Anime mode
+                    pushToast && pushToast('Hide', `Rescanning ${selectedPaths.length} items (Anime mode)...`)
+                    const loadingMap = {}
+                    for (const p of selectedPaths) loadingMap[p] = true
+                    safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
+                    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+                    const RATE_DELAY_MS = 350
+                    let successCount = 0
+                    const failed = []
+                    for (let i = 0; i < selectedPaths.length; i++) {
+                      const path = selectedPaths[i]
+                      try {
+                        const result = await enrichOne({ canonicalPath: path }, true, false)
+                        if (result) successCount += 1
+                        else failed.push(path)
+                      } catch (err) {
+                        failed.push(path)
+                      }
+                      if (i < selectedPaths.length - 1) await sleep(RATE_DELAY_MS)
+                    }
+                    safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+                    
+                    // Then hide
+                    try {
+                      successCount = 0
+                      let skippedCount = 0
+                      failed.length = 0
+                      for (const path of selectedPaths) {
+                        loadingMap[path] = true
+                      }
+                      safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
+                      for (const path of selectedPaths) {
+                        try {
+                          const res = await hideOnePath(path, { silent: true })
+                          if (res && res.success) {
+                            successCount += 1
+                          } else if (res && res.skipped) {
+                            successCount += 1
+                            skippedCount += 1
+                          } else {
+                            failed.push(path)
+                          }
+                        } catch (err) {
+                          failed.push(path)
+                        }
+                      }
+                      safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+                      setSelected(prev => {
+                        if (!prev) return {}
+                        const next = { ...prev }
+                        for (const p of selectedPaths) delete next[p]
+                        return next
+                      })
+                      if (failed.length && successCount) {
+                        pushToast && pushToast('Hide', `Hidden ${successCount}/${selectedPaths.length} items (${failed.length} failed).`)
+                      } else if (failed.length && !successCount) {
+                        pushToast && pushToast('Hide', 'Hide failed for all selected items')
+                      } else {
+                        const skippedNote = skippedCount ? ` (${skippedCount} skipped)` : ''
+                        pushToast && pushToast('Hide', `Hidden ${selectedPaths.length} items${skippedNote}.`)
+                      }
+                    } catch (err) {
+                      safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+                      pushToast && pushToast('Hide', 'Hide failed')
+                    }
+                  }}
+                >
+                  Anime mode (rescan + hide)
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -1294,6 +1294,21 @@ button.folder-option:hover {
   background: var(--bg-700);
 }
 
+.context-menu-divider {
+  height: 1px;
+  background: var(--bg-600);
+  margin: 6px 0;
+}
+
+.context-menu-section-label {
+  padding: 8px 16px 4px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-400);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 /* Light theme context menu */
 .light .context-menu {
   background: rgba(217,234,253,0.98);
@@ -1314,3 +1329,10 @@ button.folder-option:hover {
   background: rgba(154,166,178,0.4);
 }
 
+.light .context-menu-divider {
+  background: rgba(154,166,178,0.3);
+}
+
+.light .context-menu-section-label {
+  color: var(--text-600);
+}
