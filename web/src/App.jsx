@@ -2951,9 +2951,19 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const useEpisode = (provider?.episode != null) ? provider?.episode : parsed?.episode
   let epLabel = null
   if (useEpisode != null) epLabel = (useSeason != null) ? `S${pad(useSeason)}E${pad(useEpisode)}` : `E${pad(useEpisode)}`
-  const providerTitle = provider?.title || null
-  const providerYear = provider?.year ? ` (${provider.year})` : ''
+  const parsedTitle = parsed?.title || null
+  const providerTitleRaw = provider?.title || null
   const providerEpisodeTitle = provider?.episodeTitle || ''
+
+  // Prefer parsed title when it carries a Part N marker that provider title lacks
+  const parsedHasPart = parsedTitle && /\bPart\s+\d{1,2}\b/i.test(parsedTitle)
+  const providerHasPart = providerTitleRaw && /\bPart\s+\d{1,2}\b/i.test(providerTitleRaw)
+  const providerTitle = (parsedHasPart && !providerHasPart) ? parsedTitle : providerTitleRaw
+
+  // Avoid double year when provider title already embeds (YYYY)
+  const providerHasYearInTitle = providerTitle && /\(\d{4}\)$/.test(providerTitle.trim())
+  const providerYear = (provider?.year && !providerHasYearInTitle) ? ` (${provider.year})` : ''
+
   const providerRendered = provider?.renderedName || (providerTitle ? `${providerTitle}${providerYear}${epLabel ? ' - ' + epLabel : ''}${providerEpisodeTitle ? ' - ' + providerEpisodeTitle : ''}` : null)
   const providerSourceLabel = provider?.source || (provider?.provider ? (PROVIDER_LABELS[String(provider.provider).toLowerCase()] || provider.provider) : 'provider')
   const providerIdCandidates = []
