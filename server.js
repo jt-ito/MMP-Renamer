@@ -5829,8 +5829,10 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   }
   
   if (!nameWithoutExtRaw) {
+    // For movies, preserve Part N in the title; for TV shows, strip season suffixes
+    const titleForFilename = (isMovie === true) ? title : stripSeasonNumberSuffix(title);
     nameWithoutExtRaw = baseNameTemplate
-  .replace('{title}', sanitize(stripSeasonNumberSuffix(title)))
+  .replace('{title}', sanitize(titleForFilename))
       .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
   .replace('{year}', sanitize(templateYear))
       .replace('{epLabel}', sanitize(epLabel))
