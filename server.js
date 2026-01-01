@@ -868,8 +868,8 @@ function normalizeEnrichEntry(entry) {
     const providerTitle = out.provider && out.provider.title;
     const isMultiPartMovie = parsedTitle && /\bPart\s+\d{1,2}\b/i.test(parsedTitle);
     
-    // If parsed title has "Part X" but provider title doesn't, use parsed title
-    if (isMultiPartMovie && providerTitle && !/\bPart\s+\d{1,2}\b/i.test(providerTitle)) {
+    // If parsed title has "Part X" but provider title is missing or lacks it, prefer parsed title for provider
+    if (isMultiPartMovie && (!providerTitle || !/\bPart\s+\d{1,2}\b/i.test(providerTitle))) {
       if (out.provider) out.provider.title = parsedTitle;
     }
     
