@@ -844,6 +844,18 @@ function cloneProviderRaw(raw) {
   return safeCloneJson(raw, 'providerRaw');
 }
 
+// Helper to clean enrichment entries before returning to client
+// Removes stale provider.renderedName so frontend computes it from current provider.title
+function cleanEnrichmentForClient(entry) {
+  if (entry && entry.provider && entry.provider.renderedName) {
+    const cleaned = Object.assign({}, entry);
+    cleaned.provider = Object.assign({}, entry.provider);
+    delete cleaned.provider.renderedName;
+    return cleaned;
+  }
+  return entry;
+}
+
 // Normalizer to ensure enrich entries have consistent shape used by the UI
 function normalizeEnrichEntry(entry) {
   try {
@@ -1064,6 +1076,13 @@ function normalizeEnrichEntry(entry) {
         }
       } catch (e) { /* best-effort */ }
     } catch (e) { /* best-effort outer */ }
+    
+    // Remove provider.renderedName so frontend always computes it from current provider.title
+    // This ensures multi-part movie titles with "Part N" are displayed correctly
+    if (out.provider && out.provider.renderedName) {
+      delete out.provider.renderedName;
+    }
+    
     return out;
   } catch (e) {
     return entry || {};
@@ -4763,9 +4782,9 @@ app.get('/api/enrich', requireAuth, (req, res) => {
         } catch (e) {}
       }
       if (prov && !providerComplete) {
-        return res.json({ cached: false, enrichment: normalized });
+        return res.json({ cached: false, enrichment: cleanEnrichmentForClient(normalized) });
       }
-      if (normalized.parsed || normalized.provider) return res.json({ cached: true, enrichment: normalized });
+      if (normalized.parsed || normalized.provider) return res.json({ cached: true, enrichment: cleanEnrichmentForClient(normalized) });
     }
     return res.json({ cached: false, enrichment: null });
   } catch (e) { return res.status(500).json({ error: e.message }) }
