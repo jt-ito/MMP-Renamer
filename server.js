@@ -1055,8 +1055,9 @@ function normalizeEnrichEntry(entry) {
       } catch (e) { /* best-effort relation handling */ }
 
       // 3) Strip season-like suffixes from series/title when safe (use AniList-aware when raw present)
+      // IMPORTANT: Skip this for movies to preserve "Part N" in multi-part movie titles
       try {
-        if (!alias) {
+        if (!alias && !out.isMovie) {
           if (out.seriesTitle) {
             const before = out.seriesTitle;
             const after = rawPick ? stripAniListSeasonSuffix(before, rawPick) : stripSeasonNumberSuffix(before);
