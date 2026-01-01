@@ -863,25 +863,14 @@ function normalizeEnrichEntry(entry) {
                               (typeof srcObj.provider === 'string' ? srcObj.provider : null));
     }
     
-    // For multi-part movies, prefer parsed title (which includes "Part X") over provider title
+    // For multi-part movies, normalize the provider title by removing colons before "Part X"
+    // e.g., "Harry Potter and the Deathly Hallows: Part 1" -> "Harry Potter and the Deathly Hallows Part 1"
     const parsedTitle = out.parsed && out.parsed.title;
     const providerTitle = out.provider && out.provider.title;
-    const isMultiPartMovie = parsedTitle && /\bPart\s+\d{1,2}\b/i.test(parsedTitle);
     
-    // If parsed title has "Part X" but provider title is missing or lacks it, prefer parsed title for provider
-    if (isMultiPartMovie && (!providerTitle || !/\bPart\s+\d{1,2}\b/i.test(providerTitle))) {
-      if (out.provider) out.provider.title = parsedTitle;
-    } else if (isMultiPartMovie && providerTitle && /\bPart\s+\d{1,2}\b/i.test(providerTitle)) {
-      // Provider has "Part X" but might use different separator (colon vs space)
-      // Extract Part N from parsed and ensure it's in provider title
-      const parsedPartMatch = parsedTitle.match(/\bPart\s+(\d{1,2})\b/i);
-      const providerPartMatch = providerTitle.match(/\bPart\s+(\d{1,2})\b/i);
-      if (parsedPartMatch && providerPartMatch && parsedPartMatch[1] === providerPartMatch[1]) {
-        // Both have same Part number, keep provider title as-is
-      } else if (parsedPartMatch && !providerPartMatch) {
-        // Provider lost the Part marker somehow, restore from parsed
-        if (out.provider) out.provider.title = parsedTitle;
-      }
+    // Strip colon separator before "Part X" in provider titles
+    if (providerTitle && out.provider && /:\s*Part\s+\d{1,2}\b/i.test(providerTitle)) {
+      out.provider.title = providerTitle.replace(/:\s*(Part\s+\d{1,2}\b)/i, ' $1');
     }
     
     out.title = out.title || (out.provider && out.provider.title) || (out.parsed && out.parsed.title) || null;
