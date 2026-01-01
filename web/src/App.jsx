@@ -2741,9 +2741,6 @@ export default function App() {
           onClick={(e) => e.stopPropagation()}
         >
           <div className="context-menu-items">
-            {/* Only show TV/Movie and Anime buttons for rescan operations (single/bulk), not for approve/hide */}
-            {(contextMenu.type === 'single' || contextMenu.type === 'bulk') && (
-              <>
             <button
               className="context-menu-item"
               onClick={async (e) => {
@@ -2874,8 +2871,6 @@ export default function App() {
             >
               Anime
             </button>
-              </>
-            )}
             {(contextMenu.type === 'approve' || contextMenu.type === 'hide') && (
               <>
                 {contextMenu.type === 'approve' && (
