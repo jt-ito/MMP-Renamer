@@ -1691,6 +1691,9 @@ async function metaLookup(title, apiKey, opts = {}) {
   async function searchTmdbAndEpisode(q, tmdbKey, season, episode) {
     if (!tmdbKey) return null
     
+    // Normalize apostrophes to straight ASCII before searching TMDB
+    q = normalizeApostrophes(q)
+    
     // Helper to swap Philosopher's <-> Sorcerer's Stone for Harry Potter
     const getAlternativeTitle = (title) => {
       if (!title) return null
