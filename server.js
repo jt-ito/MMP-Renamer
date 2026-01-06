@@ -5742,7 +5742,7 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
           extraGuess: updatedExtra,
         });
         updateEnrichCacheInMemory(fromPath, cacheUpdate);
-        schedulePersistEnrichCache(400);
+        schedulePersistEnrichCache(100);
       }
     } catch (e) { /* best-effort cache update */ }
   }
@@ -6303,7 +6303,7 @@ function persistEnrichCacheNow() {
   try { if (_enrichPersistTimeout) { clearTimeout(_enrichPersistTimeout); _enrichPersistTimeout = null; } } catch (e) {}
 }
 
-function schedulePersistEnrichCache(delayMs = 500) {
+function schedulePersistEnrichCache(delayMs = 100) {
   try {
     if (_enrichPersistTimeout) clearTimeout(_enrichPersistTimeout);
     _enrichPersistTimeout = setTimeout(() => { try { persistEnrichCacheNow(); } catch (e) {} }, delayMs);
@@ -6396,7 +6396,7 @@ function updateEnrichCacheInMemory(key, nextObj) {
     const normalized = normalizeEnrichEntry(merged);
     enrichCache[key] = preserveAppliedFlags(prev, normalized);
     // Persist sooner so rescans show updated values quickly (best-effort, debounced)
-    try { schedulePersistEnrichCache(150); } catch (e) {}
+    try { schedulePersistEnrichCache(50); } catch (e) {}
     return enrichCache[key];
   } catch (e) { return nextObj; }
 }
@@ -6421,7 +6421,7 @@ function recordProviderFailure(key, info = {}) {
     normalized.lastAttemptAt = now;
     if (!normalized.firstAttemptAt) normalized.firstAttemptAt = now;
     updateEnrichCacheInMemory(key, Object.assign({}, prev, { providerFailure: normalized }));
-    schedulePersistEnrichCache(600);
+    schedulePersistEnrichCache(100);
     return normalized;
   } catch (e) { return null; }
 }
@@ -6436,7 +6436,7 @@ function markProviderFailureSkip(key) {
       skipCount: Number.isFinite(prevFailure.skipCount) ? prevFailure.skipCount + 1 : ((prevFailure.skipCount ? Number(prevFailure.skipCount) : 0) + 1)
     });
     const merged = updateEnrichCacheInMemory(key, Object.assign({}, prev, { providerFailure: normalizeProviderFailure(updated) || updated }));
-    schedulePersistEnrichCache(600);
+    schedulePersistEnrichCache(100);
     return merged;
   } catch (e) { /* best-effort */ }
 }
@@ -6446,7 +6446,7 @@ function clearProviderFailure(key) {
     const prev = enrichCache[key] || {};
     if (!prev.providerFailure) return;
     const merged = updateEnrichCacheInMemory(key, Object.assign({}, prev, { providerFailure: null }));
-    schedulePersistEnrichCache(600);
+    schedulePersistEnrichCache(100);
     return merged;
   } catch (e) { /* best-effort */ }
 }
@@ -7405,6 +7405,25 @@ module.exports._test.assignProviderSourceMetadata = assignProviderSourceMetadata
 module.exports._test.PROVIDER_DISPLAY_NAMES = PROVIDER_DISPLAY_NAMES;
 // expose wikiEpisodeCache for tests so unit tests can clear it
 module.exports.wikiEpisodeCache = wikiEpisodeCache;
+
+// Graceful shutdown handlers to flush cache before process exits
+function gracefulShutdown(signal) {
+  appendLog(`${signal}_RECEIVED flushing_cache`);
+  try {
+    persistEnrichCacheNow();
+    appendLog(`${signal}_CACHE_FLUSHED exiting`);
+    // Give a brief moment for any final I/O operations
+    setTimeout(() => {
+      process.exit(0);
+    }, 100);
+  } catch (err) {
+    appendLog(`${signal}_CACHE_FLUSH_ERROR ${err.message}`);
+    process.exit(1);
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Only start the HTTP server when this file is run directly, not when required as a module
 if (require.main === module) {
