@@ -755,7 +755,10 @@ function writeJson(filePath, obj) {
   try {
     fs.writeFileSync(filePath, JSON.stringify(obj, null, 2), { encoding: 'utf8' });
   } catch (e) {
-    try { console.error('writeJson failed', filePath, e && e.message ? e.message : e); } catch (ee) {}
+    try { 
+      console.error('writeJson failed', filePath, e && e.message ? e.message : e);
+      appendLog(`WRITE_JSON_FAIL path=${filePath} err=${e.message}`);
+    } catch (ee) {}
   }
 }
 
@@ -6308,9 +6311,17 @@ function updateEnrichCache(key, nextObj) {
 let _enrichPersistTimeout = null;
 function persistEnrichCacheNow() {
   try {
-    if (db) db.setKV('enrichCache', enrichCache);
-    else writeJson(enrichStoreFile, enrichCache);
-  } catch (e) { /* best-effort */ }
+    const cacheSize = Object.keys(enrichCache || {}).length;
+    if (db) {
+      db.setKV('enrichCache', enrichCache);
+      try { appendLog(`ENRICH_CACHE_PERSIST_OK db=true size=${cacheSize}`); } catch (e) {}
+    } else {
+      writeJson(enrichStoreFile, enrichCache);
+      try { appendLog(`ENRICH_CACHE_PERSIST_OK file=true size=${cacheSize}`); } catch (e) {}
+    }
+  } catch (e) { 
+    try { appendLog(`ENRICH_CACHE_PERSIST_FAIL err=${e.message} db=${!!db}`); } catch (ee) {}
+  }
   try { if (_enrichPersistTimeout) { clearTimeout(_enrichPersistTimeout); _enrichPersistTimeout = null; } } catch (e) {}
 }
 
