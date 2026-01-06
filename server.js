@@ -5596,6 +5596,17 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     const fromPath = canonicalize(it.canonicalPath);
     const existing = enrichCache[fromPath] || null;
     const prov = existing && existing.provider ? existing.provider : null;
+    
+    // If provider data exists but is missing renderedName, regenerate it from cached data
+    // instead of re-enriching (prevents unnecessary API calls during approve)
+    if (prov && prov.matched && !prov.renderedName && existing) {
+      try {
+        const providerRendered = renderProviderName(existing, fromPath, req.session);
+        prov.renderedName = providerRendered;
+        updateEnrichCache(fromPath, Object.assign({}, existing, { provider: prov }));
+      } catch (e) { /* best effort */ }
+    }
+    
     // Only enrich if not already complete
     // During preview/apply, we should use cached metadata if it exists and is complete,
     // regardless of provider mode settings - those only matter during explicit rescan operations
