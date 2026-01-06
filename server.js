@@ -5597,6 +5597,8 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     const existing = enrichCache[fromPath] || null;
     const prov = existing && existing.provider ? existing.provider : null;
     // Only enrich if not already complete
+    // During preview/apply, we should use cached metadata if it exists and is complete,
+    // regardless of provider mode settings - those only matter during explicit rescan operations
     if (!isProviderComplete(prov)) {
       try {
         // When previewing/enriching items on-demand, if AniDB is the user's primary
@@ -5605,7 +5607,9 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
         const _previewForceHash = (_previewProviderOrder && _previewProviderOrder.length && _previewProviderOrder[0] === 'anidb');
         const _previewOpts = Object.assign({}, { username });
         if (_previewForceHash) _previewOpts.forceHash = true;
-        if (typeof skipAnimeProviders === 'boolean') _previewOpts.skipAnimeProviders = skipAnimeProviders;
+        // Note: skipAnimeProviders is intentionally NOT passed here during preview
+        // because we only want to apply provider filtering during explicit rescan operations,
+        // not when generating rename plans from already-enriched items
         const data = await externalEnrich(fromPath, tmdbKey, _previewOpts);
         if (data) {
           const providerRendered = renderProviderName(data, fromPath, req.session);
