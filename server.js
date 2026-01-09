@@ -1088,11 +1088,8 @@ function normalizeEnrichEntry(entry) {
     if (entry.appliedTo) out.appliedTo = entry.appliedTo;
     if (entry.hiddenAt) out.hiddenAt = entry.hiddenAt;
     
-    // Remove provider.renderedName so frontend always computes it from current provider.title
-    // This ensures multi-part movie titles with "Part N" are displayed correctly
-    if (out.provider && out.provider.renderedName) {
-      delete out.provider.renderedName;
-    }
+    // Note: provider.renderedName is preserved here for cache completeness checks
+    // It will be removed by cleanEnrichmentForClient() when sending to frontend
     
     return out;
   } catch (e) {
