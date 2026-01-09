@@ -6487,10 +6487,16 @@ function cleanTitleForRender(t, epLabel, epTitle) {
     s = s.replace(/\s+Season\s+\d{1,2}$/i, '').trim();
     s = s.replace(/\s+\(Season\s+\d{1,2}\)$/i, '').trim();
     
+    // Remove episode label if present (e.g., "Title - S01E01", "Title- S01E01", "Title-S01E01")
     if (epLabel) {
       const lbl = String(epLabel).trim();
-      if (lbl) s = s.replace(new RegExp('\\b' + escapeRegExp(lbl) + '\\b', 'i'), '').trim();
+      if (lbl) {
+        // Remove with various separators: " - S01E01", "- S01E01", " S01E01", "-S01E01"
+        s = s.replace(new RegExp('[\\s\\-–—:]*' + escapeRegExp(lbl) + '(?=[\\s\\-–—:]|$)', 'gi'), '').trim();
+      }
     }
+    // Also strip any remaining SxxExx patterns anywhere in the string
+    s = s.replace(/[\s\-–—:]*S\d{1,2}E\d{1,3}(?=[\\s\-–—:]|$)/gi, '').trim();
     s = s.replace(/^\s*S\d{1,2}[\s_\-:\.]*[EPp]?(\d{1,3})?(?:\.\d+)?[\s_\-:\.]*/i, '').trim();
     if (epTitle) {
       const et = String(epTitle).trim();
