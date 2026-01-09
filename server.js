@@ -1081,6 +1081,13 @@ function normalizeEnrichEntry(entry) {
       } catch (e) { /* best-effort */ }
     } catch (e) { /* best-effort outer */ }
     
+    // Preserve applied/hidden state flags
+    if (typeof entry.applied === 'boolean') out.applied = entry.applied;
+    if (typeof entry.hidden === 'boolean') out.hidden = entry.hidden;
+    if (entry.appliedAt) out.appliedAt = entry.appliedAt;
+    if (entry.appliedTo) out.appliedTo = entry.appliedTo;
+    if (entry.hiddenAt) out.hiddenAt = entry.hiddenAt;
+    
     // Remove provider.renderedName so frontend always computes it from current provider.title
     // This ensures multi-part movie titles with "Part N" are displayed correctly
     if (out.provider && out.provider.renderedName) {
