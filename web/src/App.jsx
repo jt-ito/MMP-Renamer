@@ -1428,7 +1428,8 @@ export default function App() {
         try { enrichOne && enrichOne({ canonicalPath: path }, true) } catch (e) {}
       }
 
-      await Promise.all(results.map(it => pollEnrich(it.canonicalPath)))
+      // Removed automatic enrichment polling to avoid forcing metadata lookup on all scanned items
+      // Users can manually enrich items if needed via the rescan button
     } finally { setSearching(false) }
   }
 
