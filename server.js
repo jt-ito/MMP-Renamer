@@ -5926,6 +5926,18 @@ function ensureRenderedNameHasYear(name, year) {
       const parenRe = new RegExp(`\\(\\s*${escapeRegExp(yearToken)}\\s*\\)`, 'g');
       result = result.replace(parenRe, '').replace(/\s{2,}/g, ' ').trim();
     } catch (e) {}
+    
+    // For TV shows: insert year BEFORE episode markers (S01E08, E01, etc.), not just before first separator
+    // This ensures format: "Title (Year) - S01E08 - Episode" not "Title- S01E08 (Year) - Episode"
+    const episodeMarkerPattern = /[\s\-–—]*(?:S\d{1,2}E\d{1,3}|E\d{1,3})\b/i;
+    const epMatch = result.match(episodeMarkerPattern);
+    if (epMatch && epMatch.index != null) {
+      // Found episode marker - insert year before it
+      const beforeEp = result.slice(0, epMatch.index).trim();
+      const fromEp = result.slice(epMatch.index);
+      return `${beforeEp} (${yearToken}) ${fromEp.trim()}`;
+    }
+    
     // If the original contained the year as a standalone token, normalize to a single parenthetical
     const yearPattern = new RegExp(`\\b${escapeRegExp(yearToken)}\\b`);
     if (yearPattern.test(result)) {
@@ -5938,7 +5950,7 @@ function ensureRenderedNameHasYear(name, year) {
       }
       return `${result} (${yearToken})`;
     }
-    // Otherwise, just insert the parenthetical year
+    // Otherwise, just insert the parenthetical year before first separator or at end
     const splitIdx = result.indexOf(' - ');
     if (splitIdx !== -1) {
       const basePart = result.slice(0, splitIdx).trim();

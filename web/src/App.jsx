@@ -3334,6 +3334,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const providerHasYearInTitle = providerTitle && /\(\d{4}\)$/.test(providerTitle.trim())
   const providerYear = (provider?.year && !providerHasYearInTitle) ? ` (${provider.year})` : ''
 
+  // Construct rendered name with proper format: Title (Year) - S01E08 - Episode Title
+  // Year must come BEFORE episode label for TV shows
   const providerRendered = provider?.renderedName || (providerTitle ? `${providerTitle}${providerYear}${epLabel ? ' - ' + epLabel : ''}${providerEpisodeTitle ? ' - ' + providerEpisodeTitle : ''}` : null)
   const providerSourceLabel = provider?.source || (provider?.provider ? (PROVIDER_LABELS[String(provider.provider).toLowerCase()] || provider.provider) : 'provider')
   const providerIdCandidates = []
