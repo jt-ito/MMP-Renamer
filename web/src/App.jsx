@@ -562,7 +562,7 @@ export default function App() {
   // Update scan metadata and allItems, but preserve the current search/filter and view.
   // If a search is active, re-run the search to keep results stable. If no search,
   // update visible items based on the new allItems (or first page for large scans).
-  function updateScanDataAndPreserveView(meta, coll) {
+  function updateScanDataAndPreserveView(meta, coll, options = {}) {
     try {
       const clean = (coll || []).filter(it => it && it.canonicalPath)
       setScanMeta(meta)
@@ -611,6 +611,16 @@ export default function App() {
         }
       }
       try { setCurrentScanPaths(new Set((clean||[]).map(x => x.canonicalPath))) } catch (e) {}
+      
+      // If this update came from background polling (not a user-initiated scan),
+      // immediately close the scanning overlay so the user doesn't see loading
+      if (options.fromBackgroundPoll) {
+        try {
+          setScanning(false)
+          setScanReady(true)
+          setActiveScanKind(null)
+        } catch (e) {}
+      }
     } catch (e) {}
   }
 
@@ -2111,10 +2121,10 @@ export default function App() {
                   const chunk = (r && r.data && Array.isArray(r.data.items)) ? r.data.items : []
                   for (const it of chunk) all.push(it)
                 }
-                try { updateScanDataAndPreserveView(latest, all) } catch (e) {}
+                try { updateScanDataAndPreserveView(latest, all, { fromBackgroundPoll: true }) } catch (e) {}
               } else {
                 const page = (pg && pg.data && Array.isArray(pg.data.items)) ? pg.data.items : []
-                try { updateScanDataAndPreserveView(latest, page) } catch (e) {}
+                try { updateScanDataAndPreserveView(latest, page, { fromBackgroundPoll: true }) } catch (e) {}
               }
               try { setScanId(latestId); setScanMeta(latest); setLastScanId(latestId); setTotal(latest.totalCount || (pg && pg.data && Array.isArray(pg.data.items) ? pg.data.items.length : 0)) } catch (e) {}
             } catch (e) {}
@@ -2159,12 +2169,12 @@ export default function App() {
                 for (const it of chunk) all.push(it)
               }
               // Merge while preserving current view/search
-              try { updateScanDataAndPreserveView(serverMeta, all) } catch (e) {}
+              try { updateScanDataAndPreserveView(serverMeta, all, { fromBackgroundPoll: true }) } catch (e) {}
               try { setScanMeta(serverMeta); setTotal(serverMeta.totalCount || all.length || 0) } catch (e) {}
             } else {
               const r = await axios.get(API(`/scan/${scanId}/items`), { params: { offset: 0, limit: Math.max(batchSize, 50) } }).catch(() => ({ data: { items: [] } }))
               const page = (r && r.data && r.data.items) ? r.data.items : []
-              try { updateScanDataAndPreserveView(serverMeta, page) } catch (e) {}
+              try { updateScanDataAndPreserveView(serverMeta, page, { fromBackgroundPoll: true }) } catch (e) {}
               try { setScanMeta(serverMeta); setTotal(serverMeta.totalCount || page.length || 0) } catch (e) {}
             }
           } catch (e) {}
