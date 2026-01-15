@@ -2753,10 +2753,11 @@ async function metaLookup(title, apiKey, opts = {}) {
             }
           } catch (e) { /* best-effort */ }
         try { merged.tvdb = tvdbFallback } catch (e) {}
-          // capture fallback year from TVDB series data for AniList base results
+          // capture fallback year from TVDB episode aired date (preferred) or series data for AniList base results
           try {
             if (merged.raw && !merged.raw._fallbackProviderYear) {
-              const maybe = (tvdbFallback.raw && tvdbFallback.raw.series && (tvdbFallback.raw.series.first_air_date || tvdbFallback.raw.series.startDate)) || tvdbFallback.raw && (tvdbFallback.raw.first_air_date || tvdbFallback.raw.release_date) || null
+              // Prefer episode's aired date for accurate year, fall back to series date
+              const maybe = (tvdbFallback.raw && tvdbFallback.raw.episode && (tvdbFallback.raw.episode.aired || tvdbFallback.raw.episode.firstAired || tvdbFallback.raw.episode.air_date)) || (tvdbFallback.raw && tvdbFallback.raw.series && (tvdbFallback.raw.series.first_air_date || tvdbFallback.raw.series.startDate)) || tvdbFallback.raw && (tvdbFallback.raw.first_air_date || tvdbFallback.raw.release_date) || null
               if (maybe) {
                 const yy = new Date(String(maybe)).getFullYear()
                 if (!Number.isNaN(yy) && yy > 0) merged.raw._fallbackProviderYear = String(yy)
@@ -2768,7 +2769,8 @@ async function metaLookup(title, apiKey, opts = {}) {
         // when returning a pure TVDB-only result, populate a fallback year as well
         try {
           if (providerRaw && !providerRaw._fallbackProviderYear) {
-            const maybe = (tvdbFallback.raw && tvdbFallback.raw.series && (tvdbFallback.raw.series.first_air_date || tvdbFallback.raw.series.startDate)) || tvdbFallback.raw && (tvdbFallback.raw.first_air_date || tvdbFallback.raw.release_date) || null
+            // Prefer episode's aired date for accurate year, fall back to series date
+            const maybe = (tvdbFallback.raw && tvdbFallback.raw.episode && (tvdbFallback.raw.episode.aired || tvdbFallback.raw.episode.firstAired || tvdbFallback.raw.episode.air_date)) || (tvdbFallback.raw && tvdbFallback.raw.series && (tvdbFallback.raw.series.first_air_date || tvdbFallback.raw.series.startDate)) || tvdbFallback.raw && (tvdbFallback.raw.first_air_date || tvdbFallback.raw.release_date) || null
             if (maybe) {
               const yy = new Date(String(maybe)).getFullYear()
               if (!Number.isNaN(yy) && yy > 0) providerRaw._fallbackProviderYear = String(yy)
