@@ -638,11 +638,6 @@ function startFolderWatcher(username, libPath) {
           const result = scanLib.incrementalScanLibrary(libPath, prior, false);
           saveScanCacheFn(result.scanCache);
           
-          // Parse new/changed items so they have enrichment data
-          for (const it of (result.toProcess || [])) {
-            doProcessParsedItem(it, { username });
-          }
-          
           // Filter out hidden/applied items before creating scan artifact
           const allItems = scanLib.buildIncrementalItems(result.scanCache, result.toProcess, uuidv4);
           const filteredItems = allItems.filter(it => {
@@ -664,7 +659,7 @@ function startFolderWatcher(username, libPath) {
           scans[scanId] = scanObj;
           if (!db) writeJson(scanStoreFile, scans);
           
-          appendLog(`WATCHER_SCAN_COMPLETE username=${username} scanId=${scanId} items=${filteredItems.length} hidden_filtered=${allItems.length - filteredItems.length} newItems=${result.toProcess ? result.toProcess.length : 0}`);
+          appendLog(`WATCHER_SCAN_COMPLETE username=${username} scanId=${scanId} items=${filteredItems.length} hidden_filtered=${allItems.length - filteredItems.length}`);
         } catch (err) {
           appendLog(`WATCHER_SCAN_ERROR username=${username} err=${err.message}`);
         }
@@ -4654,13 +4649,14 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
   scans[scanId] = artifact;
   try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); } catch (e) {}
   appendLog(`INCREMENTAL_SCAN_COMPLETE id=${scanId} total=${filteredItems.length} hidden_filtered=${items.length - filteredItems.length}`);
-  
   // include a small sample of first-page items to help clients refresh UI without
   // requiring an extra request. Clients may pass a 'limit' query param when
   // invoking incremental scan; default to 100.
   const sampleLimit = Number.isInteger(parseInt(req.query && req.query.limit)) ? parseInt(req.query.limit) : 100;
   const sample = filteredItems.slice(0, sampleLimit);
   res.json({ scanId, totalCount: filteredItems.length, items: sample, changedPaths: (changedItems || []).map(it => it && it.canonicalPath).filter(Boolean) });
+  // Don't enrich new items during incremental scans - they should only be parsed and hashed
+  // Enrichment will happen when user manually requests it or during full scans
 });
 
 app.get('/api/scan/:scanId', requireAuth, (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
