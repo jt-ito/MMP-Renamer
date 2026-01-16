@@ -654,10 +654,10 @@ function startFolderWatcher(username, libPath) {
                     const existing = enrichCache[key] || null;
                     if (existing && existing.ed2k) continue;
                     
-                    const hashResult = await ed2kHashLib.computeED2K(it.canonicalPath);
-                    if (hashResult && hashResult.hash) {
+                    const hash = ed2kHashLib.computeEd2kHashSync(it.canonicalPath);
+                    if (hash) {
                       updateEnrichCacheInMemory(key, Object.assign({}, existing || {}, { 
-                        ed2k: hashResult.hash, 
+                        ed2k: hash, 
                         ed2kComputedAt: Date.now() 
                       }));
                     }
@@ -4698,11 +4698,11 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
             if (existing && existing.ed2k) continue;
             
             appendLog(`INCREMENTAL_HASH_COMPUTE path=${it.canonicalPath}`);
-            const hashResult = await ed2kHashLib.computeED2K(it.canonicalPath);
-            if (hashResult && hashResult.hash) {
+            const hash = ed2kHashLib.computeEd2kHashSync(it.canonicalPath);
+            if (hash) {
               // Update enrichCache with hash but don't trigger metadata lookup
               updateEnrichCacheInMemory(key, Object.assign({}, existing || {}, { 
-                ed2k: hashResult.hash, 
+                ed2k: hash, 
                 ed2kComputedAt: Date.now() 
               }));
             }
