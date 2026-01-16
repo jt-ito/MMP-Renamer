@@ -638,6 +638,40 @@ function startFolderWatcher(username, libPath) {
           const result = scanLib.incrementalScanLibrary(libPath, prior, false);
           saveScanCacheFn(result.scanCache);
           
+          // Parse new/changed items so they have enrichment data
+          for (const it of (result.toProcess || [])) {
+            doProcessParsedItem(it, { username });
+          }
+          
+          // Compute hashes for new items in background without enriching
+          if (result.toProcess && result.toProcess.length > 0) {
+            void (async () => {
+              try {
+                const ed2kHashLib = require('./lib/ed2k-hash');
+                for (const it of result.toProcess) {
+                  try {
+                    const key = canonicalize(it.canonicalPath);
+                    const existing = enrichCache[key] || null;
+                    if (existing && existing.ed2k) continue;
+                    
+                    const hashResult = await ed2kHashLib.computeED2K(it.canonicalPath);
+                    if (hashResult && hashResult.hash) {
+                      updateEnrichCacheInMemory(key, Object.assign({}, existing || {}, { 
+                        ed2k: hashResult.hash, 
+                        ed2kComputedAt: Date.now() 
+                      }));
+                    }
+                  } catch (hashErr) {
+                    appendLog(`WATCHER_HASH_FAIL path=${it.canonicalPath} err=${hashErr && hashErr.message ? hashErr.message : String(hashErr)}`);
+                  }
+                }
+                schedulePersistEnrichCache(500);
+              } catch (e) {
+                appendLog(`WATCHER_HASH_BATCH_FAIL err=${e && e.message ? e.message : String(e)}`);
+              }
+            })();
+          }
+          
           // Filter out hidden/applied items before creating scan artifact
           const allItems = scanLib.buildIncrementalItems(result.scanCache, result.toProcess, uuidv4);
           const filteredItems = allItems.filter(it => {
@@ -651,7 +685,7 @@ function startFolderWatcher(username, libPath) {
           
           const generatedAt = Date.now();
           const scanId = uuidv4();
-          const scanObj = { scanId, items: filteredItems, generatedAt, incrementalScanPath: libPath, username, totalCount: filteredItems.length };
+          const scanObj = { id: scanId, libraryId: 'local', items: filteredItems, generatedAt, incrementalScanPath: libPath, username, totalCount: filteredItems.length };
           
           if (db) {
             try { db.saveScan(scanObj); } catch (e) {}
@@ -659,7 +693,7 @@ function startFolderWatcher(username, libPath) {
           scans[scanId] = scanObj;
           if (!db) writeJson(scanStoreFile, scans);
           
-          appendLog(`WATCHER_SCAN_COMPLETE username=${username} scanId=${scanId} items=${filteredItems.length} hidden_filtered=${allItems.length - filteredItems.length}`);
+          appendLog(`WATCHER_SCAN_COMPLETE username=${username} scanId=${scanId} items=${filteredItems.length} hidden_filtered=${allItems.length - filteredItems.length} newItems=${result.toProcess ? result.toProcess.length : 0}`);
         } catch (err) {
           appendLog(`WATCHER_SCAN_ERROR username=${username} err=${err.message}`);
         }
@@ -4649,13 +4683,48 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
   scans[scanId] = artifact;
   try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); } catch (e) {}
   appendLog(`INCREMENTAL_SCAN_COMPLETE id=${scanId} total=${filteredItems.length} hidden_filtered=${items.length - filteredItems.length}`);
+  
+  // Compute hashes for new items without enriching them
+  // This ensures ED2K hashes are available for AniDB lookups later without forcing metadata lookup now
+  if (changedItems && changedItems.length > 0) {
+    void (async () => {
+      try {
+        const ed2kHashLib = require('./lib/ed2k-hash');
+        for (const it of changedItems) {
+          try {
+            const key = canonicalize(it.canonicalPath);
+            const existing = enrichCache[key] || null;
+            // Skip hash computation if already present
+            if (existing && existing.ed2k) continue;
+            
+            appendLog(`INCREMENTAL_HASH_COMPUTE path=${it.canonicalPath}`);
+            const hashResult = await ed2kHashLib.computeED2K(it.canonicalPath);
+            if (hashResult && hashResult.hash) {
+              // Update enrichCache with hash but don't trigger metadata lookup
+              updateEnrichCacheInMemory(key, Object.assign({}, existing || {}, { 
+                ed2k: hashResult.hash, 
+                ed2kComputedAt: Date.now() 
+              }));
+            }
+          } catch (hashErr) {
+            appendLog(`INCREMENTAL_HASH_FAIL path=${it.canonicalPath} err=${hashErr && hashErr.message ? hashErr.message : String(hashErr)}`);
+          }
+        }
+        // Persist cache after hash computation
+        schedulePersistEnrichCache(500);
+        appendLog(`INCREMENTAL_HASH_COMPLETE count=${changedItems.length}`);
+      } catch (e) {
+        appendLog(`INCREMENTAL_HASH_BATCH_FAIL err=${e && e.message ? e.message : String(e)}`);
+      }
+    })();
+  }
+  
   // include a small sample of first-page items to help clients refresh UI without
   // requiring an extra request. Clients may pass a 'limit' query param when
   // invoking incremental scan; default to 100.
   const sampleLimit = Number.isInteger(parseInt(req.query && req.query.limit)) ? parseInt(req.query.limit) : 100;
   const sample = filteredItems.slice(0, sampleLimit);
   res.json({ scanId, totalCount: filteredItems.length, items: sample, changedPaths: (changedItems || []).map(it => it && it.canonicalPath).filter(Boolean) });
-  try { void backgroundEnrichFirstN(scanId, changedItems, req.session, libPath, `scanPath:${libPath}`, 12); } catch (e) { appendLog(`INCREMENTAL_BACKGROUND_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
 });
 
 app.get('/api/scan/:scanId', requireAuth, (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
