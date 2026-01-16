@@ -643,35 +643,6 @@ function startFolderWatcher(username, libPath) {
             doProcessParsedItem(it, { username });
           }
           
-          // Compute hashes for new items in background without enriching
-          if (result.toProcess && result.toProcess.length > 0) {
-            void (async () => {
-              try {
-                const ed2kHashLib = require('./lib/ed2k-hash');
-                for (const it of result.toProcess) {
-                  try {
-                    const key = canonicalize(it.canonicalPath);
-                    const existing = enrichCache[key] || null;
-                    if (existing && existing.ed2k) continue;
-                    
-                    const hash = ed2kHashLib.computeEd2kHashSync(it.canonicalPath);
-                    if (hash) {
-                      updateEnrichCacheInMemory(key, Object.assign({}, existing || {}, { 
-                        ed2k: hash, 
-                        ed2kComputedAt: Date.now() 
-                      }));
-                    }
-                  } catch (hashErr) {
-                    appendLog(`WATCHER_HASH_FAIL path=${it.canonicalPath} err=${hashErr && hashErr.message ? hashErr.message : String(hashErr)}`);
-                  }
-                }
-                schedulePersistEnrichCache(500);
-              } catch (e) {
-                appendLog(`WATCHER_HASH_BATCH_FAIL err=${e && e.message ? e.message : String(e)}`);
-              }
-            })();
-          }
-          
           // Filter out hidden/applied items before creating scan artifact
           const allItems = scanLib.buildIncrementalItems(result.scanCache, result.toProcess, uuidv4);
           const filteredItems = allItems.filter(it => {
@@ -4683,41 +4654,6 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
   scans[scanId] = artifact;
   try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); } catch (e) {}
   appendLog(`INCREMENTAL_SCAN_COMPLETE id=${scanId} total=${filteredItems.length} hidden_filtered=${items.length - filteredItems.length}`);
-  
-  // Compute hashes for new items without enriching them
-  // This ensures ED2K hashes are available for AniDB lookups later without forcing metadata lookup now
-  if (changedItems && changedItems.length > 0) {
-    void (async () => {
-      try {
-        const ed2kHashLib = require('./lib/ed2k-hash');
-        for (const it of changedItems) {
-          try {
-            const key = canonicalize(it.canonicalPath);
-            const existing = enrichCache[key] || null;
-            // Skip hash computation if already present
-            if (existing && existing.ed2k) continue;
-            
-            appendLog(`INCREMENTAL_HASH_COMPUTE path=${it.canonicalPath}`);
-            const hash = ed2kHashLib.computeEd2kHashSync(it.canonicalPath);
-            if (hash) {
-              // Update enrichCache with hash but don't trigger metadata lookup
-              updateEnrichCacheInMemory(key, Object.assign({}, existing || {}, { 
-                ed2k: hash, 
-                ed2kComputedAt: Date.now() 
-              }));
-            }
-          } catch (hashErr) {
-            appendLog(`INCREMENTAL_HASH_FAIL path=${it.canonicalPath} err=${hashErr && hashErr.message ? hashErr.message : String(hashErr)}`);
-          }
-        }
-        // Persist cache after hash computation
-        schedulePersistEnrichCache(500);
-        appendLog(`INCREMENTAL_HASH_COMPLETE count=${changedItems.length}`);
-      } catch (e) {
-        appendLog(`INCREMENTAL_HASH_BATCH_FAIL err=${e && e.message ? e.message : String(e)}`);
-      }
-    })();
-  }
   
   // include a small sample of first-page items to help clients refresh UI without
   // requiring an extra request. Clients may pass a 'limit' query param when
