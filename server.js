@@ -638,6 +638,11 @@ function startFolderWatcher(username, libPath) {
           const result = scanLib.incrementalScanLibrary(libPath, prior, false);
           saveScanCacheFn(result.scanCache);
           
+          // Parse new/changed items so they have basic metadata
+          for (const it of (result.toProcess || [])) {
+            doProcessParsedItem(it, { username });
+          }
+          
           // Filter out hidden/applied items before creating scan artifact
           const allItems = scanLib.buildIncrementalItems(result.scanCache, result.toProcess, uuidv4);
           const filteredItems = allItems.filter(it => {
