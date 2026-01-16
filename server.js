@@ -616,27 +616,14 @@ function startFolderWatcher(username, libPath) {
           const loadScanCacheFn = () => scanLib.loadScanCache(scanCacheFile);
           const saveScanCacheFn = (obj) => scanLib.saveScanCache(scanCacheFile, obj);
           
-          let prior = loadScanCacheFn();
-          if ((!prior || !prior.files || Object.keys(prior.files).length === 0) && scans && Object.keys(scans || {}).length) {
-            const allIds = Object.keys(scans || {}).map(k => scans[k]).filter(Boolean);
-            allIds.sort((a,b) => (b.generatedAt || 0) - (a.generatedAt || 0));
-            const recent = allIds[0];
-            if (recent && recent.items && Array.isArray(recent.items)) {
-              prior = { files: {} };
-              for (const it of recent.items) {
-                if (it && it.fromPath) {
-                  try {
-                    const st = fs.statSync(it.fromPath);
-                    prior.files[it.fromPath] = { mtime: st.mtimeMs, size: st.size };
-                  } catch (e) {}
-                }
-              }
-              saveScanCacheFn(prior);
-            }
-          }
-          
-          const result = scanLib.incrementalScanLibrary(libPath, prior, false);
-          saveScanCacheFn(result.scanCache);
+          const result = scanLib.incrementalScanLibrary(libPath, { 
+            scanCacheFile, 
+            ignoredDirs: new Set(['node_modules','.git','.svn','__pycache__']), 
+            videoExts: ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'], 
+            canonicalize, 
+            uuidv4 
+          });
+          saveScanCacheFn(result.currentCache);
           
           // Parse new/changed items so they have basic metadata
           for (const it of (result.toProcess || [])) {
