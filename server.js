@@ -6049,7 +6049,7 @@ function isExtrasFolderToken(value) {
   const EXTRAS_KEYWORDS = [
     'featurettes', 'featurette', 'extras', 'extra', 'bonus', 'bonuses',
     'behind the scenes', 'bts', 'interviews', 'interview', 'deleted scenes',
-    'making of', 'specials', 'special features', 'documentary', 'documentaries',
+    'making of', 'special', 'specials', 'special features', 'documentary', 'documentaries',
     'trailers', 'trailer', 'promos', 'promo', 'clips', 'outtakes', 'bloopers'
   ];
   for (const keyword of EXTRAS_KEYWORDS) {
