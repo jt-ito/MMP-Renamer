@@ -1341,7 +1341,14 @@ async function metaLookup(title, apiKey, opts = {}) {
   }
 
   // Build simple variants to try (original, cleaned, stripped parentheses, lowercase)
-  function makeVariants(t){ const s = String(t || '').trim(); const variants = []; if (!s) return variants; variants.push(s); const cleaned = s.replace(/[._\-:]+/g,' ').replace(/\s+/g,' ').trim(); variants.push(cleaned); const stripped = cleaned.replace(/\s*[\[(].*?[\])]/g, '').replace(/\s+/g,' ').trim(); if (stripped && stripped !== cleaned) variants.push(stripped); variants.push(stripped.toLowerCase()); return [...new Set(variants)].slice(0,5) }
+  // Filter out short/generic terms that would cause false matches
+  function isValidSearchTerm(term) {
+    if (!term || term.length < 4) return false;
+    // Reject common generic words that appear in release tags and would match wrong series
+    const GENERIC_WORDS = new Set(['app', 'the', 'and', 'for', 'with', 'from', 'this', 'that', 'they', 'them', 'have', 'more', 'been', 'into', 'time', 'will', 'than', 'all', 'out', 'two', 'can', 'may', 'sub', 'dub', 'raw', 'web', 'tv']);
+    return !GENERIC_WORDS.has(term.toLowerCase());
+  }
+  function makeVariants(t){ const s = String(t || '').trim(); const variants = []; if (!s) return variants; variants.push(s); const cleaned = s.replace(/[._\-:]+/g,' ').replace(/\s+/g,' ').trim(); variants.push(cleaned); const stripped = cleaned.replace(/\s*[\[(].*?[\])]/g, '').replace(/\s+/g,' ').trim(); if (stripped && stripped !== cleaned) variants.push(stripped); variants.push(stripped.toLowerCase()); return [...new Set(variants)].filter(v => isValidSearchTerm(v)).slice(0,5) }
 
   // Use top-level stripAniListSeasonSuffix helper
 
