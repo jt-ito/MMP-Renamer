@@ -942,8 +942,17 @@ function normalizeEnrichEntry(entry) {
         function normForCompare(s) { try { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g,''); } catch (e) { return String(s || '') } }
 
         if (!alias && rawPick) {
-          // AniList-style relations: rawPick.relations.nodes
-          const nodes = (rawPick.relations && Array.isArray(rawPick.relations.nodes)) ? rawPick.relations.nodes : (rawPick.series && rawPick.series.relations && Array.isArray(rawPick.series.relations.nodes) ? rawPick.series.relations.nodes : null);
+          // AniList-style relations: rawPick.relations.nodes or rawPick.relations.edges
+          let nodes = null
+          if (rawPick.relations && Array.isArray(rawPick.relations.nodes)) {
+            nodes = rawPick.relations.nodes
+          } else if (rawPick.relations && Array.isArray(rawPick.relations.edges)) {
+            // Extract nodes from edges structure
+            nodes = rawPick.relations.edges.map(e => e && e.node).filter(Boolean)
+          } else if (rawPick.series && rawPick.series.relations && Array.isArray(rawPick.series.relations.nodes)) {
+            nodes = rawPick.series.relations.nodes
+          }
+          
           if (nodes && nodes.length) {
             for (const node of nodes) {
               try {
@@ -1383,7 +1392,8 @@ async function metaLookup(title, apiKey, opts = {}) {
     try {
       await pace('graphql.anilist.co')
       // Request relations/season/seasonYear so we can prefer season-specific media when available
-      const query = `query ($search: String) { Page(page:1, perPage:8) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } season seasonYear relations { nodes { id title { romaji english native } } } } } }`;
+      // Include relation edges with relationType to identify parent/prequel relationships
+      const query = `query ($search: String) { Page(page:1, perPage:8) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } season seasonYear relations { edges { relationType node { id title { romaji english native } format episodes } } } } } }`;
       // If the caller provided a season, try an AniList text search that includes the season (e.g. "Title Season 1")
       const wantedSeason = (opts && typeof opts.season !== 'undefined' && opts.season !== null) ? Number(opts.season) : null
       const baseQuery = String(q || '').trim()
@@ -1416,9 +1426,17 @@ async function metaLookup(title, apiKey, opts = {}) {
                 try {
                   const titles = []
                   if (it && it.title) titles.push(it.title.english, it.title.romaji, it.title.native)
-                  if (it && it.relations && Array.isArray(it.relations.nodes)) {
-                    for (const rn of it.relations.nodes) {
-                      if (rn && rn.title) titles.push(rn.title.english, rn.title.romaji, rn.title.native)
+                  // Support both old nodes structure and new edges structure
+                  if (it && it.relations) {
+                    if (Array.isArray(it.relations.nodes)) {
+                      for (const rn of it.relations.nodes) {
+                        if (rn && rn.title) titles.push(rn.title.english, rn.title.romaji, rn.title.native)
+                      }
+                    }
+                    if (Array.isArray(it.relations.edges)) {
+                      for (const edge of it.relations.edges) {
+                        if (edge && edge.node && edge.node.title) titles.push(edge.node.title.english, edge.node.title.romaji, edge.node.title.native)
+                      }
                     }
                   }
                   for (const t of titles) {
@@ -1630,26 +1648,87 @@ async function metaLookup(title, apiKey, opts = {}) {
       for (const pc of pickCandidates) { try { const s = extractSeasonNumberFromTitle(pc); if (s) { pickSeasonNum = s; break } } catch (e) {} }
       // Only prefer a related parent when the picked media explicitly indicates a different season
       // than the requested one (e.g. AniList returned "3rd Season" but caller requested season=1).
-      if (pickSeasonNum !== null && wantedSeason !== null && pickSeasonNum !== wantedSeason && pick.relations && Array.isArray(pick.relations.nodes)) {
-        for (const rn of pick.relations.nodes) {
-          try {
-            const rCandidates = [rn && rn.title && rn.title.english, rn && rn.title && rn.title.romaji, rn && rn.title && rn.title.native]
-            let anySeason = false
-            for (const rc of rCandidates) { try { if (extractSeasonNumberFromTitle(rc)) { anySeason = true; break } } catch (e) {} }
-            if (!anySeason) {
-              // prefer this related parent node
-              pick = rn
-              break
-            }
-          } catch (e) {}
+      if (pickSeasonNum !== null && wantedSeason !== null && pickSeasonNum !== wantedSeason && pick.relations) {
+        // Support both old nodes structure and new edges structure
+        let relationNodes = null
+        if (Array.isArray(pick.relations.nodes)) {
+          relationNodes = pick.relations.nodes
+        } else if (Array.isArray(pick.relations.edges)) {
+          relationNodes = pick.relations.edges.map(e => e && e.node).filter(Boolean)
+        }
+        
+        if (relationNodes && relationNodes.length) {
+          for (const rn of relationNodes) {
+            try {
+              const rCandidates = [rn && rn.title && rn.title.english, rn && rn.title && rn.title.romaji, rn && rn.title && rn.title.native]
+              let anySeason = false
+              for (const rc of rCandidates) { try { if (extractSeasonNumberFromTitle(rc)) { anySeason = true; break } } catch (e) {} }
+              if (!anySeason) {
+                // prefer this related parent node
+                pick = rn
+                break
+              }
+            } catch (e) {}
+          }
         }
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
 
   const rawName = (pick && pick.title) ? (pick.title.english || pick.title.romaji || pick.title.native) : (pick && (pick.romaji || pick.english || pick.native) ? (pick.english || pick.romaji || pick.native) : null)
   const name = stripAniListSeasonSuffix(rawName, pick)
-  return { provider: 'anilist', id: pick.id, name: name, raw: pick }
+  
+  // Extract parent series information from relations (PREQUEL, PARENT, SOURCE)
+  // This helps organize sequels/seasons under the parent series folder
+  let parentSeriesTitle = null
+  let parentSeriesId = null
+  let detectedSeasonNumber = null
+  
+  try {
+    // First, try to detect season number from the current title
+    if (rawName) {
+      detectedSeasonNumber = extractSeasonNumberFromTitle(rawName)
+    }
+    
+    // Look for parent/prequel relationships
+    if (pick && pick.relations && Array.isArray(pick.relations.edges)) {
+      // Priority order: PARENT > PREQUEL > SOURCE
+      const parentTypes = ['PARENT', 'PREQUEL', 'SOURCE']
+      let bestParent = null
+      
+      for (const pType of parentTypes) {
+        const edge = pick.relations.edges.find(e => e && e.relationType === pType)
+        if (edge && edge.node) {
+          bestParent = edge.node
+          break
+        }
+      }
+      
+      if (bestParent && bestParent.title) {
+        const parentTitle = bestParent.title.english || bestParent.title.romaji || bestParent.title.native
+        if (parentTitle) {
+          // Check if parent title doesn't have a season marker (indicating it's the root series)
+          const parentSeasonNum = extractSeasonNumberFromTitle(parentTitle)
+          if (!parentSeasonNum) {
+            parentSeriesTitle = stripAniListSeasonSuffix(parentTitle, bestParent)
+            parentSeriesId = bestParent.id
+            try { appendLog(`META_ANILIST_PARENT_DETECTED child=${String(rawName).slice(0,80)} parent=${String(parentSeriesTitle).slice(0,80)} season=${detectedSeasonNumber || 'unknown'}`) } catch (e) {}
+          }
+        }
+      }
+    }
+  } catch (e) {
+    try { appendLog(`META_ANILIST_PARENT_EXTRACT_ERROR err=${e.message}`) } catch (e2) {}
+  }
+  
+  return { 
+    provider: 'anilist', 
+    id: pick.id, 
+    name: name, 
+    raw: pick,
+    parentSeriesTitle: parentSeriesTitle,
+    parentSeriesId: parentSeriesId,
+    detectedSeasonNumber: detectedSeasonNumber
+  }
     } catch (e) { return null }
   }
 
@@ -2585,6 +2664,8 @@ async function metaLookup(title, apiKey, opts = {}) {
                 seriesId: tvdbEpisode.seriesId,
                 seriesName: tvdbEpisode.seriesName,
                 episodeTitle: tvdbEpisode.episodeTitle,
+                parentSeriesName: tvdbEpisode.parentSeriesName || null,
+                parentSeriesId: tvdbEpisode.parentSeriesId || null,
                 raw: tvdbEpisode.raw
               };
               ep = {
@@ -2594,8 +2675,8 @@ async function metaLookup(title, apiKey, opts = {}) {
                 source: 'tvdb',
                 raw: tvdbEpisode.raw && tvdbEpisode.raw.episode ? tvdbEpisode.raw.episode : tvdbEpisode.raw
               };
-              try { ep.tvdb = { seriesId: tvdbEpisode.seriesId, seriesName: tvdbEpisode.seriesName }; } catch (e) {}
-              try { appendLog(`META_TVDB_EP_AFTER_PARENT q=${parentAniListName} epName=${String(tvdbEpisode.episodeTitle).slice(0,120)}`) } catch (e) {}
+              try { ep.tvdb = { seriesId: tvdbEpisode.seriesId, seriesName: tvdbEpisode.seriesName, parentSeriesName: tvdbEpisode.parentSeriesName, parentSeriesId: tvdbEpisode.parentSeriesId }; } catch (e) {}
+              try { appendLog(`META_TVDB_EP_AFTER_PARENT q=${parentAniListName} epName=${String(tvdbEpisode.episodeTitle).slice(0,120)} parentSeries=${tvdbEpisode.parentSeriesName || 'none'}`) } catch (e) {}
             } else {
               try { appendLog(`META_TVDB_EP_AFTER_PARENT_NONE q=${parentAniListName}`) } catch (e) {}
             }
@@ -3311,6 +3392,30 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
         }
         if (res) {
           console.log('[Server] AniDB lookup succeeded:', res.name || 'no-name');
+          
+          // After successful AniDB lookup, query AniList for relationship information
+          // This provides parent series detection that AniDB hash lookups don't include
+          try {
+            if (!opts.skipAnimeProviders && sanitizedOrder.includes('anilist')) {
+              try { appendLog(`ANILIST_RELATIONSHIP_LOOKUP_AFTER_ANIDB title=${res.name}`); } catch (e) {}
+              const anilistResult = await searchAniList(res.name);
+              if (anilistResult && anilistResult.parentSeriesTitle) {
+                // Merge AniList relationship data into AniDB result
+                res.parentSeriesTitle = anilistResult.parentSeriesTitle;
+                res.parentSeriesId = anilistResult.parentSeriesId;
+                res.detectedSeasonNumber = anilistResult.detectedSeasonNumber;
+                try { 
+                  appendLog(`ANILIST_RELATIONSHIP_FOUND_AFTER_ANIDB parent=${anilistResult.parentSeriesTitle} season=${anilistResult.detectedSeasonNumber || 'unknown'}`); 
+                } catch (e) {}
+              } else {
+                try { appendLog(`ANILIST_RELATIONSHIP_NONE_AFTER_ANIDB title=${res.name}`); } catch (e) {}
+              }
+            }
+          } catch (anilistErr) {
+            // Don't fail the whole lookup if AniList relationship query fails
+            try { appendLog(`ANILIST_RELATIONSHIP_ERROR_AFTER_ANIDB error=${anilistErr.message || String(anilistErr)}`); } catch (e) {}
+          }
+          
           break;
         }
       } catch (anidbErr) {
@@ -3564,9 +3669,49 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
               if (!anilistRomaji && res && res.raw && res.raw.title && res.raw.title.romaji) anilistRomaji = String(res.raw.title.romaji).trim()
             } catch (e) { /* best-effort */ }
             const providerPreferred = (anilistEnglish && anilistEnglish.length) ? anilistEnglish : ((anilistRomaji && anilistRomaji.length) ? anilistRomaji : providerTitleRaw)
+            
+            // Check if AniList returned parent series information (for arcs/sequels that should be under parent folder)
+            let useParentSeries = false
+            let parentSeriesName = null
+            if (res && res.parentSeriesTitle && res.detectedSeasonNumber) {
+              // We have a parent series and detected season - use parent for folder organization
+              parentSeriesName = res.parentSeriesTitle
+              useParentSeries = true
+              try { 
+                appendLog(`META_USE_PARENT_SERIES child=${String(providerPreferred).slice(0,80)} parent=${String(parentSeriesName).slice(0,80)} season=${res.detectedSeasonNumber}`) 
+              } catch (e) {}
+            }
+            
+            // Also check for TVDB parent series information
+            if (!useParentSeries && res && res.episode && res.episode.tvdb) {
+              const tvdbData = res.episode.tvdb
+              if (tvdbData.parentSeriesName) {
+                parentSeriesName = tvdbData.parentSeriesName
+                useParentSeries = true
+                try { 
+                  appendLog(`META_USE_TVDB_PARENT_SERIES child=${String(tvdbData.seriesName).slice(0,80)} parent=${String(parentSeriesName).slice(0,80)}`) 
+                } catch (e) {}
+              }
+            }
+            
             if (providerPreferred) {
               guess.originalSeriesTitle = providerPreferred
               guess.seriesTitleExact = providerPreferred
+              
+              // If we have parent series info, store it separately and use it for folder structure
+              if (useParentSeries && parentSeriesName) {
+                guess.parentSeriesTitle = parentSeriesName
+                guess.childSeriesTitle = providerPreferred
+                guess.seriesTitleForFolder = parentSeriesName
+                // Override the season number if detected from the child title
+                if (res.detectedSeasonNumber && !normSeason) {
+                  guess.season = res.detectedSeasonNumber
+                  try { 
+                    appendLog(`META_OVERRIDE_SEASON from=${normSeason || 'none'} to=${res.detectedSeasonNumber} child=${String(providerPreferred).slice(0,80)}`) 
+                  } catch (e) {}
+                }
+              }
+              
               // store English/romaji separately for later preference logic
               // Strip "Season X" suffix from stored English title since we use SxxExx notation
               if (anilistEnglish) {
@@ -3575,9 +3720,9 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
                 guess.seriesTitleEnglish = cleanedEnglish;
               }
               if (anilistRomaji) guess.seriesTitleRomaji = anilistRomaji
-              addSeriesCandidate('provider.original', providerPreferred, { prepend: true })
+              addSeriesCandidate('provider.original', useParentSeries && parentSeriesName ? parentSeriesName : providerPreferred, { prepend: true })
             }
-            const mappedTitle = providerPreferred || String(raw.displayName || guess.title || seriesName || base).trim()
+            const mappedTitle = (useParentSeries && parentSeriesName) ? parentSeriesName : (providerPreferred || String(raw.displayName || guess.title || seriesName || base).trim())
             if (mappedTitle) guess.title = mappedTitle
 
             // Episode-level data (when available)
