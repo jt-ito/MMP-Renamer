@@ -1672,7 +1672,8 @@ async function metaLookup(title, apiKey, opts = {}) {
           }
         }
       }
-    } catch (e) {}
+    }
+  } catch (e) {}
 
   const rawName = (pick && pick.title) ? (pick.title.english || pick.title.romaji || pick.title.native) : (pick && (pick.romaji || pick.english || pick.native) ? (pick.english || pick.romaji || pick.native) : null)
   const name = stripAniListSeasonSuffix(rawName, pick)
