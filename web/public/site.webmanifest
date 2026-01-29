@@ -1,0 +1,21 @@
+{
+  "name": "MMP Renamer",
+  "short_name": "MMP Renamer",
+  "description": "Media metadata processor and file renamer",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any"
+    },
+    {
+      "src": "/Black_Printer_PNG_Clip_Art-3157-2830746032.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "theme_color": "#4F46E5",
+  "background_color": "#ffffff",
+  "display": "standalone",
+  "start_url": "/"
+}
