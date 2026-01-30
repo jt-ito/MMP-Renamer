@@ -1,0 +1,22 @@
+{
+  "_comment": "Manual provider ID overrides for series that can't be auto-matched due to naming issues.",
+  "_instructions": "Copy this file to data/manual-ids.json and add entries where the key is the exact series title extracted from your filename (check logs for 'title=' value), and the value is an object with provider IDs. You only need to specify the providers you want to override.",
+  "_example": {
+    "Some Badly Named Series": {
+      "tmdb": 12345,
+      "tvdb": 67890,
+      "anilist": 54321
+    }
+  },
+  "_how_to_find_ids": {
+    "tmdb": "Go to themoviedb.org, search for the series, the ID is in the URL: themoviedb.org/tv/[ID]",
+    "tvdb": "Go to thetvdb.com, search for the series, the ID is in the URL: thetvdb.com/dereferrer/series/[ID]",
+    "anilist": "Go to anilist.co, search for the anime, the ID is in the URL: anilist.co/anime/[ID]"
+  },
+  "_example_diddy": {
+    "_note": "For 'Sean Diddy Combs Netflix Documentary The Reckoning', you would add:",
+    "Sean Diddy Combs Netflix Documentary The Reckoning": {
+      "tmdb": 246145
+    }
+  }
+}
