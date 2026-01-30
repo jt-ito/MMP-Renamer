@@ -1227,21 +1227,20 @@ async function metaLookup(title, apiKey, opts = {}) {
   const manualTmdbId = getManualId(title, 'tmdb');
   const manualTvdbId = getManualId(title, 'tvdb');
   
+  let effectiveProvidersOrder = metaProvidersOrder
   if (manualAnilistId || manualTmdbId || manualTvdbId) {
     try { appendLog(`MANUAL_ID_OVERRIDE title=${title} anilist=${manualAnilistId||'<none>'} tmdb=${manualTmdbId||'<none>'} tvdb=${manualTvdbId||'<none>'}`) } catch (e) {}
-    
-    // Try manual TVDB ID first if it's enabled and we have the ID
-    if (manualTvdbId && allowTvdb && tvdbCreds) {
-      try {
-        try { appendLog(`MANUAL_ID_TVDB_FETCH id=${manualTvdbId} title=${title}`) } catch (e) {}
-        const result = await fetchTvdbById(manualTvdbId, tvdbCreds, opts && opts.season, opts && opts.episode)
-        if (result) {
-          try { appendLog(`MANUAL_ID_TVDB_SUCCESS id=${manualTvdbId} name=${result.name}`) } catch (e) {}
-          return result
-        }
-      } catch (e) {
-        try { appendLog(`MANUAL_ID_TVDB_ERROR id=${manualTvdbId} error=${e.message || String(e)}`) } catch (e) {}
-      }
+
+    // Prefer providers that have manual IDs by moving them to the front
+    const manualProviders = metaProvidersOrder.filter((p) => (
+      (p === 'tmdb' && manualTmdbId) ||
+      (p === 'tvdb' && manualTvdbId) ||
+      (p === 'anilist' && manualAnilistId)
+    ))
+    const remainingProviders = metaProvidersOrder.filter((p) => !manualProviders.includes(p))
+    if (manualProviders.length) {
+      effectiveProvidersOrder = [...manualProviders, ...remainingProviders]
+      try { appendLog(`MANUAL_ID_PROVIDER_ORDER title=${title} order=${effectiveProvidersOrder.join('|')}`) } catch (e) {}
     }
   }
 
@@ -3005,6 +3004,26 @@ async function metaLookup(title, apiKey, opts = {}) {
   async function attemptTvdb(baseResult = null) {
     if (!allowTvdb || !tvdbCreds || !(opts && opts.season != null && opts.episode != null)) return null
     try {
+      // Manual ID override takes precedence when provided
+      if (manualTvdbId) {
+        try { appendLog(`MANUAL_ID_TVDB_FETCH id=${manualTvdbId} title=${title}`) } catch (e) {}
+        const manual = await fetchTvdbById(manualTvdbId, tvdbCreds, opts && opts.season, opts && opts.episode)
+        if (manual) {
+          try { appendLog(`MANUAL_ID_TVDB_SUCCESS id=${manualTvdbId} name=${manual.name}`) } catch (e) {}
+          if (baseResult) {
+            const merged = Object.assign({}, baseResult, { episode: manual.episode || null })
+            try { merged.tvdb = manual } catch (e) {}
+            try {
+              if (merged.raw && typeof merged.raw === 'object') {
+                merged.raw.tvdb = { seriesId: manual.id || manual.seriesId, seriesName: manual.name }
+              }
+            } catch (e) {}
+            return merged
+          }
+          return manual
+        }
+      }
+
       const candidatePool = []
       candidatePool.push(...variants)
       if (parentCandidate) candidatePool.push(parentCandidate)
@@ -3165,7 +3184,7 @@ async function metaLookup(title, apiKey, opts = {}) {
   }
 
   let partialResult = null
-  for (const providerId of metaProvidersOrder) {
+  for (const providerId of effectiveProvidersOrder) {
     if (providerId === 'anilist') {
       const res = await attemptAniList()
       if (res) return res
