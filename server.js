@@ -7376,39 +7376,67 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
           resultItem.status = 'hardlinked';
           resultItem.to = toPath;
           appendLog(`HARDLINK_SUCCESS from=${fromPath} to=${toPath}`);
+        }
 
-          // Update Cache/DB
-          try {
-            const fromKey = canonicalize(fromPath);
-            enrichCache[fromKey] = enrichCache[fromKey] || {};
-            enrichCache[fromKey].applied = true;
-            enrichCache[fromKey].hidden = true;
-            enrichCache[fromKey].appliedAt = Date.now();
-            enrichCache[fromKey].appliedTo = toPath;
-            
-            const finalBasename = path.basename(toPath);
-            enrichCache[fromKey].renderedName = finalBasename;
-            enrichCache[fromKey].metadataFilename = finalBasename.replace(path.extname(finalBasename), '');
+        // Update Cache/DB (for both hardlinked and exists cases)
+        try {
+          const fromKey = canonicalize(fromPath);
+          enrichCache[fromKey] = enrichCache[fromKey] || {};
+          enrichCache[fromKey].applied = true;
+          enrichCache[fromKey].hidden = true;
+          enrichCache[fromKey].appliedAt = Date.now();
+          enrichCache[fromKey].appliedTo = toPath;
+          
+          const finalBasename = path.basename(toPath);
+          enrichCache[fromKey].renderedName = finalBasename;
+          enrichCache[fromKey].metadataFilename = finalBasename.replace(path.extname(finalBasename), '');
 
-            // Update renderedIndex
-            const targetKey = canonicalize(toPath);
-            renderedIndex[targetKey] = {
-                source: fromPath,
-                renderedName: finalBasename,
-                appliedTo: toPath,
-                metadataFilename: enrichCache[fromKey].metadataFilename,
-                provider: enrichCache[fromKey].provider || null,
-                parsed: enrichCache[fromKey].parsed || null
-            };
-            
-            // Persist immediately to avoid data loss
-            if (db) {
-                db.setKV('enrichCache', enrichCache);
-                db.setKV('renderedIndex', renderedIndex);
-            }
-          } catch (dbErr) {
-            appendLog(`DB_UPDATE_FAIL ${dbErr.message}`);
+          // Update renderedIndex
+          const targetKey = canonicalize(toPath);
+          renderedIndex[targetKey] = {
+              source: fromPath,
+              renderedName: finalBasename,
+              appliedTo: toPath,
+              metadataFilename: enrichCache[fromKey].metadataFilename,
+              provider: enrichCache[fromKey].provider || null,
+              parsed: enrichCache[fromKey].parsed || null
+          };
+          
+          // Persist immediately to avoid data loss
+          if (db) {
+              db.setKV('enrichCache', enrichCache);
+              db.setKV('renderedIndex', renderedIndex);
           }
+
+          // Remove from scans and emit hide event so clients reconcile immediately
+          try {
+            const modifiedScanIds = [];
+            const scanIds = Object.keys(scans || {});
+            for (const sid of scanIds) {
+              try {
+                const s = scans[sid];
+                if (!s || !Array.isArray(s.items)) continue;
+                const before = s.items.length;
+                s.items = s.items.filter(it => {
+                  try { return canonicalize(it.canonicalPath) !== fromKey } catch (e) { return true }
+                });
+                if (s.items.length !== before) {
+                  s.totalCount = s.items.length;
+                  modifiedScanIds.push(sid);
+                }
+              } catch (e) {}
+            }
+            if (modifiedScanIds.length) {
+              try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); appendLog(`APPLY_UPDATED_SCANS path=${fromPath} ids=${modifiedScanIds.join(',')}`) } catch (e) {}
+            }
+            try {
+              hideEvents.push({ ts: Date.now(), path: fromKey, originalPath: fromPath, modifiedScanIds });
+              try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
+              if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
+            } catch (e) {}
+          } catch (e) {}
+        } catch (dbErr) {
+          appendLog(`DB_UPDATE_FAIL ${dbErr.message}`);
         }
       } else {
         resultItem.status = 'dry-run';
