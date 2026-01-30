@@ -49,182 +49,6 @@ const PROVIDER_LABELS = {
   kitsu: 'Kitsu'
 }
 
-function ManualIdInputs({ title, onSave, onToggle }) {
-  const [expanded, setExpanded] = React.useState(false)
-  const [anilist, setAnilist] = React.useState('')
-  const [tmdb, setTmdb] = React.useState('')
-  const [tvdb, setTvdb] = React.useState('')
-  const [loading, setLoading] = React.useState(false)
-
-  React.useEffect(() => {
-    if (typeof onToggle === 'function') {
-      onToggle(expanded)
-    }
-  }, [expanded, onToggle])
-
-  // Load existing manual IDs
-  React.useEffect(() => {
-    if (!expanded) return
-    axios.get(API('/manual-ids'))
-      .then(res => {
-        const ids = res.data?.manualIds?.[title] || {}
-        setAnilist(ids.anilist || '')
-        setTmdb(ids.tmdb || '')
-        setTvdb(ids.tvdb || '')
-      })
-      .catch(() => {})
-  }, [title, expanded])
-
-  if (!expanded) {
-    return (
-      <div style={{ marginTop: 8, fontSize: 11 }}>
-        <button
-          type="button"
-          onClick={() => setExpanded(true)}
-          style={{
-            background: 'none',
-            border: '1px solid var(--muted)',
-            borderRadius: 4,
-            padding: '4px 8px',
-            fontSize: 11,
-            cursor: 'pointer',
-            color: 'var(--text)',
-            opacity: 0.7
-          }}
-        >
-          Set Manual Provider IDs
-        </button>
-      </div>
-    )
-  }
-
-  return (
-    <div style={{ marginTop: 8, padding: 8, background: 'var(--bg-secondary)', borderRadius: 4, fontSize: 11 }}>
-      <div style={{ marginBottom: 6, fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>Manual Provider IDs for: {title}</span>
-        <button
-          type="button"
-          onClick={() => setExpanded(false)}
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            fontSize: 14,
-            padding: 0,
-            color: 'var(--muted)'
-          }}
-        >
-          ×
-        </button>
-      </div>
-      <div style={{ display: 'grid', gap: 6 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 4, alignItems: 'center' }}>
-          <label style={{ fontSize: 10, opacity: 0.8 }}>AniList:</label>
-          <input
-            type="text"
-            value={anilist}
-            onChange={e => setAnilist(e.target.value)}
-            placeholder="ID (e.g. 21)"
-            style={{
-              padding: '4px 6px',
-              fontSize: 11,
-              border: '1px solid var(--muted)',
-              borderRadius: 3,
-              background: 'var(--bg)',
-              color: 'var(--text)'
-            }}
-          />
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 4, alignItems: 'center' }}>
-          <label style={{ fontSize: 10, opacity: 0.8 }}>TMDB:</label>
-          <input
-            type="text"
-            value={tmdb}
-            onChange={e => setTmdb(e.target.value)}
-            placeholder="ID (e.g. 246145)"
-            style={{
-              padding: '4px 6px',
-              fontSize: 11,
-              border: '1px solid var(--muted)',
-              borderRadius: 3,
-              background: 'var(--bg)',
-              color: 'var(--text)'
-            }}
-          />
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 4, alignItems: 'center' }}>
-          <label style={{ fontSize: 10, opacity: 0.8 }}>TVDB:</label>
-          <input
-            type="text"
-            value={tvdb}
-            onChange={e => setTvdb(e.target.value)}
-            placeholder="ID (e.g. 123456)"
-            style={{
-              padding: '4px 6px',
-              fontSize: 11,
-              border: '1px solid var(--muted)',
-              borderRadius: 3,
-              background: 'var(--bg)',
-              color: 'var(--text)'
-            }}
-          />
-        </div>
-        <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-          <button
-            type="button"
-            onClick={async () => {
-              setLoading(true)
-              try {
-                await onSave({
-                  anilist: anilist.trim() || null,
-                  tmdb: tmdb.trim() || null,
-                  tvdb: tvdb.trim() || null
-                })
-                setExpanded(false)
-              } catch (e) {
-                // Error handled by parent
-              } finally {
-                setLoading(false)
-              }
-            }}
-            disabled={loading}
-            style={{
-              padding: '4px 12px',
-              fontSize: 11,
-              border: 'none',
-              borderRadius: 3,
-              background: 'var(--accent-cta)',
-              color: 'white',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              opacity: loading ? 0.6 : 1
-            }}
-          >
-            {loading ? 'Saving...' : 'Save'}
-          </button>
-          <button
-            type="button"
-            onClick={() => setExpanded(false)}
-            style={{
-              padding: '4px 12px',
-              fontSize: 11,
-              border: '1px solid var(--muted)',
-              borderRadius: 3,
-              background: 'transparent',
-              color: 'var(--text)',
-              cursor: 'pointer'
-            }}
-          >
-            Cancel
-          </button>
-        </div>
-        <div style={{ fontSize: 10, opacity: 0.6, marginTop: 4 }}>
-          After saving, rescan the item to apply the manual IDs.
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function ProviderStats({ filteredItems, enrichCache, total, metaPhase, metaProgress }) {
   const stats = React.useMemo(() => {
     if (filteredItems.length === 0) return null
@@ -1986,16 +1810,11 @@ export default function App() {
       // After apply, refresh enrichment for each plan.fromPath so the UI reflects applied/hidden state immediately
       try {
         const paths = (plans || []).map(p => p.fromPath).filter(Boolean)
-        const normPath = (value) => String(value || '').replace(/\\/g, '/').trim()
-        const pathSet = new Set(paths.map(normPath))
         // set per-item loading while refresh happens
         const loadingMap = {}
         for (const p of paths) loadingMap[p] = true
   safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
         await refreshEnrichForPaths(paths)
-        // Ensure approved items are removed immediately even if cache refresh lags
-        setItems(prev => prev.filter(it => !pathSet.has(normPath(it.canonicalPath))))
-        setAllItems(prev => prev.filter(it => !pathSet.has(normPath(it.canonicalPath))))
         // clear loading flags
   safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of paths) delete n[p]; return n })
       } catch (e) {
@@ -3418,6 +3237,112 @@ function LogsPanel({ logs, refresh, pushToast }) {
   )
 }
 
+function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
+  const [values, setValues] = useState({ anilist: '', tmdb: '', tvdb: '' })
+  const [loading, setLoading] = useState(false)
+
+  const normalizeKey = (value) => {
+    try { return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ') } catch (e) { return String(value || '').trim().toLowerCase() }
+  }
+
+  useEffect(() => {
+    let active = true
+    if (!isOpen || !title) return undefined
+    setLoading(true)
+    ;(async () => {
+      try {
+        const r = await axios.get(API('/manual-ids'))
+        const map = (r && r.data && r.data.manualIds) ? r.data.manualIds : {}
+        const key = normalizeKey(title)
+        const entry = (key && map && map[key]) ? map[key] : null
+        if (!active) return
+        setValues({
+          anilist: entry && entry.anilist ? String(entry.anilist) : '',
+          tmdb: entry && entry.tmdb ? String(entry.tmdb) : '',
+          tvdb: entry && entry.tvdb ? String(entry.tvdb) : ''
+        })
+      } catch (e) {
+        if (active) setValues({ anilist: '', tmdb: '', tvdb: '' })
+      } finally {
+        if (active) setLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [isOpen, title])
+
+  const handleSave = async () => {
+    if (!title) return
+    setLoading(true)
+    try {
+      await axios.post(API('/manual-ids'), {
+        title,
+        anilist: values.anilist || null,
+        tmdb: values.tmdb || null,
+        tvdb: values.tvdb || null
+      })
+      pushToast && pushToast('Manual IDs', 'Saved manual provider IDs')
+      onSaved && onSaved()
+      onToggle && onToggle(false)
+    } catch (e) {
+      pushToast && pushToast('Manual IDs', 'Failed to save manual IDs')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const panelStyle = {
+    marginTop: 10,
+    padding: 10,
+    background: 'var(--bg-800)',
+    border: '1px solid var(--bg-600)',
+    borderRadius: 10,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8
+  }
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <button
+        type="button"
+        className="btn-ghost"
+        onClick={(e) => { e.stopPropagation(); onToggle && onToggle(!isOpen) }}
+        style={{ fontSize: 12, padding: '6px 10px' }}
+      >
+        {isOpen ? 'Hide Manual Provider IDs' : 'Set Manual Provider IDs'}
+      </button>
+      {isOpen ? (
+        <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+            <input
+              className="form-input"
+              placeholder="AniList ID"
+              value={values.anilist}
+              onChange={(e) => setValues(prev => ({ ...prev, anilist: e.target.value }))}
+            />
+            <input
+              className="form-input"
+              placeholder="TMDB ID"
+              value={values.tmdb}
+              onChange={(e) => setValues(prev => ({ ...prev, tmdb: e.target.value }))}
+            />
+            <input
+              className="form-input"
+              placeholder="TVDB ID"
+              value={values.tvdb}
+              onChange={(e) => setValues(prev => ({ ...prev, tvdb: e.target.value }))}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button type="button" className="btn-ghost" onClick={() => onToggle && onToggle(false)} disabled={loading}>Cancel</button>
+            <button type="button" className="btn-cta" onClick={handleSave} disabled={loading}>Save IDs</button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 const DEFAULT_ROW_HEIGHT = 90
 
 function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null, setContextMenu = () => {} }) {
@@ -3427,6 +3352,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const lastClickedIndex = useRef(null)
   const selectionUtilsRef = useRef(null)
   const rowHeights = useRef({})
+  const [manualIdOpen, setManualIdOpen] = useState({})
+  const [manualIdsTick, setManualIdsTick] = useState(0)
 
   useEffect(() => {
     // dynamically import selection utils (CommonJS module) and cache
@@ -3473,7 +3400,6 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const rawEnrichment = it ? enrichCache?.[it.canonicalPath] : null
   const enrichment = normalizeEnrichResponse(rawEnrichment)
   const rowRef = useRef(null)
-  const [manualIdsTick, setManualIdsTick] = useState(0)
   
   // Declare loading and isSelected before using in useEffect dependencies
   const loadingState = it && loadingEnrich[it.canonicalPath]
@@ -3520,6 +3446,13 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   // Year must come BEFORE episode label for TV shows
   const providerRendered = provider?.renderedName || (providerTitle ? `${providerTitle}${providerYear}${epLabel ? ' - ' + epLabel : ''}${providerEpisodeTitle ? ' - ' + providerEpisodeTitle : ''}` : null)
   const providerSourceLabel = provider?.source || (provider?.provider ? (PROVIDER_LABELS[String(provider.provider).toLowerCase()] || provider.provider) : 'provider')
+  const manualIdTitle = providerTitle || parsedTitle || (it?.canonicalPath ? it.canonicalPath.split('/').pop() : '')
+  const isManualOpen = !!(it && manualIdOpen[it.canonicalPath])
+  const toggleManualOpen = (next) => {
+    if (!it || !it.canonicalPath) return
+    setManualIdOpen(prev => ({ ...prev, [it.canonicalPath]: typeof next === 'boolean' ? next : !prev[it.canonicalPath] }))
+    setManualIdsTick(t => t + 1)
+  }
   const providerIdCandidates = []
   try { if (provider?.sources?.series?.id) providerIdCandidates.push(String(provider.sources.series.id).toLowerCase()) } catch (e) {}
   try { if (provider?.sources?.episode?.id) providerIdCandidates.push(String(provider.sources.episode.id).toLowerCase()) } catch (e) {}
@@ -3640,26 +3573,6 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 </>
               ) : (parsed ? 'parsed' : 'unknown')}
             </div>
-            {/* Manual Provider ID inputs */}
-            {parsedTitle && (
-              <ManualIdInputs 
-                title={parsedTitle}
-                onToggle={() => setManualIdsTick(t => t + 1)}
-                onSave={async (ids) => {
-                  try {
-                    await axios.post(API('/manual-ids'), {
-                      title: parsedTitle,
-                      anilist: ids.anilist || null,
-                      tmdb: ids.tmdb || null,
-                      tvdb: ids.tvdb || null
-                    })
-                    pushToast && pushToast('Manual IDs', 'Saved successfully. Rescan to apply.')
-                  } catch (e) {
-                    pushToast && pushToast('Manual IDs', `Failed: ${e.message}`)
-                  }
-                }}
-              />
-            )}
           </div>
         </div>
         <div className="actions">
@@ -3771,6 +3684,15 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
           >
             {loading ? <Spinner/> : <><IconCopy/> <span>Hide</span></>}
           </button>
+        </div>
+        <div style={{ paddingLeft: selectMode ? 36 : 0 }}>
+          <ManualIdInputs
+            title={manualIdTitle}
+            isOpen={isManualOpen}
+            onToggle={toggleManualOpen}
+            onSaved={() => setManualIdsTick(t => t + 1)}
+            pushToast={pushToast}
+          />
         </div>
       </div>
     )
