@@ -1991,6 +1991,9 @@ export default function App() {
         for (const p of paths) loadingMap[p] = true
   safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
         await refreshEnrichForPaths(paths)
+        // Force immediate removal from items list for approved paths
+        setItems(prev => prev.filter(it => !paths.includes(it.canonicalPath)))
+        setAllItems(prev => prev.filter(it => !paths.includes(it.canonicalPath)))
         // clear loading flags
   safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of paths) delete n[p]; return n })
       } catch (e) {
