@@ -165,6 +165,8 @@ const logsFile = path.join(DATA_DIR, 'logs.txt');
 // Wikipedia episode cache file (persistent)
 const wikiEpisodeCacheFile = path.join(DATA_DIR, 'wiki-episode-cache.json');
 const wikiSearchLogFile = path.join(DATA_DIR, 'wiki-search.log');
+// Manual provider ID overrides for series that can't be auto-matched
+const manualIdsFile = path.join(DATA_DIR, 'manual-ids.json');
 
 // ensure we have a persistent session signing key
 const sessionKeyFile = path.join(DATA_DIR, 'session.key');
@@ -207,6 +209,33 @@ let serverSettings = {};
 let users = {};
 try { ensureFile(settingsFile, {}); serverSettings = JSON.parse(fs.readFileSync(settingsFile, 'utf8') || '{}') } catch (e) { serverSettings = {} }
 try { ensureFile(usersFile, { admin: { username: 'admin', role: 'admin', passwordHash: null, settings: {} } }); users = JSON.parse(fs.readFileSync(usersFile, 'utf8') || '{}') } catch (e) { users = {} }
+
+// load manual provider ID overrides
+let manualIds = {};
+function loadManualIds() {
+  try {
+    ensureFile(manualIdsFile, {});
+    const raw = fs.readFileSync(manualIdsFile, 'utf8') || '{}';
+    manualIds = JSON.parse(raw);
+    // Filter out comment keys
+    Object.keys(manualIds).forEach(key => {
+      if (key.startsWith('_')) delete manualIds[key];
+    });
+  } catch (e) {
+    console.error('Failed to load manual-ids.json:', e && e.message);
+    manualIds = {};
+  }
+}
+loadManualIds();
+
+function getManualId(title, provider) {
+  if (!title || !provider) return null;
+  const normalized = String(title).trim();
+  const entry = manualIds[normalized];
+  if (!entry || typeof entry !== 'object') return null;
+  const id = entry[provider];
+  return (id != null && (typeof id === 'number' || typeof id === 'string')) ? id : null;
+}
 
 if (typeof serverSettings.delete_hardlinks_on_unapprove === 'undefined') {
   serverSettings.delete_hardlinks_on_unapprove = true;
@@ -1193,6 +1222,29 @@ async function metaLookup(title, apiKey, opts = {}) {
     p === 'tvdb' || p === 'tmdb' || p === 'wikipedia' || p === 'kitsu'
   ))
 
+  // Check for manual provider ID overrides before attempting automatic search
+  const manualAnilistId = getManualId(title, 'anilist');
+  const manualTmdbId = getManualId(title, 'tmdb');
+  const manualTvdbId = getManualId(title, 'tvdb');
+  
+  if (manualAnilistId || manualTmdbId || manualTvdbId) {
+    try { appendLog(`MANUAL_ID_OVERRIDE title=${title} anilist=${manualAnilistId||'<none>'} tmdb=${manualTmdbId||'<none>'} tvdb=${manualTvdbId||'<none>'}`) } catch (e) {}
+    
+    // Try manual TVDB ID first if it's enabled and we have the ID
+    if (manualTvdbId && allowTvdb && tvdbCreds) {
+      try {
+        try { appendLog(`MANUAL_ID_TVDB_FETCH id=${manualTvdbId} title=${title}`) } catch (e) {}
+        const result = await fetchTvdbById(manualTvdbId, tvdbCreds, opts && opts.season, opts && opts.episode)
+        if (result) {
+          try { appendLog(`MANUAL_ID_TVDB_SUCCESS id=${manualTvdbId} name=${result.name}`) } catch (e) {}
+          return result
+        }
+      } catch (e) {
+        try { appendLog(`MANUAL_ID_TVDB_ERROR id=${manualTvdbId} error=${e.message || String(e)}`) } catch (e) {}
+      }
+    }
+  }
+
   // Minimal per-host pacing to avoid hammering external APIs
   const hostPace = { 'graphql.anilist.co': 250, 'kitsu.io': 250, 'api.themoviedb.org': 300, 'en.wikipedia.org': 300 } // ms
   const lastRequestAt = metaLookup._lastRequestAt = metaLookup._lastRequestAt || {}
@@ -1385,6 +1437,110 @@ async function metaLookup(title, apiKey, opts = {}) {
       if (body) req.write(body)
       req.end()
     })
+  }
+
+  // Fetch AniList entry by ID (for manual ID overrides)
+  async function fetchAniListById(id) {
+    try {
+      await pace('graphql.anilist.co')
+      const query = `query ($id: Int) { Media(id: $id, type: ANIME) { id title { romaji english native } format episodes startDate { year } season seasonYear relations { edges { relationType node { id title { romaji english native } format episodes } } } } }`;
+      let anilistKey = null
+      try {
+        if (opts && opts.anilist_key) anilistKey = opts.anilist_key
+        else if (opts && opts.username && users && users[opts.username] && users[opts.username].settings && users[opts.username].settings.anilist_api_key) anilistKey = users[opts.username].settings.anilist_api_key
+        else if (serverSettings && serverSettings.anilist_api_key) anilistKey = serverSettings.anilist_api_key
+      } catch (e) { anilistKey = null }
+      const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+      if (anilistKey) headers['Authorization'] = `Bearer ${String(anilistKey)}`
+      const opt = { hostname: 'graphql.anilist.co', path: '/', method: 'POST', headers }
+      const vars = JSON.stringify({ id: Number(id) })
+      const body = JSON.stringify({ query, variables: JSON.parse(vars) })
+      const res = await httpRequest(opt, body, 3500)
+      if (!res || !res.body) return null
+      let j = null
+      try { j = JSON.parse(res.body) } catch (e) { return null }
+      const media = j && j.data && j.data.Media ? j.data.Media : null
+      if (!media) return null
+      const name = media.title && (media.title.english || media.title.romaji || media.title.native) || null
+      return { id: media.id, name, title: media.title, format: media.format, episodes: media.episodes, startDate: media.startDate, season: media.season, seasonYear: media.seasonYear, relations: media.relations, raw: media }
+    } catch (e) { 
+      try { appendLog(`MANUAL_ANILIST_FETCH_ERROR id=${id} error=${e.message || String(e)}`) } catch (e) {}
+      return null 
+    }
+  }
+
+  // Fetch TMDB series by ID (for manual ID overrides)
+  async function fetchTmdbById(id, tmdbKey, season, episode) {
+    if (!tmdbKey) return null
+    try {
+      await pace('api.themoviedb.org')
+      const detailsPath = `/3/tv/${encodeURIComponent(id)}?api_key=${encodeURIComponent(tmdbKey)}`
+      const detailsRes = await httpRequest({ hostname: 'api.themoviedb.org', path: detailsPath, method: 'GET', headers: { 'Accept': 'application/json' } }, null, 3000)
+      if (!detailsRes || !detailsRes.body) return null
+      let detailsJson = null
+      try { detailsJson = JSON.parse(detailsRes.body) } catch (e) { return null }
+      if (!detailsJson || !detailsJson.id) return null
+      let name = detailsJson.name || detailsJson.original_name || null
+      const raw = Object.assign({}, detailsJson, { source: 'tmdb', media_type: 'tv' })
+      
+      // If season/episode provided, try to fetch episode details
+      if (season != null && episode != null) {
+        try {
+          await pace('api.themoviedb.org')
+          const epPath = `/3/tv/${encodeURIComponent(id)}/season/${encodeURIComponent(season)}/episode/${encodeURIComponent(episode)}?api_key=${encodeURIComponent(tmdbKey)}`
+          const eres = await httpRequest({ hostname: 'api.themoviedb.org', path: epPath, method: 'GET', headers: { 'Accept': 'application/json' } }, null, 3000)
+          if (eres && eres.body) {
+            let ej = null
+            try { ej = JSON.parse(eres.body) } catch (e) {}
+            if (ej && (ej.name || ej.title)) {
+              const episodeName = ej.name || ej.title || null
+              return { provider: 'tmdb', id: detailsJson.id, name, raw, episode: { id: ej.id, name: episodeName, source: 'tmdb' } }
+            }
+          }
+        } catch (e) {}
+      }
+      
+      return { provider: 'tmdb', id: detailsJson.id, name, raw }
+    } catch (e) {
+      try { appendLog(`MANUAL_TMDB_FETCH_ERROR id=${id} error=${e.message || String(e)}`) } catch (e) {}
+      return null
+    }
+  }
+
+  // Fetch TVDB series by ID (for manual ID overrides)
+  async function fetchTvdbById(id, tvdbCreds, season, episode) {
+    if (!tvdbCreds) return null
+    try {
+      const tvdbSeriesInfo = await tvdb.fetchSeriesById(tvdbCreds, id, (line) => {
+        try { appendLog(line) } catch (e) {}
+      })
+      if (!tvdbSeriesInfo || !tvdbSeriesInfo.seriesName) return null
+      
+      // If season/episode provided, try to fetch episode details
+      if (season != null && episode != null) {
+        try {
+          const tvdbEpisode = await tvdb.fetchEpisodeBySeriesId(tvdbCreds, id, season, episode, {
+            log: (line) => {
+              try { appendLog(line) } catch (e) {}
+            }
+          })
+          if (tvdbEpisode && tvdbEpisode.episodeTitle) {
+            return {
+              provider: 'tvdb',
+              id: tvdbSeriesInfo.seriesId,
+              name: tvdbSeriesInfo.seriesName,
+              raw: { source: 'tvdb', seriesId: tvdbSeriesInfo.seriesId, seriesName: tvdbSeriesInfo.seriesName },
+              episode: { id: tvdbEpisode.episodeId, name: tvdbEpisode.episodeTitle, source: 'tvdb' }
+            }
+          }
+        } catch (e) {}
+      }
+      
+      return { provider: 'tvdb', id: tvdbSeriesInfo.seriesId, name: tvdbSeriesInfo.seriesName, raw: { source: 'tvdb', seriesId: tvdbSeriesInfo.seriesId, seriesName: tvdbSeriesInfo.seriesName } }
+    } catch (e) {
+      try { appendLog(`MANUAL_TVDB_FETCH_ERROR id=${id} error=${e.message || String(e)}`) } catch (e) {}
+      return null
+    }
   }
 
   // AniList GraphQL search
@@ -2409,6 +2565,51 @@ async function metaLookup(title, apiKey, opts = {}) {
   async function attemptAniList() {
     if (!allowAniList) return null
     try {
+      // Check for manual ID override first
+      if (manualAnilistId) {
+        try { appendLog(`MANUAL_ID_ANILIST_FETCH id=${manualAnilistId} title=${title}`) } catch (e) {}
+        const a = await fetchAniListById(manualAnilistId)
+        if (a) {
+          try { appendLog(`MANUAL_ID_ANILIST_SUCCESS id=${manualAnilistId} name=${a.name}`) } catch (e) {}
+          // Process the result same as search result
+          const titleVariants = []
+          if (a.title) {
+            if (a.title.english) titleVariants.push(a.title.english)
+            if (a.title.romaji) titleVariants.push(a.title.romaji)
+            if (a.title.native) titleVariants.push(a.title.native)
+          }
+          const aniListName = a.name
+          const strippedAniListName = stripAniListSeasonSuffix(a.name, a.raw || a)
+          titleVariants.push(aniListName, strippedAniListName)
+          const uniqueTitleVariants = [...new Set(titleVariants.filter(Boolean))]
+          
+          // Try episode lookups
+          let ep = null
+          if (!ep && allowTvdb && tvdbCreds && opts && opts.season != null && opts.episode != null) {
+            try {
+              const tvdbEpisode = await tvdb.fetchEpisode(tvdbCreds, uniqueTitleVariants, opts.season, opts.episode, {
+                log: (line) => { try { appendLog(line) } catch (e) {} }
+              })
+              if (tvdbEpisode && tvdbEpisode.episodeTitle) {
+                ep = { id: tvdbEpisode.episodeId, name: tvdbEpisode.episodeTitle, source: 'tvdb' }
+              }
+            } catch (e) {}
+          }
+          
+          if (!ep && allowTmdb && apiKey && opts && opts.season != null && opts.episode != null) {
+            try {
+              const tmLookupName = strippedAniListName || aniListName
+              const tmdbEpCheck = await searchTmdbAndEpisode(tmLookupName, apiKey, opts.season, opts.episode)
+              if (tmdbEpCheck && tmdbEpCheck.episode) {
+                ep = tmdbEpCheck.episode
+              }
+            } catch (e) {}
+          }
+          
+          return { provider: 'anilist', id: a.id, name: aniListName, raw: a.raw || a, episode: ep || null }
+        }
+      }
+      
       // normalize search title to avoid SxxEyy noise
       // try filename-derived variants first
       let aniListResult = null
@@ -2869,6 +3070,27 @@ async function metaLookup(title, apiKey, opts = {}) {
 
   async function attemptTmdb(baseResult = null) {
     if (!allowTmdb || !apiKey) return null
+    
+    // Check for manual ID override first
+    if (manualTmdbId) {
+      try { appendLog(`MANUAL_ID_TMDB_FETCH id=${manualTmdbId} title=${title}`) } catch (e) {}
+      const t = await fetchTmdbById(manualTmdbId, apiKey, opts && opts.season, opts && opts.episode)
+      if (t) {
+        try { appendLog(`MANUAL_ID_TMDB_SUCCESS id=${manualTmdbId} name=${t.name}`) } catch (e) {}
+        const episodePayload = t.episode || null
+        const providerRaw = Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' })
+        if (baseResult) {
+          const merged = Object.assign({}, baseResult, { episode: episodePayload })
+          if (merged.raw && typeof merged.raw === 'object') {
+            try { merged.raw.tmdb = { id: t.id, name: t.name } } catch (e) {}
+          }
+          try { merged.tmdb = Object.assign({}, t, { raw: providerRaw }) } catch (e) {}
+          return merged
+        }
+        return { provider: 'tmdb', id: t.id, name: t.name, raw: providerRaw, episode: episodePayload }
+      }
+    }
+    
     const attemptLookup = async (query) => {
       if (!query) return null
       const t = await searchTmdbAndEpisode(query, apiKey, opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null)
