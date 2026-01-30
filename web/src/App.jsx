@@ -49,6 +49,176 @@ const PROVIDER_LABELS = {
   kitsu: 'Kitsu'
 }
 
+function ManualIdInputs({ title, onSave }) {
+  const [expanded, setExpanded] = React.useState(false)
+  const [anilist, setAnilist] = React.useState('')
+  const [tmdb, setTmdb] = React.useState('')
+  const [tvdb, setTvdb] = React.useState('')
+  const [loading, setLoading] = React.useState(false)
+
+  // Load existing manual IDs
+  React.useEffect(() => {
+    if (!expanded) return
+    axios.get(API('/manual-ids'))
+      .then(res => {
+        const ids = res.data?.manualIds?.[title] || {}
+        setAnilist(ids.anilist || '')
+        setTmdb(ids.tmdb || '')
+        setTvdb(ids.tvdb || '')
+      })
+      .catch(() => {})
+  }, [title, expanded])
+
+  if (!expanded) {
+    return (
+      <div style={{ marginTop: 8, fontSize: 11 }}>
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          style={{
+            background: 'none',
+            border: '1px solid var(--muted)',
+            borderRadius: 4,
+            padding: '4px 8px',
+            fontSize: 11,
+            cursor: 'pointer',
+            color: 'var(--text)',
+            opacity: 0.7
+          }}
+        >
+          Set Manual Provider IDs
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ marginTop: 8, padding: 8, background: 'var(--bg-secondary)', borderRadius: 4, fontSize: 11 }}>
+      <div style={{ marginBottom: 6, fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>Manual Provider IDs for: {title}</span>
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: 14,
+            padding: 0,
+            color: 'var(--muted)'
+          }}
+        >
+          ×
+        </button>
+      </div>
+      <div style={{ display: 'grid', gap: 6 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 4, alignItems: 'center' }}>
+          <label style={{ fontSize: 10, opacity: 0.8 }}>AniList:</label>
+          <input
+            type="text"
+            value={anilist}
+            onChange={e => setAnilist(e.target.value)}
+            placeholder="ID (e.g. 21)"
+            style={{
+              padding: '4px 6px',
+              fontSize: 11,
+              border: '1px solid var(--muted)',
+              borderRadius: 3,
+              background: 'var(--bg)',
+              color: 'var(--text)'
+            }}
+          />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 4, alignItems: 'center' }}>
+          <label style={{ fontSize: 10, opacity: 0.8 }}>TMDB:</label>
+          <input
+            type="text"
+            value={tmdb}
+            onChange={e => setTmdb(e.target.value)}
+            placeholder="ID (e.g. 246145)"
+            style={{
+              padding: '4px 6px',
+              fontSize: 11,
+              border: '1px solid var(--muted)',
+              borderRadius: 3,
+              background: 'var(--bg)',
+              color: 'var(--text)'
+            }}
+          />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 4, alignItems: 'center' }}>
+          <label style={{ fontSize: 10, opacity: 0.8 }}>TVDB:</label>
+          <input
+            type="text"
+            value={tvdb}
+            onChange={e => setTvdb(e.target.value)}
+            placeholder="ID (e.g. 123456)"
+            style={{
+              padding: '4px 6px',
+              fontSize: 11,
+              border: '1px solid var(--muted)',
+              borderRadius: 3,
+              background: 'var(--bg)',
+              color: 'var(--text)'
+            }}
+          />
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+          <button
+            type="button"
+            onClick={async () => {
+              setLoading(true)
+              try {
+                await onSave({
+                  anilist: anilist.trim() || null,
+                  tmdb: tmdb.trim() || null,
+                  tvdb: tvdb.trim() || null
+                })
+                setExpanded(false)
+              } catch (e) {
+                // Error handled by parent
+              } finally {
+                setLoading(false)
+              }
+            }}
+            disabled={loading}
+            style={{
+              padding: '4px 12px',
+              fontSize: 11,
+              border: 'none',
+              borderRadius: 3,
+              background: 'var(--accent-cta)',
+              color: 'white',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              opacity: loading ? 0.6 : 1
+            }}
+          >
+            {loading ? 'Saving...' : 'Save'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            style={{
+              padding: '4px 12px',
+              fontSize: 11,
+              border: '1px solid var(--muted)',
+              borderRadius: 3,
+              background: 'transparent',
+              color: 'var(--text)',
+              cursor: 'pointer'
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+        <div style={{ fontSize: 10, opacity: 0.6, marginTop: 4 }}>
+          After saving, rescan the item to apply the manual IDs.
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ProviderStats({ filteredItems, enrichCache, total, metaPhase, metaProgress }) {
   const stats = React.useMemo(() => {
     if (filteredItems.length === 0) return null
@@ -3458,6 +3628,25 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 </>
               ) : (parsed ? 'parsed' : 'unknown')}
             </div>
+            {/* Manual Provider ID inputs */}
+            {parsedTitle && (
+              <ManualIdInputs 
+                title={parsedTitle}
+                onSave={async (ids) => {
+                  try {
+                    await axios.post(API('/manual-ids'), {
+                      title: parsedTitle,
+                      anilist: ids.anilist || null,
+                      tmdb: ids.tmdb || null,
+                      tvdb: ids.tvdb || null
+                    })
+                    pushToast && pushToast('Manual IDs', 'Saved successfully. Rescan to apply.')
+                  } catch (e) {
+                    pushToast && pushToast('Manual IDs', `Failed: ${e.message}`)
+                  }
+                }}
+              />
+            )}
           </div>
         </div>
         <div className="actions">

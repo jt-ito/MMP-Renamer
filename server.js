@@ -5360,6 +5360,71 @@ app.post('/api/settings', requireAuth, (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+// Get manual provider IDs
+app.get('/api/manual-ids', requireAuth, (req, res) => {
+  try {
+    return res.json({ manualIds });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// Save manual provider ID for a series title
+app.post('/api/manual-ids', requireAuth, (req, res) => {
+  try {
+    const { title, anilist, tmdb, tvdb } = req.body;
+    if (!title || typeof title !== 'string') {
+      return res.status(400).json({ error: 'title is required' });
+    }
+    
+    const normalizedTitle = String(title).trim();
+    if (!normalizedTitle) {
+      return res.status(400).json({ error: 'title cannot be empty' });
+    }
+    
+    // Create or update the entry
+    if (!manualIds[normalizedTitle]) {
+      manualIds[normalizedTitle] = {};
+    }
+    
+    // Update provider IDs (remove if null/undefined)
+    if (anilist != null) {
+      manualIds[normalizedTitle].anilist = anilist;
+    } else {
+      delete manualIds[normalizedTitle].anilist;
+    }
+    
+    if (tmdb != null) {
+      manualIds[normalizedTitle].tmdb = tmdb;
+    } else {
+      delete manualIds[normalizedTitle].tmdb;
+    }
+    
+    if (tvdb != null) {
+      manualIds[normalizedTitle].tvdb = tvdb;
+    } else {
+      delete manualIds[normalizedTitle].tvdb;
+    }
+    
+    // Remove entry if all providers are empty
+    if (!manualIds[normalizedTitle].anilist && !manualIds[normalizedTitle].tmdb && !manualIds[normalizedTitle].tvdb) {
+      delete manualIds[normalizedTitle];
+    }
+    
+    // Save to file
+    const toSave = Object.assign({}, manualIds);
+    fs.writeFileSync(manualIdsFile, JSON.stringify(toSave, null, 2), 'utf8');
+    
+    try {
+      appendLog(`MANUAL_ID_SAVED title=${normalizedTitle} anilist=${anilist||'<none>'} tmdb=${tmdb||'<none>'} tvdb=${tvdb||'<none>'} by=${req.session.username}`);
+    } catch (e) {}
+    
+    return res.json({ ok: true, manualIds });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // Admin endpoint: force next scan to be full by clearing scan cache
 app.post('/api/scan/force', requireAdmin, (req, res) => {
   try {
