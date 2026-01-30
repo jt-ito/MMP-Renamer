@@ -5434,6 +5434,9 @@ app.post('/api/manual-ids', requireAuth, (req, res) => {
     const toSave = Object.assign({}, manualIds);
     fs.writeFileSync(manualIdsFile, JSON.stringify(toSave, null, 2), 'utf8');
     
+    // Reload manualIds to ensure in-memory state matches disk
+    loadManualIds();
+    
     try {
       appendLog(`MANUAL_ID_SAVED title=${normalizedTitle} anilist=${anilist||'<none>'} tmdb=${tmdb||'<none>'} tvdb=${tvdb||'<none>'} by=${req.session.username}`);
     } catch (e) {}
@@ -5586,6 +5589,8 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
     enrichCache[key].hidden = true;
     // Persist immediately instead of debouncing
     try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) { appendLog(`HIDE_PERSIST_FAIL path=${p} err=${e && e.message ? e.message : String(e)}`) }
+    // Small delay to ensure persistence completes
+    await new Promise(resolve => setTimeout(resolve, 50));
   } catch (e) { appendLog(`HIDE_UPDATE_FAIL path=${p} err=${e && e.message ? e.message : String(e)}`) }
 
   // respond immediately to the client so UI hides instantly
@@ -7427,6 +7432,9 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
       // Ensure everything is flushed even if per-item saves were used
       try { persistEnrichCacheNow(); } catch (e) {}
   }
+
+  // Add small delay to ensure filesystem flush completes before client refresh
+  await new Promise(resolve => setTimeout(resolve, 50));
 
   res.json({ results });
 });
