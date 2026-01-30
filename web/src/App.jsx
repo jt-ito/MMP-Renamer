@@ -49,12 +49,18 @@ const PROVIDER_LABELS = {
   kitsu: 'Kitsu'
 }
 
-function ManualIdInputs({ title, onSave }) {
+function ManualIdInputs({ title, onSave, onToggle }) {
   const [expanded, setExpanded] = React.useState(false)
   const [anilist, setAnilist] = React.useState('')
   const [tmdb, setTmdb] = React.useState('')
   const [tvdb, setTvdb] = React.useState('')
   const [loading, setLoading] = React.useState(false)
+
+  React.useEffect(() => {
+    if (typeof onToggle === 'function') {
+      onToggle(expanded)
+    }
+  }, [expanded, onToggle])
 
   // Load existing manual IDs
   React.useEffect(() => {
@@ -3462,6 +3468,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const rawEnrichment = it ? enrichCache?.[it.canonicalPath] : null
   const enrichment = normalizeEnrichResponse(rawEnrichment)
   const rowRef = useRef(null)
+  const [manualIdsTick, setManualIdsTick] = useState(0)
   
   // Declare loading and isSelected before using in useEffect dependencies
   const loadingState = it && loadingEnrich[it.canonicalPath]
@@ -3474,7 +3481,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
       const measured = Math.ceil(el.scrollHeight || el.getBoundingClientRect().height || DEFAULT_ROW_HEIGHT)
       setItemSize(index, measured)
     }
-  }, [index, it, enrichment, isSelected, loading])
+  }, [index, it, enrichment, isSelected, loading, manualIdsTick])
   
   useEffect(() => { if (it && !rawEnrichment) enrichOne && enrichOne(it) }, [it?.canonicalPath, rawEnrichment, enrichOne])
 
@@ -3632,6 +3639,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
             {parsedTitle && (
               <ManualIdInputs 
                 title={parsedTitle}
+                onToggle={() => setManualIdsTick(t => t + 1)}
                 onSave={async (ids) => {
                   try {
                     await axios.post(API('/manual-ids'), {
