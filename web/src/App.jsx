@@ -1766,27 +1766,41 @@ export default function App() {
   async function refreshEnrichForPaths(paths = []) {
     if (!Array.isArray(paths) || !paths.length) return
     const uniquePaths = Array.from(new Set(paths.filter(Boolean)))
+    console.log('[refreshEnrichForPaths] Starting refresh for paths:', uniquePaths)
     for (const p of uniquePaths) {
       try {
         const er = await axios.get(API('/enrich'), { params: { path: p } })
+        console.log('[refreshEnrichForPaths] Response for', p, ':', er.data)
         if (!er.data) continue
         if (er.data.missing) {
+          console.log('[refreshEnrichForPaths] Item missing, removing from cache and items')
           setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
           setItems(prev => prev.filter(it => it.canonicalPath !== p))
           setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
         } else if ( er.data.cached || er.data.enrichment ) {
           const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
+          console.log('[refreshEnrichForPaths] Normalized enrichment:', enriched)
+          console.log('[refreshEnrichForPaths] Applied:', enriched?.applied, 'Hidden:', enriched?.hidden)
           setEnrichCache(prev => ({ ...prev, [p]: enriched }))
           if (enriched && (enriched.hidden || enriched.applied)) {
-            setItems(prev => prev.filter(it => it.canonicalPath !== p))
+            console.log('[refreshEnrichForPaths] Item is hidden/applied, removing from items list')
+            setItems(prev => {
+              const filtered = prev.filter(it => it.canonicalPath !== p)
+              console.log('[refreshEnrichForPaths] Items before:', prev.length, 'after:', filtered.length)
+              return filtered
+            })
             setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
           } else {
+            console.log('[refreshEnrichForPaths] Item is not hidden/applied, ensuring it exists in items')
             setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
             setAllItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
           }
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error('[refreshEnrichForPaths] Error refreshing path', p, ':', e)
+      }
     }
+    console.log('[refreshEnrichForPaths] Refresh complete for all paths')
   }
 
   async function hideOnePath(originalPath, { silent = false } = {}) {
@@ -1986,18 +2000,17 @@ export default function App() {
       // After apply, refresh enrichment for each plan.fromPath so the UI reflects applied/hidden state immediately
       try {
         const paths = (plans || []).map(p => p.fromPath).filter(Boolean)
+        console.log('[applyRename] Refreshing paths after approval:', paths)
         // set per-item loading while refresh happens
         const loadingMap = {}
         for (const p of paths) loadingMap[p] = true
   safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
         await refreshEnrichForPaths(paths)
-        // Force immediate removal from items list for approved paths
-        setItems(prev => prev.filter(it => !paths.includes(it.canonicalPath)))
-        setAllItems(prev => prev.filter(it => !paths.includes(it.canonicalPath)))
+        console.log('[applyRename] Refresh complete, enrichCache should be updated')
         // clear loading flags
   safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of paths) delete n[p]; return n })
       } catch (e) {
-        // best-effort
+        console.error('[applyRename] Error during refresh:', e)
       }
       return r.data.results
     } catch (err) {
