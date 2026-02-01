@@ -1226,7 +1226,7 @@ async function fetchAniListById(id) {
   if (!id) return null;
   const numericId = Number(String(id).trim());
   if (!Number.isFinite(numericId)) return null;
-  const query = `query ($id: Int) { Media(id: $id) { id title { english romaji native } seasonYear startDate { year } format episodes } }`;
+  const query = `query ($id: Int) { Media(id: $id) { id title { english romaji native } seasonYear startDate { year } format episodes nextAiringEpisode { episode airingAt } } }`;
   const payload = JSON.stringify({ query, variables: { id: numericId } });
   const res = await httpRequest({ hostname: 'graphql.anilist.co', path: '/', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } }, payload, 8000);
   if (!res || res.statusCode !== 200) return null;
@@ -1530,7 +1530,7 @@ async function metaLookup(title, apiKey, opts = {}) {
       await pace('graphql.anilist.co')
       // Request relations/season/seasonYear so we can prefer season-specific media when available
       // Include relation edges with relationType to identify parent/prequel relationships
-      const query = `query ($search: String) { Page(page:1, perPage:8) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } season seasonYear relations { edges { relationType node { id title { romaji english native } format episodes } } } } } }`;
+      const query = `query ($search: String) { Page(page:1, perPage:8) { media(search: $search, type: ANIME) { id title { romaji english native } format episodes startDate { year } season seasonYear nextAiringEpisode { episode airingAt } relations { edges { relationType node { id title { romaji english native } format episodes } } } } } }`;
       // If the caller provided a season, try an AniList text search that includes the season (e.g. "Title Season 1")
       const wantedSeason = (opts && typeof opts.season !== 'undefined' && opts.season !== null) ? Number(opts.season) : null
       const baseQuery = String(q || '').trim()
@@ -2572,9 +2572,44 @@ async function metaLookup(title, apiKey, opts = {}) {
       let aniListResult = null
       for (let i=0;i<Math.min(variants.length,3);i++) {
       const v = variants[i]
-      const a = await searchAniList(v)
+      let a = await searchAniList(v)
       try { appendLog(`META_ANILIST_SEARCH q=${v} found=${a ? 'yes' : 'no'}`) } catch (e) {}
       if (!a) continue
+      
+      // If we matched a sequel/continuation series that hasn't aired yet, but it has a parent series,
+      // check if the requested episode has actually aired and use the parent instead if not
+      try {
+        if (a && a.raw && a.parentSeriesId && opts && opts.episode != null) {
+          const hasAired = a.raw.startDate && a.raw.startDate.year != null
+          const requestedEpisode = Number(opts.episode)
+          
+          // Check nextAiringEpisode to see what episode will air next
+          // If nextAiringEpisode.episode is 5, then episodes 1-4 have aired
+          let lastAiredEpisode = null
+          if (a.raw.nextAiringEpisode && a.raw.nextAiringEpisode.episode != null) {
+            lastAiredEpisode = Number(a.raw.nextAiringEpisode.episode) - 1
+          }
+          
+          // Determine if we should use the parent series:
+          // 1. Series hasn't aired at all (no year)
+          // 2. Requested episode is beyond the last aired episode
+          const shouldUseParent = !hasAired || (lastAiredEpisode != null && requestedEpisode > lastAiredEpisode)
+          
+          if (shouldUseParent) {
+            try { appendLog(`META_ANILIST_SEQUEL_FALLBACK_TO_PARENT child=${String(a.name).slice(0,80)} parentId=${a.parentSeriesId} hasAired=${hasAired} lastAiredEp=${lastAiredEpisode != null ? lastAiredEpisode : 'unknown'} requestedEp=${requestedEpisode}`) } catch (e) {}
+            
+            // Fetch the parent series by ID
+            const parentResult = await fetchAniListById(a.parentSeriesId)
+            if (parentResult) {
+              try { appendLog(`META_ANILIST_PARENT_FETCHED id=${a.parentSeriesId} name=${String(parentResult.name).slice(0,80)}`) } catch (e) {}
+              a = parentResult
+            }
+          }
+        }
+      } catch (e) {
+        try { appendLog(`META_ANILIST_PARENT_FALLBACK_ERROR err=${e.message}`) } catch (e2) {}
+      }
+      
   const aniMatch = evaluateAniListCandidate(a, null, v, 'filename')
   if (!aniMatch.ok) continue
       // Attempt per-provider episode lookups in order: TVDB -> Wikipedia -> TMDb -> Kitsu.
@@ -5264,7 +5299,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove', 'client_os'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove', 'client_os', 'log_timezone'];
       for (const k of allowed) {
         if (body[k] === undefined) continue;
         if (k === 'metadata_provider_order') {
@@ -5299,7 +5334,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch', 'delete_hardlinks_on_unapprove', 'client_os'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch', 'delete_hardlinks_on_unapprove', 'client_os', 'log_timezone'];
     
     // Check if scan_input_path changed to update watcher
     const oldScanPath = users[username].settings.scan_input_path;

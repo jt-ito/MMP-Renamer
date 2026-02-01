@@ -221,6 +221,7 @@ export default function App() {
   const filteredItems = React.useDeferredValue(computedFilteredItems)
   
   const [logs, setLogs] = useState('')
+  const [logTimezone, setLogTimezone] = useLocalState('log_timezone', '')
   const [toasts, setToasts] = useState([])
   const [loadingEnrich, setLoadingEnrich] = useState({})
   // recently hidden items pending authoritative confirmation; prevents re-inserts during background merges
@@ -908,7 +909,23 @@ export default function App() {
       try { if (!localStorage.getItem('tvdb_v4_api_key') && tvdbV4Source.tvdb_v4_api_key) localStorage.setItem('tvdb_v4_api_key', tvdbV4Source.tvdb_v4_api_key) } catch {}
       try { if (!localStorage.getItem('tvdb_v4_user_pin') && tvdbV4Source.tvdb_v4_user_pin) localStorage.setItem('tvdb_v4_user_pin', tvdbV4Source.tvdb_v4_user_pin) } catch {}
       try { if (!localStorage.getItem('rename_template') && userSettings.rename_template) localStorage.setItem('rename_template', userSettings.rename_template) } catch {}
+      try {
+        const tz = userSettings.log_timezone || serverSettings.log_timezone || ''
+        if (!localStorage.getItem('log_timezone') && tz) localStorage.setItem('log_timezone', tz)
+        if (tz) setLogTimezone(tz)
+      } catch {}
     }).catch(()=>{})
+  }, [])
+
+  useEffect(() => {
+    const handleLogTimezone = (ev) => {
+      try {
+        const tz = ev && ev.detail ? ev.detail.logTimezone : ''
+        setLogTimezone(tz || '')
+      } catch (e) {}
+    }
+    window.addEventListener('renamer:settings-log-timezone', handleLogTimezone)
+    return () => window.removeEventListener('renamer:settings-log-timezone', handleLogTimezone)
   }, [])
 
   async function hydrateScanItems(scanIdToHydrate, totalCount = 0, initialItems = []) {
@@ -2717,7 +2734,7 @@ export default function App() {
               )}
             </section>
             <aside className="side">
-              <LogsPanel logs={logs} refresh={fetchLogs} pushToast={pushToast} />
+              <LogsPanel logs={logs} refresh={fetchLogs} pushToast={pushToast} logTimezone={logTimezone} />
             </aside>
           </>
         )}
@@ -3207,8 +3224,38 @@ function LoadingScreen({ mode = 'incremental', total = 0, loaded = 0, scanProgre
   )
 }
 
-function LogsPanel({ logs, refresh, pushToast }) {
+function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const displayLogs = React.useMemo(() => {
+    try {
+      if (!logs || !logTimezone) return logs
+      const formatter = new Intl.DateTimeFormat(undefined, {
+        timeZone: logTimezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      })
+      return String(logs)
+        .split('\n')
+        .map((line) => {
+          const match = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s(.*)$/)
+          if (!match) return line
+          const dt = new Date(match[1])
+          if (Number.isNaN(dt.getTime())) return line
+          const parts = formatter.formatToParts(dt)
+          const map = {}
+          for (const p of parts) map[p.type] = p.value
+          const stamp = `${map.year || ''}-${map.month || ''}-${map.day || ''} ${map.hour || ''}:${map.minute || ''}:${map.second || ''}`.trim()
+          return `${stamp} ${match[2]}`.trim()
+        })
+        .join('\n')
+    } catch (e) {
+      return logs
+    }
+  }, [logs, logTimezone])
   
   return (
     <div className="logs">
@@ -3226,7 +3273,7 @@ function LogsPanel({ logs, refresh, pushToast }) {
       </h3>
       {isExpanded && (
         <>
-          <pre>{logs}</pre>
+          <pre>{displayLogs}</pre>
           <div style={{display:'flex',marginTop:8, alignItems:'center'}}>
             <button className="btn-ghost icon-only" onClick={refresh} title="Refresh logs"><IconRefresh/></button>
             <button className="btn-ghost icon-only" onClick={() => { navigator.clipboard?.writeText(logs); pushToast && pushToast('Logs', 'Copied to clipboard') }} title="Copy logs"><IconCopy/></button>

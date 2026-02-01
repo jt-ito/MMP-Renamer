@@ -99,6 +99,29 @@ export default function Settings({ pushToast }){
   const [deleteHardlinksOnUnapprove, setDeleteHardlinksOnUnapprove] = useState(true)
   const [dirty, setDirty] = useState(false)
   const [clientOS, setClientOS] = useState(typeof window !== 'undefined' ? (localStorage.getItem('client_os') || 'linux') : 'linux')
+  const [logTimezone, setLogTimezone] = useState(typeof window !== 'undefined' ? (localStorage.getItem('log_timezone') || '') : '')
+
+  const timezones = useMemo(() => {
+    try {
+      if (typeof Intl !== 'undefined' && typeof Intl.supportedValuesOf === 'function') {
+        const tzs = Intl.supportedValuesOf('timeZone') || []
+        if (Array.isArray(tzs) && tzs.length) return tzs
+      }
+    } catch (e) {}
+    return [
+      'UTC',
+      'America/New_York',
+      'America/Chicago',
+      'America/Denver',
+      'America/Los_Angeles',
+      'Europe/London',
+      'Europe/Berlin',
+      'Asia/Tokyo',
+      'Asia/Seoul',
+      'Asia/Shanghai',
+      'Australia/Sydney'
+    ]
+  }, [])
 
   useEffect(() => {
     // prefer user-specific settings from server, fall back to localStorage
@@ -129,6 +152,7 @@ export default function Settings({ pushToast }){
           const folders = Array.isArray(user.output_folders) ? user.output_folders : []
           setOutputFolders(folders)
           setOutputFoldersDirty(new Array(folders.length).fill(false))
+          setLogTimezone(user.log_timezone || '')
           return
         }
       } catch (e) {}
@@ -163,6 +187,7 @@ export default function Settings({ pushToast }){
         setOutputPath(out)
         setEnableFolderWatch(storedWatch)
   setDeleteHardlinksOnUnapprove(deletePref)
+          setLogTimezone(server.log_timezone || localStorage.getItem('log_timezone') || '')
         setProviderOrder(sanitizeProviderOrder(storedOrder))
         try {
           const parsedFolders = storedFolders ? JSON.parse(storedFolders) : []
@@ -201,6 +226,7 @@ export default function Settings({ pushToast }){
         setOutputPath(out)
         setProviderOrder(sanitizeProviderOrder(storedOrder))
   setDeleteHardlinksOnUnapprove(storedDeletePref == null ? true : storedDeletePref !== 'false')
+          setLogTimezone(localStorage.getItem('log_timezone') || '')
         try {
           const parsedFolders = storedFolders ? JSON.parse(storedFolders) : []
           const normalizedFolders = Array.isArray(parsedFolders) ? parsedFolders : []
@@ -251,6 +277,7 @@ export default function Settings({ pushToast }){
       localStorage.setItem('enable_folder_watch', String(enableFolderWatch))
       localStorage.setItem('delete_hardlinks_on_unapprove', String(deleteHardlinksOnUnapprove))
       try { localStorage.setItem('output_folders', JSON.stringify(outputFolders)) } catch (e) {}
+      try { localStorage.setItem('log_timezone', logTimezone) } catch (e) {}
       const firstProvider = providerOrder[0] || 'tmdb'
       try {
         await axios.post(API('/settings'), {
@@ -270,8 +297,14 @@ export default function Settings({ pushToast }){
           delete_hardlinks_on_unapprove: deleteHardlinksOnUnapprove,
           output_folders: outputFolders,
           rename_template: renameTemplate,
-          client_os: clientOS
+          client_os: clientOS,
+          log_timezone: logTimezone
         })
+        try {
+          window.dispatchEvent(new CustomEvent('renamer:settings-log-timezone', {
+            detail: { logTimezone }
+          }))
+        } catch (e) {}
         pushToast && pushToast('Settings', 'Saved')
         setDirty(false)
         setOutputFoldersDirty(new Array(outputFolders.length).fill(false))
@@ -299,6 +332,7 @@ export default function Settings({ pushToast }){
   setDeleteHardlinksOnUnapprove(true)
   setOutputFolders([])
   setOutputFoldersDirty([])
+      setLogTimezone('')
       localStorage.removeItem('tmdb_api_key')
       localStorage.removeItem('anilist_api_key')
       localStorage.removeItem('anidb_username')
@@ -314,8 +348,9 @@ export default function Settings({ pushToast }){
   localStorage.removeItem('delete_hardlinks_on_unapprove')
   localStorage.removeItem('output_folders')
         localStorage.removeItem('client_os')
+        localStorage.removeItem('log_timezone')
       localStorage.setItem('rename_template', '{title} - {epLabel} - {episodeTitle}')
-  axios.post(API('/settings'), { tmdb_api_key: '', anilist_api_key: '', anidb_username: '', anidb_password: '', default_meta_provider: 'tmdb', metadata_provider_order: DEFAULT_PROVIDER_ORDER, tvdb_v4_api_key: '', tvdb_v4_user_pin: '', scan_input_path: '', scan_output_path: '', enable_folder_watch: false, rename_template: '{title} - {epLabel} - {episodeTitle}', output_folders: [] }).catch(()=>{})
+  axios.post(API('/settings'), { tmdb_api_key: '', anilist_api_key: '', anidb_username: '', anidb_password: '', default_meta_provider: 'tmdb', metadata_provider_order: DEFAULT_PROVIDER_ORDER, tvdb_v4_api_key: '', tvdb_v4_user_pin: '', scan_input_path: '', scan_output_path: '', enable_folder_watch: false, rename_template: '{title} - {epLabel} - {episodeTitle}', output_folders: [], log_timezone: '' }).catch(()=>{})
       setDirty(false)
       pushToast && pushToast('Settings', 'Cleared')
     } catch (e) { pushToast && pushToast('Error', 'Failed to clear') }
@@ -602,6 +637,17 @@ export default function Settings({ pushToast }){
             <option value='windows'>Windows (NTFS, max filename 255)</option>
           </select>
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>Choose the OS where files will be written so the tool can limit filename lengths to the platform's limits.</div>
+        </div>
+
+        <div style={{marginTop:18}}>
+          <label style={{fontSize:13, color:'var(--muted)'}}>Log timestamp timezone</label>
+          <select className='form-input' value={logTimezone} onChange={e => { setLogTimezone(e.target.value); setDirty(true) }} style={{marginTop:8, maxWidth:320}}>
+            <option value=''>System default</option>
+            {timezones.map((tz) => (
+              <option key={tz} value={tz}>{tz}</option>
+            ))}
+          </select>
+          <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>Applies to log timestamps in the UI only. Server logs remain in UTC.</div>
         </div>
 
         <div style={{marginTop:18}}>
