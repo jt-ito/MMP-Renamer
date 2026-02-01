@@ -1938,7 +1938,10 @@ async function metaLookup(title, apiKey, opts = {}) {
     parentSeriesId: parentSeriesId,
     detectedSeasonNumber: detectedSeasonNumber
   }
-    } catch (e) { return null }
+    } catch (e) { 
+      try { appendLog(`META_ANILIST_SEARCH_ERROR err=${e.message} stack=${e.stack}`) } catch (e2) {}
+      return null 
+    }
   }
 
   // Kitsu: find anime by title, then fetch episode by number
