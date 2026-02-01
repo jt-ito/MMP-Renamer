@@ -4398,6 +4398,11 @@ function renderProviderName(data, key, session) {
     const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
     // Prefer English title when available from AniList metadata
     let rawTitle = data.seriesTitleEnglish || data.title || '';
+    try {
+      const letters = String(rawTitle || '').replace(/[^a-zA-Z]/g, '');
+      const isAllCaps = letters.length > 0 && letters === letters.toUpperCase();
+      if (isAllCaps) rawTitle = titleCase(rawTitle);
+    } catch (e) { /* ignore casing errors */ }
     if (!data.seriesTitleEnglish && isLikelyRomajiTitle(rawTitle, data)) {
       rawTitle = normalizeRomajiParticlesCase(rawTitle);
     }
