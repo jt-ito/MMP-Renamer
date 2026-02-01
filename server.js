@@ -1279,6 +1279,7 @@ async function fetchTvdbById(id, creds, season, episode, log) {
   return {
     id: seriesId,
     name: seriesName,
+    year: seriesExtended && seriesExtended.year ? seriesExtended.year : null,
     raw: { series: seriesExtended || null, episode: episodeData || null },
     episodeTitle: episodeData ? episodeData.episodeTitle : null
   };
@@ -2614,9 +2615,17 @@ async function metaLookup(title, apiKey, opts = {}) {
             }
           });
           if (tvdbEpisode && tvdbEpisode.episodeTitle) {
+            // Extract year from seriesFirstAired
+            let seriesYear = null;
+            if (tvdbEpisode.seriesFirstAired) {
+              const yearMatch = String(tvdbEpisode.seriesFirstAired).match(/^(\d{4})/);
+              if (yearMatch) seriesYear = yearMatch[1];
+            }
+            
             tvdbInfo = {
               seriesId: tvdbEpisode.seriesId,
               seriesName: tvdbEpisode.seriesName,
+              seriesYear: seriesYear,
               episodeTitle: tvdbEpisode.episodeTitle,
               raw: tvdbEpisode.raw
             };
@@ -2818,9 +2827,17 @@ async function metaLookup(title, apiKey, opts = {}) {
               }
             });
             if (tvdbEpisode && tvdbEpisode.episodeTitle) {
+              // Extract year from seriesFirstAired
+              let seriesYear = null;
+              if (tvdbEpisode.seriesFirstAired) {
+                const yearMatch = String(tvdbEpisode.seriesFirstAired).match(/^(\d{4})/);
+                if (yearMatch) seriesYear = yearMatch[1];
+              }
+              
               tvdbInfoParent = {
                 seriesId: tvdbEpisode.seriesId,
                 seriesName: tvdbEpisode.seriesName,
+                seriesYear: seriesYear,
                 episodeTitle: tvdbEpisode.episodeTitle,
                 parentSeriesName: tvdbEpisode.parentSeriesName || null,
                 parentSeriesId: tvdbEpisode.parentSeriesId || null,
@@ -3955,7 +3972,7 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
 
             // Provider block - set provider name based on raw.source (tmdb or kitsu)
             const providerName = (raw && raw.source) ? String(raw.source).toLowerCase() : 'tmdb'
-            guess.provider = { matched: true, provider: providerName, id: raw.id || null, title: (guess.seriesTitleExact || providerTitleRaw || mappedTitle) || null, raw: raw }
+            guess.provider = { matched: true, provider: providerName, id: raw.id || null, title: (guess.seriesTitleExact || providerTitleRaw || mappedTitle) || null, year: guess.year || null, raw: raw }
 
             // Back-compat: populate tmdb object only when provider is TMDb
             if (providerName === 'tmdb') {
@@ -4019,6 +4036,11 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
                 }
                 // If AniList didn't provide a year but a later provider (TMDb/TVDB) supplied one during merging,
                 // use that fallback year for this rescan only.
+                try {
+                  if (!guess.year && tvdbInfo && tvdbInfo.seriesYear) {
+                    guess.year = tvdbInfo.seriesYear
+                  }
+                } catch (e) {}
                 try {
                   if (!guess.year && raw && raw._fallbackProviderYear) {
                     const ryf = Number(String(raw._fallbackProviderYear))
@@ -4096,6 +4118,7 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
             provider: 'tvdb',
             id: tvdbHit.seriesId,
             title: tvdbHit.seriesName || guess.title,
+            year: guess.year || tvdbHit.seriesYear || null,
             season: normSeason,
             episode: normEpisode,
             episodeTitle: tvdbHit.episodeTitle,
