@@ -1812,7 +1812,43 @@ async function metaLookup(title, apiKey, opts = {}) {
     }
   } catch (e) {}
 
-  const rawName = (pick && pick.title) ? (pick.title.english || pick.title.romaji || pick.title.native) : (pick && (pick.romaji || pick.english || pick.native) ? (pick.english || pick.romaji || pick.native) : null)
+  // Select the best title, handling all-caps English titles intelligently
+  let rawName = null
+  if (pick && pick.title) {
+    const english = pick.title.english ? String(pick.title.english).trim() : null
+    const romaji = pick.title.romaji ? String(pick.title.romaji).trim() : null
+    const native = pick.title.native ? String(pick.title.native).trim() : null
+    
+    // Helper to check if a string is all uppercase (ignoring non-letter characters)
+    const isAllCaps = (str) => {
+      if (!str) return false
+      const letters = String(str).replace(/[^a-zA-Z]/g, '')
+      return letters.length > 0 && letters === letters.toUpperCase()
+    }
+    
+    // Check if English and romaji are the same string aside from casing
+    const areSameIgnoreCase = (str1, str2) => {
+      if (!str1 || !str2) return false
+      return String(str1).toLowerCase() === String(str2).toLowerCase()
+    }
+    
+    // If English exists and is all-caps
+    if (english && isAllCaps(english)) {
+      // If romaji is the same string with better casing, use romaji
+      if (romaji && areSameIgnoreCase(english, romaji)) {
+        rawName = romaji
+      } else {
+        // Otherwise apply title-case to the English name
+        rawName = titleCase(english)
+      }
+    } else {
+      // Use standard priority: english > romaji > native
+      rawName = english || romaji || native
+    }
+  } else if (pick && (pick.romaji || pick.english || pick.native)) {
+    rawName = pick.english || pick.romaji || pick.native
+  }
+  
   const name = stripAniListSeasonSuffix(rawName, pick)
   
   // Extract parent series information from relations (PREQUEL, PARENT, SOURCE)
