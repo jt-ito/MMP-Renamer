@@ -3976,7 +3976,7 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
             }
             
             // Title (series/movie)
-            // Prefer AniList-provided English title, then romaji, then fallback to provider name fields
+            // Use res.name which has already been cleaned by title-case logic in searchAniList/fetchAniListById
             let providerTitleRaw = String(res.name || raw.name || raw.title || '').trim()
             let anilistEnglish = null
             let anilistRomaji = null
@@ -3988,7 +3988,8 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
               if (!anilistEnglish && res && res.raw && res.raw.title && res.raw.title.english) anilistEnglish = String(res.raw.title.english).trim()
               if (!anilistRomaji && res && res.raw && res.raw.title && res.raw.title.romaji) anilistRomaji = String(res.raw.title.romaji).trim()
             } catch (e) { /* best-effort */ }
-            const providerPreferred = (anilistEnglish && anilistEnglish.length) ? anilistEnglish : ((anilistRomaji && anilistRomaji.length) ? anilistRomaji : providerTitleRaw)
+            // Use providerTitleRaw (from res.name) which is already cleaned, rather than raw anilistEnglish
+            const providerPreferred = providerTitleRaw || ((anilistEnglish && anilistEnglish.length) ? anilistEnglish : ((anilistRomaji && anilistRomaji.length) ? anilistRomaji : ''))
             
             // Check if AniList returned parent series information (for arcs/sequels that should be under parent folder)
             let useParentSeries = false
