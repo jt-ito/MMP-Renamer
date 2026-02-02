@@ -5177,7 +5177,11 @@ app.get('/api/scan/latest', requireAuth, (req, res) => {
     const all = Object.keys(scans || {}).map(k => scans[k]).filter(Boolean)
     let filtered = all
     if (lib) filtered = filtered.filter(s => s.libraryId === lib)
-    if (!filtered.length) return res.status(404).json({ error: 'no scans' })
+    if (!filtered.length) {
+      const include = (req.query && (req.query.includeItems === '1' || req.query.includeItems === 'true'))
+      if (include) return res.json({ scanId: null, libraryId: lib, totalCount: 0, generatedAt: null, items: [] })
+      return res.json({ scanId: null, libraryId: lib, totalCount: 0, generatedAt: null })
+    }
     filtered.sort((a,b) => (b.generatedAt || 0) - (a.generatedAt || 0))
     const pick = filtered[0]
     // Optionally include the first page of items when requested (clients can set includeItems=true)
