@@ -948,6 +948,20 @@ function normalizeEnrichEntry(entry) {
       if (out.seriesTitleRomaji && typeof out.seriesTitleRomaji === 'string') out.seriesTitleRomaji = titleCase(out.seriesTitleRomaji);
       if (out.originalSeriesTitle && typeof out.originalSeriesTitle === 'string') out.originalSeriesTitle = titleCase(out.originalSeriesTitle);
       if (out.seriesLookupTitle && typeof out.seriesLookupTitle === 'string') out.seriesLookupTitle = titleCase(out.seriesLookupTitle);
+      // If provider/title is all-caps, normalize to title case for display
+      try {
+        const isAllCaps = (s) => {
+          if (!s) return false;
+          const letters = String(s).replace(/[^a-zA-Z]/g, '');
+          return letters.length > 0 && letters === letters.toUpperCase();
+        }
+        if (out.title && typeof out.title === 'string' && isAllCaps(out.title)) {
+          out.title = titleCase(out.title);
+        }
+        if (out.provider && out.provider.title && typeof out.provider.title === 'string' && isAllCaps(out.provider.title)) {
+          out.provider.title = titleCase(out.provider.title);
+        }
+      } catch (e) { /* ignore title-case errors */ }
     } catch (e) { /* ignore title-case errors */ }
     if (typeof out.parentCandidate === 'undefined') {
       const parentGuess = entry.parentCandidate || (extraSource && extraSource.parentCandidate) || null;
