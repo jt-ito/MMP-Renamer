@@ -2063,7 +2063,7 @@ export default function App() {
         if (newScanJustCreatedRef.current) {
           if (!mounted) return
           // fetch first page only for UI hydration
-          const r = await axios.get(API(`/scan/${lastScanId}/items`), { params: { offset: 0, limit: 500 } }).catch(() => ({ data: { items: [] } }))
+          const r = await axios.get(API(`/scan/${effectiveScanId}/items`), { params: { offset: 0, limit: 500 } }).catch(() => ({ data: { items: [] } }))
           if (!mounted) return
           const first = r.data.items || []
           setAllItems(first)
@@ -2079,7 +2079,7 @@ export default function App() {
           const pageSize = 500
           let all = []
           for (let off = 0; off < totalCount; off += pageSize) {
-            const r = await axios.get(API(`/scan/${lastScanId}/items`), { params: { offset: off, limit: pageSize } }).catch(() => ({ data: { items: [] } }))
+            const r = await axios.get(API(`/scan/${effectiveScanId}/items`), { params: { offset: off, limit: pageSize } }).catch(() => ({ data: { items: [] } }))
             if (!mounted) return
             all = all.concat(r.data.items || [])
           }
@@ -2088,7 +2088,7 @@ export default function App() {
           setCurrentScanPaths(new Set((all || []).map(i => i.canonicalPath)))
         } else {
           // large scan: fetch first page only and rely on server search/paging for the rest
-          const r = await axios.get(API(`/scan/${lastScanId}/items`), { params: { offset: 0, limit: 500 } }).catch(() => ({ data: { items: [] } }))
+          const r = await axios.get(API(`/scan/${effectiveScanId}/items`), { params: { offset: 0, limit: 500 } }).catch(() => ({ data: { items: [] } }))
           if (!mounted) return
           const first = r.data.items || []
           setAllItems(first)
