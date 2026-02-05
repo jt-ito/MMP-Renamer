@@ -3390,6 +3390,152 @@ function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
   )
 }
 
+function CustomMetadataInputs({ path, isOpen, onToggle, onSaved, pushToast }) {
+  const [values, setValues] = useState({ title: '', episodeTitle: '', season: '', episode: '', year: '', isMovie: false })
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    if (!isOpen || !path) return undefined
+    setLoading(true)
+    ;(async () => {
+      try {
+        const r = await axios.get(API('/enrich'), { params: { path } }).catch(() => null)
+        const norm = normalizeEnrichResponse((r && r.data && r.data.enrichment) ? r.data.enrichment : (r && r.data ? r.data : null))
+        const extra = (norm && norm.extraGuess) ? norm.extraGuess : null
+        if (!active) return
+        const isMovie = (extra && typeof extra.isMovie === 'boolean') ? extra.isMovie : (norm && norm.isMovie === true)
+        setValues({
+          title: (extra && extra.title) ? String(extra.title) : (norm && norm.title ? String(norm.title) : ''),
+          episodeTitle: (extra && extra.episodeTitle) ? String(extra.episodeTitle) : (norm && norm.episodeTitle ? String(norm.episodeTitle) : ''),
+          season: (extra && typeof extra.season !== 'undefined' && extra.season !== null) ? String(extra.season) : (norm && typeof norm.season !== 'undefined' && norm.season !== null ? String(norm.season) : ''),
+          episode: (extra && typeof extra.episode !== 'undefined' && extra.episode !== null) ? String(extra.episode) : (norm && typeof norm.episode !== 'undefined' && norm.episode !== null ? String(norm.episode) : ''),
+          year: (extra && extra.year) ? String(extra.year) : (norm && norm.year ? String(norm.year) : ''),
+          isMovie
+        })
+      } catch (e) {
+        if (active) setValues({ title: '', episodeTitle: '', season: '', episode: '', year: '', isMovie: false })
+      } finally {
+        if (active) setLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [isOpen, path])
+
+  const handleSave = async () => {
+    if (!path) return
+    if (!values.title || !String(values.title).trim()) {
+      pushToast && pushToast('Custom Metadata', 'Series/movie title is required')
+      return
+    }
+    setLoading(true)
+    try {
+      await axios.post(API('/enrich/custom'), {
+        path,
+        title: String(values.title || '').trim(),
+        episodeTitle: values.isMovie ? '' : String(values.episodeTitle || '').trim(),
+        season: values.isMovie ? null : (values.season !== '' && Number.isFinite(Number(values.season)) ? Number(values.season) : null),
+        episode: values.isMovie ? null : (values.episode !== '' && Number.isFinite(Number(values.episode)) ? Number(values.episode) : null),
+        year: String(values.year || '').trim() || null,
+        isMovie: !!values.isMovie
+      })
+      pushToast && pushToast('Custom Metadata', 'Saved custom metadata')
+      onSaved && onSaved()
+      onToggle && onToggle(false)
+    } catch (e) {
+      pushToast && pushToast('Custom Metadata', 'Failed to save custom metadata')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const panelStyle = {
+    marginTop: 8,
+    padding: 10,
+    background: 'var(--bg-800)',
+    border: '1px solid var(--bg-600)',
+    borderRadius: 10,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8
+  }
+
+  return (
+    <div style={{ marginTop: 6 }}>
+      <button
+        type="button"
+        className="btn-ghost"
+        onClick={(e) => { e.stopPropagation(); onToggle && onToggle(!isOpen) }}
+        style={{ fontSize: 12, padding: '6px 10px' }}
+      >
+        {isOpen ? 'Hide Custom Metadata' : 'Set Custom Metadata'}
+      </button>
+      {isOpen ? (
+        <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--muted)' }}>
+            <input
+              type="checkbox"
+              checked={!!values.isMovie}
+              onChange={(e) => setValues(prev => ({ ...prev, isMovie: e.target.checked }))}
+            />
+            Movie
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: values.isMovie ? '1fr 140px' : '1.2fr 120px 120px 120px', gap: 8 }}>
+            <input
+              className="form-input"
+              placeholder={values.isMovie ? 'Movie title' : 'Series title'}
+              value={values.title}
+              onChange={(e) => setValues(prev => ({ ...prev, title: e.target.value }))}
+            />
+            {!values.isMovie ? (
+              <>
+                <input
+                  className="form-input"
+                  placeholder="Year"
+                  value={values.year}
+                  onChange={(e) => setValues(prev => ({ ...prev, year: e.target.value }))}
+                />
+                <input
+                  className="form-input"
+                  placeholder="Season"
+                  value={values.season}
+                  onChange={(e) => setValues(prev => ({ ...prev, season: e.target.value }))}
+                />
+                <input
+                  className="form-input"
+                  placeholder="Episode"
+                  value={values.episode}
+                  onChange={(e) => setValues(prev => ({ ...prev, episode: e.target.value }))}
+                />
+              </>
+            ) : null}
+            {values.isMovie ? (
+              <input
+                className="form-input"
+                placeholder="Year"
+                value={values.year}
+                onChange={(e) => setValues(prev => ({ ...prev, year: e.target.value }))}
+              />
+            ) : null}
+          </div>
+          {!values.isMovie ? (
+            <input
+              className="form-input"
+              placeholder="Episode title"
+              value={values.episodeTitle}
+              onChange={(e) => setValues(prev => ({ ...prev, episodeTitle: e.target.value }))}
+            />
+          ) : null}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button type="button" className="btn-ghost" onClick={() => onToggle && onToggle(false)} disabled={loading}>Cancel</button>
+            <button type="button" className="btn-cta" onClick={handleSave} disabled={loading}>Save Metadata</button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 const DEFAULT_ROW_HEIGHT = 90
 
 function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null, setContextMenu = () => {} }) {
@@ -3401,6 +3547,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   const rowHeights = useRef({})
   const [manualIdOpen, setManualIdOpen] = useState({})
   const [manualIdsTick, setManualIdsTick] = useState(0)
+  const [customMetaOpen, setCustomMetaOpen] = useState({})
+  const [customMetaTick, setCustomMetaTick] = useState(0)
 
   useEffect(() => {
     // dynamically import selection utils (CommonJS module) and cache
@@ -3459,7 +3607,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
       const measured = Math.ceil(el.scrollHeight || el.getBoundingClientRect().height || DEFAULT_ROW_HEIGHT)
       setItemSize(index, measured)
     }
-  }, [index, it, enrichment, isSelected, loading, manualIdsTick])
+  }, [index, it, enrichment, isSelected, loading, manualIdsTick, customMetaTick])
   
   useEffect(() => { if (it && !rawEnrichment) enrichOne && enrichOne(it) }, [it?.canonicalPath, rawEnrichment, enrichOne])
 
@@ -3499,6 +3647,12 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
     if (!it || !it.canonicalPath) return
     setManualIdOpen(prev => ({ ...prev, [it.canonicalPath]: typeof next === 'boolean' ? next : !prev[it.canonicalPath] }))
     setManualIdsTick(t => t + 1)
+  }
+  const isCustomOpen = !!(it && customMetaOpen[it.canonicalPath])
+  const toggleCustomOpen = (next) => {
+    if (!it || !it.canonicalPath) return
+    setCustomMetaOpen(prev => ({ ...prev, [it.canonicalPath]: typeof next === 'boolean' ? next : !prev[it.canonicalPath] }))
+    setCustomMetaTick(t => t + 1)
   }
   const providerIdCandidates = []
   try { if (provider?.sources?.series?.id) providerIdCandidates.push(String(provider.sources.series.id).toLowerCase()) } catch (e) {}
@@ -3620,6 +3774,20 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                 </>
               ) : (parsed ? 'parsed' : 'unknown')}
             </div>
+            <CustomMetadataInputs
+              path={it?.canonicalPath}
+              isOpen={isCustomOpen}
+              onToggle={toggleCustomOpen}
+              onSaved={async () => {
+                try {
+                  const r = await axios.get(API('/enrich'), { params: { path: it?.canonicalPath } }).catch(() => null)
+                  const norm = normalizeEnrichResponse((r && r.data && r.data.enrichment) ? r.data.enrichment : (r && r.data ? r.data : null))
+                  if (norm) setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
+                } catch (e) {}
+                setCustomMetaTick(t => t + 1)
+              }}
+              pushToast={pushToast}
+            />
           </div>
         </div>
         <div className="actions">

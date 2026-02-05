@@ -5299,6 +5299,87 @@ app.get('/api/enrich', requireAuth, (req, res) => {
   } catch (e) { return res.status(500).json({ error: e.message }) }
 });
 
+// Save per-item custom metadata overrides for items missing provider data
+app.post('/api/enrich/custom', requireAuth, (req, res) => {
+  try {
+    const body = req.body || {}
+    const key = canonicalize(body.path || '')
+    if (!key) return res.status(400).json({ error: 'path required' })
+
+    const toNumber = (value) => {
+      if (value === null || typeof value === 'undefined' || value === '') return null
+      const n = Number(value)
+      return Number.isFinite(n) ? n : null
+    }
+
+    const title = String(body.title || '').trim()
+    const episodeTitleRaw = String(body.episodeTitle || '').trim()
+    const yearRaw = String(body.year || '').trim()
+    const isMovie = body.isMovie === true || String(body.isMovie || '').toLowerCase() === 'true'
+    let season = toNumber(body.season)
+    let episode = toNumber(body.episode)
+    let episodeTitle = episodeTitleRaw
+
+    if (!title) return res.status(400).json({ error: 'title required' })
+
+    if (isMovie) {
+      season = null
+      episode = null
+      episodeTitle = ''
+    }
+
+    const extraGuess = {
+      title,
+      episodeTitle: episodeTitle || '',
+      season,
+      episode,
+      year: yearRaw || null,
+      isMovie
+    }
+    if (isMovie) extraGuess.mediaFormat = 'MOVIE'
+
+    const cleanExtra = sanitizeExtraGuess(extraGuess, null)
+    if (!cleanExtra) return res.status(400).json({ error: 'invalid metadata' })
+
+    const existing = enrichCache[key] || {}
+    const data = Object.assign({}, existing, cleanExtra)
+    data.title = cleanExtra.title || existing.title || null
+    data.year = cleanExtra.year || existing.year || null
+    data.season = (cleanExtra.season != null) ? cleanExtra.season : (existing.season ?? null)
+    data.episode = (cleanExtra.episode != null) ? cleanExtra.episode : (existing.episode ?? null)
+    data.episodeTitle = (cleanExtra.episodeTitle != null) ? cleanExtra.episodeTitle : (existing.episodeTitle || '')
+    data.isMovie = (typeof cleanExtra.isMovie === 'boolean') ? cleanExtra.isMovie : existing.isMovie
+
+    const providerRendered = renderProviderName(data, key, req.session)
+    const providerBlock = {
+      title: data.title,
+      year: data.year,
+      season: data.season,
+      episode: data.episode,
+      episodeTitle: data.episodeTitle || '',
+      raw: null,
+      renderedName: providerRendered,
+      matched: !!data.title,
+      source: 'custom',
+      seriesTitleEnglish: data.seriesTitleEnglish || null,
+      seriesTitleRomaji: data.seriesTitleRomaji || null,
+      seriesTitleExact: data.seriesTitleExact || null,
+      originalSeriesTitle: data.originalSeriesTitle || null
+    }
+
+    const updated = updateEnrichCache(key, Object.assign({}, existing, data, {
+      extraGuess: cleanExtra,
+      provider: providerBlock,
+      sourceId: 'custom',
+      cachedAt: Date.now()
+    }))
+
+    return res.json({ ok: true, enrichment: cleanEnrichmentForClient(updated) })
+  } catch (e) {
+    return res.status(500).json({ error: e.message })
+  }
+})
+
 // Lookup enrichment by rendered metadata filename (without extension)
 app.get('/api/enrich/by-rendered', requireAuth, (req, res) => {
   try {
