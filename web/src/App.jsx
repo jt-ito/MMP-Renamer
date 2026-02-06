@@ -566,6 +566,7 @@ export default function App() {
   function updateScanDataAndPreserveView(meta, coll, options = {}) {
     try {
       const clean = (coll || []).filter(it => it && it.canonicalPath)
+      const deferVisibleUpdate = options.fromBackgroundPoll && (showScrollTop || selectMode)
       setScanMeta(meta)
       setTotal(meta.totalCount || clean.length)
       // If coll looks like a partial first-page (fewer items than reported total)
@@ -584,7 +585,16 @@ export default function App() {
       }
       // If user is actively searching, prefer client-side filtering when safe so
       // we don't cause a full server-side update that could reset the view.
-      if (searchQuery && searchQuery.length) {
+      if (deferVisibleUpdate) {
+        if (!items || items.length === 0) {
+          if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
+            setItems((baseline || clean).slice())
+          } else {
+            const firstPage = clean.slice(0, Math.max(batchSize, 50))
+            setItems(firstPage)
+          }
+        }
+      } else if (searchQuery && searchQuery.length) {
         try {
           if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
             const q = searchQuery
@@ -817,6 +827,10 @@ export default function App() {
             hadEvents = true
             for (const ev of r.data.events) {
               try {
+                try {
+                  const activeUser = auth && auth.username ? String(auth.username) : null
+                  if (ev && ev.user && (!activeUser || ev.user !== activeUser)) continue
+                } catch (e) {}
                 // update last seen ts and persist
                 if (ev && ev.ts && ev.ts > (lastHideEventTsRef.current || 0)) {
                   lastHideEventTsRef.current = ev.ts
@@ -886,7 +900,7 @@ export default function App() {
     }
     poll()
     return () => { mounted = false; if (timer) clearTimeout(timer) }
-  }, [scanId, lastScanId])
+  }, [scanId, lastScanId, auth])
 
   // check auth status on load (prevents deep-link bypass)
   useEffect(() => {
