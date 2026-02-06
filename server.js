@@ -5780,6 +5780,94 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
   } catch (err) { appendLog(`ENRICH_FAIL path=${key} err=${err.message}`); res.status(500).json({ error: err.message }); }
 });
 
+// Save custom metadata overrides for a specific file
+app.post('/api/enrich/custom', requireAuth, async (req, res) => {
+  try {
+    const username = req.session && req.session.username ? req.session.username : null;
+    const body = req.body || {};
+    const p = body.path ? String(body.path) : '';
+    const titleRaw = body.title != null ? String(body.title) : '';
+    const key = canonicalize(p);
+    if (!key) return res.status(400).json({ error: 'path required' });
+    if (!titleRaw || !titleRaw.trim()) return res.status(400).json({ error: 'title required' });
+
+    const isMovie = !!body.isMovie;
+    const season = (!isMovie && body.season !== null && typeof body.season !== 'undefined' && Number.isFinite(Number(body.season)))
+      ? Number(body.season)
+      : null;
+    const episode = (!isMovie && body.episode !== null && typeof body.episode !== 'undefined' && Number.isFinite(Number(body.episode)))
+      ? Number(body.episode)
+      : null;
+    const episodeTitle = (!isMovie && body.episodeTitle != null) ? String(body.episodeTitle).trim() : '';
+    const year = (body.year != null && String(body.year).trim()) ? String(body.year).trim() : null;
+
+    const existing = enrichCache[key] || {};
+    const mergedExtra = Object.assign({}, existing.extraGuess || {}, {
+      title: titleRaw.trim(),
+      episodeTitle: episodeTitle || null,
+      season: season != null ? season : null,
+      episode: episode != null ? episode : null,
+      year: year || null,
+      isMovie
+    });
+
+    const providerRaw = cloneProviderRaw(extractProviderRaw(existing));
+    const providerBlock = Object.assign({}, existing.provider || {}, {
+      title: titleRaw.trim(),
+      year: year || null,
+      season: season != null ? season : null,
+      episode: episode != null ? episode : null,
+      episodeTitle: episodeTitle || '',
+      raw: providerRaw || (existing.provider && existing.provider.raw) || null,
+      matched: true,
+      source: 'custom'
+    });
+    try {
+      const rendered = renderProviderName({
+        title: providerBlock.title,
+        year: providerBlock.year,
+        season: providerBlock.season,
+        episode: providerBlock.episode,
+        episodeTitle: providerBlock.episodeTitle,
+        raw: providerBlock.raw,
+        extraGuess: { isMovie }
+      }, key, req.session);
+      if (rendered) providerBlock.renderedName = rendered;
+    } catch (e) {}
+
+    const updated = Object.assign({}, existing, {
+      title: titleRaw.trim(),
+      year: year || null,
+      season: season != null ? season : null,
+      episode: episode != null ? episode : null,
+      episodeTitle: episodeTitle || null,
+      isMovie,
+      extraGuess: mergedExtra,
+      provider: providerBlock,
+      sourceId: 'custom',
+      cachedAt: Date.now()
+    });
+
+    updateEnrichCache(key, updated);
+
+    parsedCache[key] = Object.assign({}, parsedCache[key] || {}, {
+      title: titleRaw.trim(),
+      parsedName: titleRaw.trim(),
+      season: season != null ? season : null,
+      episode: episode != null ? episode : null,
+      timestamp: Date.now()
+    });
+
+    try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
+    try { if (db) db.setKV('parsedCache', parsedCache); else writeJson(parsedCacheFile, parsedCache); } catch (e) {}
+
+    const normalized = normalizeEnrichEntryForUser(enrichCache[key] || null, username);
+    return res.json({ ok: true, enrichment: cleanEnrichmentForClient(normalized) });
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
+
 // Hide a source item (mark hidden=true on the source canonical key)
 app.post('/api/enrich/hide', requireAuth, async (req, res) => {
   try {
