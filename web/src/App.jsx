@@ -3655,6 +3655,15 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   // Construct rendered name with proper format: Title (Year) - S01E08 - Episode Title
   // Year must come BEFORE episode label for TV shows
   const providerRendered = provider?.renderedName || (providerTitle ? `${providerTitle}${providerYear}${epLabel ? ' - ' + epLabel : ''}${providerEpisodeTitle ? ' - ' + providerEpisodeTitle : ''}` : null)
+  
+  // Debug logging for custom metadata
+  if (provider?.source === 'custom') {
+    console.log('[Row] Custom metadata detected for:', it?.canonicalPath)
+    console.log('[Row] provider.renderedName:', provider?.renderedName)
+    console.log('[Row] providerRendered:', providerRendered)
+    console.log('[Row] provider:', provider)
+  }
+  
   const providerSourceLabel = provider?.source || (provider?.provider ? (PROVIDER_LABELS[String(provider.provider).toLowerCase()] || provider.provider) : 'provider')
   const manualIdTitle = providerTitle || parsedTitle || (it?.canonicalPath ? it.canonicalPath.split('/').pop() : '')
   const isManualOpen = !!(it && manualIdOpen[it.canonicalPath])
@@ -3796,6 +3805,8 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               onSaved={async (updated) => {
                 try {
                   if (updated) {
+                    console.log('[CustomMetadata] Updating enrichCache with:', updated)
+                    console.log('[CustomMetadata] Provider renderedName:', updated?.provider?.renderedName)
                     setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: updated }))
                   } else {
                     const r = await axios.get(API('/enrich'), { params: { path: it?.canonicalPath } }).catch(() => null)
