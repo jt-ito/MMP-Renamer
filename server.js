@@ -5712,12 +5712,12 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
       const effectiveParsedBlock = (existingProvider && existingProvider.renderedName && existingProvider.parsedName) 
         ? { title: existingProvider.title || pc.title, parsedName: existingProvider.parsedName, season: existingProvider.season != null ? existingProvider.season : pc.season, episode: existingProvider.episode != null ? existingProvider.episode : pc.episode, timestamp: Date.now() }
         : parsedBlock
-      const providerBlock = existingProvider
-  const normalized = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: effectiveParsedBlock, provider: providerBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
-  updateEnrichCache(key, normalized);
-  try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
-      const normalized = normalizeEnrichEntryForUser(enrichCache[key] || null, username)
-      return res.json({ enrichment: cleanEnrichmentForClient(normalized) })
+        const providerBlock = existingProvider
+        const normalizedEntry = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: effectiveParsedBlock, provider: providerBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
+        updateEnrichCache(key, normalizedEntry);
+        try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
+        const normalizedForUser = normalizeEnrichEntryForUser(enrichCache[key] || null, username)
+        return res.json({ enrichment: cleanEnrichmentForClient(normalizedForUser) })
     }
 
     // otherwise perform authoritative external enrich (used by rescan/force)
