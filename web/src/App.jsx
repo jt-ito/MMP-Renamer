@@ -3444,7 +3444,7 @@ function CustomMetadataInputs({ path, isOpen, onToggle, onSaved, pushToast }) {
     }
     setLoading(true)
     try {
-      await axios.post(API('/enrich/custom'), {
+      const res = await axios.post(API('/enrich/custom'), {
         path,
         title: String(values.title || '').trim(),
         episodeTitle: values.isMovie ? '' : String(values.episodeTitle || '').trim(),
@@ -3454,7 +3454,8 @@ function CustomMetadataInputs({ path, isOpen, onToggle, onSaved, pushToast }) {
         isMovie: !!values.isMovie
       })
       pushToast && pushToast('Custom Metadata', 'Saved custom metadata')
-      onSaved && onSaved()
+      const norm = normalizeEnrichResponse((res && res.data && res.data.enrichment) ? res.data.enrichment : (res && res.data ? res.data : null))
+      onSaved && onSaved(norm)
       onToggle && onToggle(false)
     } catch (e) {
       pushToast && pushToast('Custom Metadata', 'Failed to save custom metadata')
@@ -3792,11 +3793,15 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               path={it?.canonicalPath}
               isOpen={isCustomOpen}
               onToggle={toggleCustomOpen}
-              onSaved={async () => {
+              onSaved={async (updated) => {
                 try {
-                  const r = await axios.get(API('/enrich'), { params: { path: it?.canonicalPath } }).catch(() => null)
-                  const norm = normalizeEnrichResponse((r && r.data && r.data.enrichment) ? r.data.enrichment : (r && r.data ? r.data : null))
-                  if (norm) setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
+                  if (updated) {
+                    setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: updated }))
+                  } else {
+                    const r = await axios.get(API('/enrich'), { params: { path: it?.canonicalPath } }).catch(() => null)
+                    const norm = normalizeEnrichResponse((r && r.data && r.data.enrichment) ? r.data.enrichment : (r && r.data ? r.data : null))
+                    if (norm) setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
+                  }
                 } catch (e) {}
                 setCustomMetaTick(t => t + 1)
               }}
