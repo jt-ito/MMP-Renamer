@@ -879,11 +879,12 @@ function cloneProviderRaw(raw) {
 
 // Helper to clean enrichment entries before returning to client
 // Removes stale provider.renderedName so frontend computes it from current provider.title
+// Exception: preserve renderedName for custom metadata since it was explicitly set
 function cleanEnrichmentForClient(entry) {
   if (!entry) return entry;
   const cleaned = Object.assign({}, entry);
   if (cleaned.userFlags) delete cleaned.userFlags;
-  if (cleaned.provider && cleaned.provider.renderedName) {
+  if (cleaned.provider && cleaned.provider.renderedName && cleaned.provider.source !== 'custom') {
     cleaned.provider = Object.assign({}, cleaned.provider);
     delete cleaned.provider.renderedName;
   }
