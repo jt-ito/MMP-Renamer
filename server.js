@@ -579,13 +579,12 @@ try {
     try {
       const scan = scans[sid];
       if (!scan || !Array.isArray(scan.items)) continue;
-      if (!scan.owner && users && users.admin) scan.owner = 'admin';
       const before = scan.items.length;
       scan.items = scan.items.filter(it => {
         try {
           const k = canonicalize(it.canonicalPath);
           const e = enrichCache[k] || null;
-          if (e && isHiddenOrAppliedForUser(e, scan.owner || null)) return false;
+          if (e && (e.hidden || e.applied)) return false;
           return true;
         } catch (e) { return true; }
       });
@@ -674,14 +673,14 @@ function startFolderWatcher(username, libPath) {
             try {
               const k = canonicalize(it.canonicalPath);
               const e = enrichCache[k] || null;
-              if (e && isHiddenOrAppliedForUser(e, username)) return false;
+              if (e && (e.hidden || e.applied)) return false;
               return true;
             } catch (e) { return true; }
           });
           
           const generatedAt = Date.now();
           const scanId = uuidv4();
-          const scanObj = { id: scanId, libraryId: 'local', owner: username || null, items: filteredItems, generatedAt, incrementalScanPath: libPath, username, totalCount: filteredItems.length };
+          const scanObj = { id: scanId, libraryId: 'local', items: filteredItems, generatedAt, incrementalScanPath: libPath, username, totalCount: filteredItems.length };
           
           if (db) {
             try { db.saveScan(scanObj); } catch (e) {}
@@ -808,7 +807,7 @@ function safeCloneJson(value, context) {
 function sanitizeExtraGuess(extraGuess, fallback) {
   try {
     const safe = {};
-    const skipKeys = new Set(['provider', 'parsed', 'extraGuess', 'raw', 'cachedAt', 'sourceId', 'renderedName', 'metadataFilename', 'applied', 'hidden', 'userFlags']);
+    const skipKeys = new Set(['provider', 'parsed', 'extraGuess', 'raw', 'cachedAt', 'sourceId', 'renderedName', 'metadataFilename', 'applied', 'hidden']);
     if (extraGuess && typeof extraGuess === 'object') {
       for (const key of Object.keys(extraGuess)) {
         if (!Object.prototype.hasOwnProperty.call(extraGuess, key)) continue;
@@ -879,16 +878,14 @@ function cloneProviderRaw(raw) {
 
 // Helper to clean enrichment entries before returning to client
 // Removes stale provider.renderedName so frontend computes it from current provider.title
-// Exception: preserve renderedName for custom metadata since it was explicitly set
 function cleanEnrichmentForClient(entry) {
-  if (!entry) return entry;
-  const cleaned = Object.assign({}, entry);
-  if (cleaned.userFlags) delete cleaned.userFlags;
-  if (cleaned.provider && cleaned.provider.renderedName && cleaned.provider.source !== 'custom') {
-    cleaned.provider = Object.assign({}, cleaned.provider);
+  if (entry && entry.provider && entry.provider.renderedName) {
+    const cleaned = Object.assign({}, entry);
+    cleaned.provider = Object.assign({}, entry.provider);
     delete cleaned.provider.renderedName;
+    return cleaned;
   }
-  return cleaned;
+  return entry;
 }
 
 // Normalizer to ensure enrich entries have consistent shape used by the UI
@@ -4932,7 +4929,6 @@ app.post('/api/scan', requireAuth, async (req, res) => {
   let incrementalNewItems = [];
   try {
     const session = req.session || {};
-    const username = session && session.username ? session.username : null;
     const priorCache2 = loadScanCache();
     if (!priorCache2 || !priorCache2.files || Object.keys(priorCache2.files).length === 0) {
       // first full run - process everything
@@ -4954,7 +4950,7 @@ app.post('/api/scan', requireAuth, async (req, res) => {
           try {
             const k = canonicalize(it.canonicalPath);
             const e = enrichCache[k] || null;
-            if (e && isHiddenOrAppliedForUser(e, username)) return false;
+            if (e && (e.hidden || e.applied)) return false;
             return true;
           } catch (e) { return true; }
         });
@@ -4971,8 +4967,8 @@ app.post('/api/scan', requireAuth, async (req, res) => {
       for (const r of (removed || [])) {
         try {
           const e = enrichCache[r] || null;
-          // Keep enrichCache entry if any user applied or hid the item (prevents reappearance)
-          if (!e || !hasAnyAppliedOrHidden(e)) {
+          // Keep enrichCache entry if item was applied or hidden (prevents reappearance)
+          if (!e || (!e.applied && !e.hidden)) {
             delete enrichCache[r];
           }
           delete parsedCache[r];
@@ -4989,7 +4985,7 @@ app.post('/api/scan', requireAuth, async (req, res) => {
           try {
             const k = canonicalize(it.canonicalPath);
             const e = enrichCache[k] || null;
-            if (e && isHiddenOrAppliedForUser(e, username)) return false;
+            if (e && (e.hidden || e.applied)) return false;
             return true;
           } catch (e) { return true; }
         });
@@ -5004,7 +5000,7 @@ app.post('/api/scan', requireAuth, async (req, res) => {
     // refresh metadata for new/changed items (toProcess). For full scans, use the
     // artifact items as before.
     const enrichCandidates = (Array.isArray(incrementalNewItems) && incrementalNewItems.length) ? incrementalNewItems : items;
-    const artifact = { id: scanId, libraryId: libraryId || 'local', owner: username || null, totalCount: items.length, items, generatedAt: Date.now() };
+    const artifact = { id: scanId, libraryId: libraryId || 'local', totalCount: items.length, items, generatedAt: Date.now() };
     scans[scanId] = artifact;
     // Persist scans and prune older scan artifacts so we keep only the two most recent scans.
     try {
@@ -5051,7 +5047,6 @@ app.post('/api/scan', requireAuth, async (req, res) => {
 // without forcing a full main scan that can be expensive.
 app.post('/api/scan/incremental', requireAuth, async (req, res) => {
   const { libraryId, path: libraryPath } = req.body || {};
-  const username = req.session && req.session.username ? req.session.username : null;
   let libPath = null;
   if (libraryPath) libPath = path.resolve(libraryPath);
   else if (req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.scan_input_path) libPath = path.resolve(users[req.session.username].settings.scan_input_path);
@@ -5078,7 +5073,7 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
     if ((!prior || !prior.files || Object.keys(prior.files).length === 0) && scans && Object.keys(scans || {}).length) {
       try {
         // pick the most recent scan by generatedAt
-        const allIds = Object.keys(scans || {}).map(k => scans[k]).filter(s => s && scanOwnedByUser(s, username));
+        const allIds = Object.keys(scans || {}).map(k => scans[k]).filter(Boolean);
         allIds.sort((a,b) => (b.generatedAt || 0) - (a.generatedAt || 0));
         const recent = allIds[0];
         if (recent && Array.isArray(recent.items) && recent.items.length) {
@@ -5111,8 +5106,8 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
       for (const r of (removed || [])) {
         try {
           const e = enrichCache[r] || null;
-          // Keep enrichCache entry if any user applied or hid the item (prevents reappearance)
-          if (!e || !hasAnyAppliedOrHidden(e)) {
+          // Keep enrichCache entry if item was applied or hidden (prevents reappearance)
+          if (!e || (!e.applied && !e.hidden)) {
             delete enrichCache[r];
           }
           delete parsedCache[r];
@@ -5136,11 +5131,11 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
     try {
       const k = canonicalize(it.canonicalPath);
       const e = enrichCache[k] || null;
-      if (e && isHiddenOrAppliedForUser(e, username)) return false;
+      if (e && (e.hidden || e.applied)) return false;
       return true;
     } catch (e) { return true; }
   });
-  const artifact = { id: scanId, libraryId: libraryId || 'local', owner: username || null, totalCount: filteredItems.length, items: filteredItems, generatedAt: Date.now() };
+  const artifact = { id: scanId, libraryId: libraryId || 'local', totalCount: filteredItems.length, items: filteredItems, generatedAt: Date.now() };
   scans[scanId] = artifact;
   try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); } catch (e) {}
   appendLog(`INCREMENTAL_SCAN_COMPLETE id=${scanId} total=${filteredItems.length} hidden_filtered=${items.length - filteredItems.length}`);
@@ -5154,23 +5149,17 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
   // Enrichment will happen when user manually requests it or during full scans
 });
 
-app.get('/api/scan/:scanId', requireAuth, (req, res) => {
-  const s = scans[req.params.scanId];
-  const username = req.session && req.session.username ? req.session.username : null;
-  if (!s || !scanOwnedByUser(s, username)) return res.status(404).json({ error: 'scan not found' });
-  res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt });
-});
+app.get('/api/scan/:scanId', requireAuth, (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
 app.get('/api/scan/:scanId/items', requireAuth, (req, res) => { 
-  const s = scans[req.params.scanId];
-  const username = req.session && req.session.username ? req.session.username : null;
-  if (!s || !scanOwnedByUser(s, username)) return res.status(404).json({ error: 'scan not found' });
+  const s = scans[req.params.scanId]; 
+  if (!s) return res.status(404).json({ error: 'scan not found' }); 
   
   // Filter out applied/hidden items
   const filteredItems = (s.items || []).filter(it => {
     try {
       const k = canonicalize(it.canonicalPath);
       const e = enrichCache[k] || null;
-      if (e && isHiddenOrAppliedForUser(e, username)) return false;
+      if (e && (e.hidden || e.applied)) return false;
       return true;
     } catch (err) { return true; }
   });
@@ -5184,12 +5173,10 @@ app.get('/api/scan/:scanId/items', requireAuth, (req, res) => {
 // Return the most recent scan artifact optionally filtered by libraryId. Useful when client lost lastScanId.
 app.get('/api/scan/latest', requireAuth, (req, res) => {
   try {
-    const username = req.session && req.session.username ? req.session.username : null;
     const lib = req.query.libraryId || null
     const all = Object.keys(scans || {}).map(k => scans[k]).filter(Boolean)
     let filtered = all
     if (lib) filtered = filtered.filter(s => s.libraryId === lib)
-    if (username) filtered = filtered.filter(s => scanOwnedByUser(s, username))
     if (!filtered.length) {
       const include = (req.query && (req.query.includeItems === '1' || req.query.includeItems === 'true'))
       if (include) return res.json({ scanId: null, libraryId: lib, totalCount: 0, generatedAt: null, items: [] })
@@ -5201,15 +5188,7 @@ app.get('/api/scan/latest', requireAuth, (req, res) => {
     const include = (req.query && (req.query.includeItems === '1' || req.query.includeItems === 'true'))
     if (include) {
       const limit = Math.min(Math.max(parseInt(req.query.limit || '50', 10), 1), 500)
-      const rawItems = Array.isArray(pick.items) ? pick.items : []
-      const items = rawItems.filter(it => {
-        try {
-          const k = canonicalize(it.canonicalPath);
-          const e = enrichCache[k] || null;
-          if (e && isHiddenOrAppliedForUser(e, username)) return false;
-          return true;
-        } catch (e) { return true; }
-      }).slice(0, limit)
+      const items = Array.isArray(pick.items) ? pick.items.slice(0, limit) : []
       return res.json({ scanId: pick.id, libraryId: pick.libraryId, totalCount: pick.totalCount, generatedAt: pick.generatedAt, items })
     }
     return res.json({ scanId: pick.id, libraryId: pick.libraryId, totalCount: pick.totalCount, generatedAt: pick.generatedAt })
@@ -5220,8 +5199,7 @@ app.get('/api/scan/latest', requireAuth, (req, res) => {
 app.get('/api/scan/:scanId/search', requireAuth, (req, res) => {
   try {
     const s = scans[req.params.scanId];
-    const username = req.session && req.session.username ? req.session.username : null;
-    if (!s || !scanOwnedByUser(s, username)) return res.status(404).json({ error: 'scan not found' });
+    if (!s) return res.status(404).json({ error: 'scan not found' });
     const q = (req.query.q || req.query.query || '').trim();
     const offset = parseInt(req.query.offset || '0', 10) || 0;
     const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 500);
@@ -5276,8 +5254,8 @@ app.get('/api/scan/:scanId/search', requireAuth, (req, res) => {
         const key = canonicalize(copy.canonicalPath || '');
         const raw = enrichCache[key] || null;
         if (raw) {
-          const normalized = normalizeEnrichEntryForUser(raw, username);
-          if (normalized) copy.enrichment = cleanEnrichmentForClient(normalized);
+          const normalized = normalizeEnrichEntry(raw);
+          if (normalized) copy.enrichment = normalized;
         }
       } catch (e) {}
       return copy;
@@ -5289,7 +5267,6 @@ app.get('/api/scan/:scanId/search', requireAuth, (req, res) => {
 app.get('/api/enrich', requireAuth, (req, res) => {
   const { path: p } = req.query;
   const key = canonicalize(p || '');
-  const username = req.session && req.session.username ? req.session.username : null;
   try {
     // If the underlying file no longer exists on disk, do not return cached enrichment
     try {
@@ -5300,7 +5277,7 @@ app.get('/api/enrich', requireAuth, (req, res) => {
       }
     } catch (e) { /* ignore fs errors and continue */ }
     const raw = enrichCache[key] || null;
-    const normalized = normalizeEnrichEntryForUser(raw, username);
+    const normalized = normalizeEnrichEntry(raw);
     // If a provider block exists but is incomplete (e.g. missing renderedName or
     // missing episodeTitle for episode entries), treat it as not-cached so clients
     // will request an external lookup instead of assuming metadata is final.
@@ -5325,7 +5302,6 @@ app.get('/api/enrich', requireAuth, (req, res) => {
 // Save per-item custom metadata overrides for items missing provider data
 app.post('/api/enrich/custom', requireAuth, (req, res) => {
   try {
-    const username = req.session && req.session.username ? req.session.username : null;
     const body = req.body || {}
     const key = canonicalize(body.path || '')
     if (!key) return res.status(400).json({ error: 'path required' })
@@ -5398,8 +5374,7 @@ app.post('/api/enrich/custom', requireAuth, (req, res) => {
       cachedAt: Date.now()
     }))
 
-    const normalized = normalizeEnrichEntryForUser(updated, username)
-    return res.json({ ok: true, enrichment: cleanEnrichmentForClient(normalized) })
+    return res.json({ ok: true, enrichment: cleanEnrichmentForClient(updated) })
   } catch (e) {
     return res.status(500).json({ error: e.message })
   }
@@ -5408,22 +5383,19 @@ app.post('/api/enrich/custom', requireAuth, (req, res) => {
 // Lookup enrichment by rendered metadata filename (without extension)
 app.get('/api/enrich/by-rendered', requireAuth, (req, res) => {
   try {
-    const username = req.session && req.session.username ? req.session.username : null;
     const name = req.query.name || ''
     if (!name) return res.status(400).json({ error: 'name required' })
     const target = renderedIndex[name]
     if (!target) return res.json({ found: false })
     const e = enrichCache[target] || null
     if (!e) return res.json({ found: false })
-    const normalized = normalizeEnrichEntryForUser(e, username)
-    return res.json({ found: true, path: target, enrichment: cleanEnrichmentForClient(normalized) })
+    return res.json({ found: true, path: target, enrichment: e })
   } catch (e) { return res.status(500).json({ error: e.message }) }
 })
 
 // Bulk enrich lookup to reduce per-file GET traffic from the client during scan refreshes
 app.post('/api/enrich/bulk', requireAuth, (req, res) => {
   try {
-    const username = req.session && req.session.username ? req.session.username : null;
     const paths = Array.isArray(req.body && req.body.paths) ? req.body.paths : null
     if (!paths) return res.status(400).json({ error: 'paths array required' })
     const out = []
@@ -5431,16 +5403,16 @@ app.post('/api/enrich/bulk', requireAuth, (req, res) => {
       try {
         const key = canonicalize(p || '')
         const raw = enrichCache[key] || null
-        const normalized = normalizeEnrichEntryForUser(raw, username)
+        const normalized = normalizeEnrichEntry(raw)
         // If provider block exists but incomplete, mark as not-cached so clients will fetch externally
         if (normalized) {
           const prov = normalized.provider || null
           const providerComplete = prov && prov.matched && prov.renderedName && (prov.episode == null || (prov.episodeTitle && String(prov.episodeTitle).trim()))
           if (prov && !providerComplete) {
-            out.push({ path: p, cached: false, enrichment: cleanEnrichmentForClient(normalized) })
+            out.push({ path: p, cached: false, enrichment: normalized })
             continue
           }
-          if (normalized.parsed || normalized.provider) { out.push({ path: p, cached: true, enrichment: cleanEnrichmentForClient(normalized) }); continue }
+          if (normalized.parsed || normalized.provider) { out.push({ path: p, cached: true, enrichment: normalized }); continue }
         }
         out.push({ path: p, cached: false, enrichment: null })
       } catch (e) { out.push({ path: p, error: e.message }) }
@@ -5662,7 +5634,6 @@ app.get('/api/path/exists', requireAuth, (req, res) => { const p = req.query.pat
 app.post('/api/enrich', requireAuth, async (req, res) => {
   const { path: p, tmdb_api_key: tmdb_override, force, forceHash, tvdb_v4_api_key: tvdb_override_v4_api_key, tvdb_v4_user_pin: tvdb_override_v4_user_pin, skipAnimeProviders } = req.body;
   const key = canonicalize(p || '');
-  const username = req.session && req.session.username ? req.session.username : null;
   appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'} forceHash=${forceHash ? 'yes' : 'no'} skipAnimeProviders=${skipAnimeProviders ? 'yes' : 'no'}`);
   try {
     // On forced rescan, clear cached enrich/parsed/rendered entries while preserving applied/hidden flags
@@ -5678,13 +5649,11 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
     const provEarly = existingEarly && existingEarly.provider ? existingEarly.provider : null;
     const providerCompleteEarly = provEarly && provEarly.matched && provEarly.renderedName && (provEarly.episode == null || (provEarly.episodeTitle && String(provEarly.episodeTitle).trim()));
     if (!force && providerCompleteEarly) {
-      const normalized = normalizeEnrichEntryForUser(enrichCache[key] || null, username);
-      return res.json({ enrichment: cleanEnrichmentForClient(normalized) });
+      return res.json({ enrichment: enrichCache[key] });
     }
     if (!force && existingEarly && existingEarly.providerFailure) {
       try { appendLog(`ENRICH_REQUEST_SKIP_FAILURE path=${key}`); } catch (e) {}
-      const normalized = normalizeEnrichEntryForUser(existingEarly, username);
-      return res.json({ enrichment: cleanEnrichmentForClient(normalized) });
+      return res.json({ enrichment: existingEarly });
     }
     // Resolve an effective provider key early so we can decide whether to short-circuit to parsed-only
   let tmdbKeyEarly = null
@@ -5713,12 +5682,11 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
       const effectiveParsedBlock = (existingProvider && existingProvider.renderedName && existingProvider.parsedName) 
         ? { title: existingProvider.title || pc.title, parsedName: existingProvider.parsedName, season: existingProvider.season != null ? existingProvider.season : pc.season, episode: existingProvider.episode != null ? existingProvider.episode : pc.episode, timestamp: Date.now() }
         : parsedBlock
-        const providerBlock = existingProvider
-        const normalizedEntry = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: effectiveParsedBlock, provider: providerBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
-        updateEnrichCache(key, normalizedEntry);
-        try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
-        const normalizedForUser = normalizeEnrichEntryForUser(enrichCache[key] || null, username)
-        return res.json({ enrichment: cleanEnrichmentForClient(normalizedForUser) })
+      const providerBlock = existingProvider
+  const normalized = normalizeEnrichEntry(Object.assign({}, enrichCache[key] || {}, { parsed: effectiveParsedBlock, provider: providerBlock, sourceId: 'parsed-cache', cachedAt: Date.now() }));
+  updateEnrichCache(key, normalized);
+  try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
+      return res.json({ enrichment: enrichCache[key] })
     }
 
     // otherwise perform authoritative external enrich (used by rescan/force)
@@ -5776,118 +5744,26 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
     } catch (e) {
       updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
     }
-    const normalized = normalizeEnrichEntryForUser(enrichCache[key] || null, username)
-    res.json({ enrichment: cleanEnrichmentForClient(normalized) });
+    res.json({ enrichment: enrichCache[key] });
   } catch (err) { appendLog(`ENRICH_FAIL path=${key} err=${err.message}`); res.status(500).json({ error: err.message }); }
-});
-
-// Save custom metadata overrides for a specific file
-app.post('/api/enrich/custom', requireAuth, async (req, res) => {
-  try {
-    const username = req.session && req.session.username ? req.session.username : null;
-    const body = req.body || {};
-    const p = body.path ? String(body.path) : '';
-    const titleRaw = body.title != null ? String(body.title) : '';
-    const key = canonicalize(p);
-    if (!key) return res.status(400).json({ error: 'path required' });
-    if (!titleRaw || !titleRaw.trim()) return res.status(400).json({ error: 'title required' });
-
-    const isMovie = !!body.isMovie;
-    const season = (!isMovie && body.season !== null && typeof body.season !== 'undefined' && Number.isFinite(Number(body.season)))
-      ? Number(body.season)
-      : null;
-    const episode = (!isMovie && body.episode !== null && typeof body.episode !== 'undefined' && Number.isFinite(Number(body.episode)))
-      ? Number(body.episode)
-      : null;
-    const episodeTitle = (!isMovie && body.episodeTitle != null) ? String(body.episodeTitle).trim() : '';
-    const year = (body.year != null && String(body.year).trim()) ? String(body.year).trim() : null;
-
-    const existing = enrichCache[key] || {};
-    const mergedExtra = Object.assign({}, existing.extraGuess || {}, {
-      title: titleRaw.trim(),
-      episodeTitle: episodeTitle || null,
-      season: season != null ? season : null,
-      episode: episode != null ? episode : null,
-      year: year || null,
-      isMovie
-    });
-
-    const providerRaw = cloneProviderRaw(extractProviderRaw(existing));
-    const providerBlock = Object.assign({}, existing.provider || {}, {
-      title: titleRaw.trim(),
-      year: year || null,
-      season: season != null ? season : null,
-      episode: episode != null ? episode : null,
-      episodeTitle: episodeTitle || '',
-      raw: providerRaw || (existing.provider && existing.provider.raw) || null,
-      matched: true,
-      source: 'custom'
-    });
-    try {
-      const rendered = renderProviderName({
-        title: providerBlock.title,
-        year: providerBlock.year,
-        season: providerBlock.season,
-        episode: providerBlock.episode,
-        episodeTitle: providerBlock.episodeTitle,
-        raw: providerBlock.raw,
-        extraGuess: { isMovie }
-      }, key, req.session);
-      if (rendered) providerBlock.renderedName = rendered;
-    } catch (e) {}
-
-    const updated = Object.assign({}, existing, {
-      title: titleRaw.trim(),
-      year: year || null,
-      season: season != null ? season : null,
-      episode: episode != null ? episode : null,
-      episodeTitle: episodeTitle || null,
-      isMovie,
-      extraGuess: mergedExtra,
-      provider: providerBlock,
-      sourceId: 'custom',
-      cachedAt: Date.now()
-    });
-
-    updateEnrichCache(key, updated);
-
-    parsedCache[key] = Object.assign({}, parsedCache[key] || {}, {
-      title: titleRaw.trim(),
-      parsedName: titleRaw.trim(),
-      season: season != null ? season : null,
-      episode: episode != null ? episode : null,
-      timestamp: Date.now()
-    });
-
-    try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
-    try { if (db) db.setKV('parsedCache', parsedCache); else writeJson(parsedCacheFile, parsedCache); } catch (e) {}
-
-    const normalized = normalizeEnrichEntryForUser(enrichCache[key] || null, username);
-    return res.json({ ok: true, enrichment: cleanEnrichmentForClient(normalized) });
-  } catch (e) {
-    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
-  }
 });
 
 // Hide a source item (mark hidden=true on the source canonical key)
 app.post('/api/enrich/hide', requireAuth, async (req, res) => {
   try {
-    const username = req.session && req.session.username ? req.session.username : null;
     const p = req.body && req.body.path ? req.body.path : null
     if (!p) return res.status(400).json({ error: 'path required' })
   const key = canonicalize(p)
   // Update cache and persist immediately so changes survive browser close
   try {
-    const existing = enrichCache[key] || {};
-    const updated = setUserFlags(Object.assign({}, existing), username, { hidden: true, hiddenAt: Date.now() });
-    updateEnrichCache(key, updated);
+    enrichCache[key] = enrichCache[key] || {};
+    enrichCache[key].hidden = true;
     // Persist immediately instead of debouncing
     try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) { appendLog(`HIDE_PERSIST_FAIL path=${p} err=${e && e.message ? e.message : String(e)}`) }
   } catch (e) { appendLog(`HIDE_UPDATE_FAIL path=${p} err=${e && e.message ? e.message : String(e)}`) }
 
   // respond immediately to the client so UI hides instantly
-  const normalized = normalizeEnrichEntryForUser(enrichCache[key] || null, username);
-  res.json({ ok: true, path: key, enrichment: cleanEnrichmentForClient(normalized), modifiedScanIds: [] });
+  res.json({ ok: true, path: key, enrichment: enrichCache[key] || null, modifiedScanIds: [] });
 
   // Background: remove this path from stored scan artifacts and record hide event
   (async () => {
@@ -5899,7 +5775,6 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
           try {
             const s = scans[sid];
             if (!s || !Array.isArray(s.items)) continue;
-            if (!scanOwnedByUser(s, username)) continue;
             const before = s.items.length;
             s.items = s.items.filter(it => {
               try { return canonicalize(it.canonicalPath) !== key } catch (e) { return true }
@@ -5919,7 +5794,7 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
       appendLog(`HIDE path=${p}`)
       try {
         // Record hide event for clients to poll and reconcile UI
-        hideEvents.push({ ts: Date.now(), path: key, originalPath: p, modifiedScanIds, user: username || null });
+        hideEvents.push({ ts: Date.now(), path: key, originalPath: p, modifiedScanIds });
         try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
         // keep recent events bounded
         if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
@@ -5972,8 +5847,8 @@ app.post('/api/enrich/sweep', requireAuth, requireAdmin, (req, res) => {
 // Force-refresh metadata for all items in a completed scan (server-side enrichment)
 app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
   const s = scans[req.params.scanId];
+  if (!s) return res.status(404).json({ error: 'scan not found' });
   const username = req.session && req.session.username;
-  if (!s || !scanOwnedByUser(s, username)) return res.status(404).json({ error: 'scan not found' });
   const forceCache = coerceBoolean(req.body && req.body.force);
   appendLog(`REFRESH_SCAN_REQUEST scan=${req.params.scanId} by=${username} force=${forceCache ? 'yes' : 'no'}`);
   // Prevent concurrent refreshes for the same scanId
@@ -6141,13 +6016,12 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
           try {
             const s = scans[sid];
             if (!s || !Array.isArray(s.items)) continue;
-            if (!scanOwnedByUser(s, username)) continue;
             const before = s.items.length;
             s.items = s.items.map(it => (it && it.canonicalPath) ? Object.assign({}, it) : it).filter(it => {
               try {
                 const k = canonicalize(it.canonicalPath);
                 const e = enrichCache[k] || null;
-                if (e && isHiddenOrAppliedForUser(e, s.owner || username)) return false;
+                if (e && (e.hidden || e.applied)) return false;
                 try { it.enrichment = enrichCache[k] || null } catch (ee) { it.enrichment = null }
                 return true
               } catch (e) { return true }
@@ -6170,7 +6044,7 @@ app.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
         // Notify clients that scans were updated by refresh so UI can reconcile
         try {
           if (modified && modified.length && Array.isArray(hideEvents)) {
-            const evt = { ts: Date.now(), path: req.params && req.params.scanId ? `scan:${req.params.scanId}` : null, originalPath: null, modifiedScanIds: modified.map(String), user: username || null };
+            const evt = { ts: Date.now(), path: req.params && req.params.scanId ? `scan:${req.params.scanId}` : null, originalPath: null, modifiedScanIds: modified.map(String) };
             hideEvents.push(evt);
             try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
             // keep recent events bounded
@@ -6289,7 +6163,7 @@ app.get('/api/enrich/hide-events', requireAuth, (req, res) => {
 
     // defensive: ensure hideEvents is an array
     const he = Array.isArray(hideEvents) ? hideEvents : []
-    const ev = he.filter(e => (e && e.ts && e.ts > since && (!e.user || e.user === uname)))
+    const ev = he.filter(e => (e && e.ts && e.ts > since))
     const resp = { ok: true, events: ev || [] }
 
     try { hideEventsClientCache.set(clientKey, { ts: since, resp, lastHit: now }) } catch (e) {}
@@ -7046,10 +6920,6 @@ function preserveAppliedFlags(prev, next) {
   try {
     prev = prev || {};
     next = next || {};
-    if (prev.userFlags) {
-      const mergedFlags = Object.assign({}, prev.userFlags || {}, next.userFlags || {});
-      next.userFlags = mergedFlags;
-    }
     if (prev.applied) next.applied = prev.applied;
     if (prev.hidden) next.hidden = prev.hidden;
     if (typeof prev.appliedAt !== 'undefined') next.appliedAt = prev.appliedAt;
@@ -7058,94 +6928,6 @@ function preserveAppliedFlags(prev, next) {
     if (typeof prev.renderedName !== 'undefined') next.renderedName = prev.renderedName;
     return next;
   } catch (e) { return next; }
-}
-
-function getUserFlags(entry, username) {
-  try {
-    if (!entry || !username) return null;
-    if (entry.userFlags && entry.userFlags[username]) return entry.userFlags[username];
-    // Legacy applied/hidden flags are treated as admin-only
-    if (username === 'admin') {
-      if (entry.applied || entry.hidden || entry.appliedAt || entry.appliedTo || entry.hiddenAt) {
-        return {
-          applied: !!entry.applied,
-          hidden: !!entry.hidden,
-          appliedAt: entry.appliedAt || null,
-          appliedTo: entry.appliedTo || null,
-          hiddenAt: entry.hiddenAt || null
-        };
-      }
-    }
-    return null;
-  } catch (e) { return null; }
-}
-
-function setUserFlags(entry, username, updates = {}) {
-  try {
-    if (!entry || !username) return entry;
-    if (!entry.userFlags || typeof entry.userFlags !== 'object') entry.userFlags = {};
-    const prev = entry.userFlags[username] && typeof entry.userFlags[username] === 'object' ? entry.userFlags[username] : {};
-    const next = Object.assign({}, prev, updates);
-    entry.userFlags[username] = next;
-    return entry;
-  } catch (e) { return entry; }
-}
-
-function hasAnyAppliedOrHidden(entry) {
-  try {
-    if (!entry) return false;
-    if (entry.applied || entry.hidden) return true;
-    const flags = entry.userFlags && typeof entry.userFlags === 'object' ? entry.userFlags : null;
-    if (!flags) return false;
-    for (const key of Object.keys(flags)) {
-      const f = flags[key];
-      if (f && (f.applied || f.hidden)) return true;
-    }
-    return false;
-  } catch (e) { return false; }
-}
-
-function scanOwnedByUser(scan, username) {
-  try {
-    if (!scan || !username) return false;
-    if (scan.owner) return scan.owner === username;
-    if (scan.username) return scan.username === username;
-    return username === 'admin';
-  } catch (e) { return false; }
-}
-
-function applyUserFlagsToEntry(entry, username) {
-  try {
-    const out = Object.assign({}, entry || {});
-    const flags = getUserFlags(entry, username);
-    if (flags) {
-      out.applied = !!flags.applied;
-      out.hidden = !!flags.hidden;
-      out.appliedAt = flags.appliedAt || null;
-      out.appliedTo = flags.appliedTo || null;
-      out.hiddenAt = flags.hiddenAt || null;
-    } else {
-      out.applied = false;
-      out.hidden = false;
-      if (typeof out.appliedAt !== 'undefined') delete out.appliedAt;
-      if (typeof out.appliedTo !== 'undefined') delete out.appliedTo;
-      if (typeof out.hiddenAt !== 'undefined') delete out.hiddenAt;
-    }
-    return out;
-  } catch (e) { return entry; }
-}
-
-function normalizeEnrichEntryForUser(entry, username) {
-  const normalized = normalizeEnrichEntry(entry);
-  return applyUserFlagsToEntry(normalized, username);
-}
-
-function isHiddenOrAppliedForUser(entry, username) {
-  try {
-    const flags = getUserFlags(entry, username);
-    if (!flags) return false;
-    return !!flags.hidden || !!flags.applied;
-  } catch (e) { return false; }
 }
 
 // Centralized update helper: always preserve applied/hidden flags, normalize entry, and persist
@@ -7208,8 +6990,7 @@ function purgeCachesForPath(rawKey, { preserveFlags = true, persist = false } = 
       const prev = enrichCache[key];
       const applied = prev && prev.applied;
       const hidden = prev && prev.hidden;
-      const userFlags = prev && prev.userFlags && typeof prev.userFlags === 'object' ? prev.userFlags : null;
-      if (applied || hidden || userFlags) {
+      if (applied || hidden) {
         keep = {};
         if (applied) {
           keep.applied = applied;
@@ -7217,7 +6998,6 @@ function purgeCachesForPath(rawKey, { preserveFlags = true, persist = false } = 
           if (typeof prev.appliedTo !== 'undefined') keep.appliedTo = prev.appliedTo;
         }
         if (hidden) keep.hidden = hidden;
-        if (userFlags) keep.userFlags = Object.assign({}, userFlags);
       }
     }
 
@@ -7652,7 +7432,6 @@ function extractYear(meta, fromPath) {
 app.post('/api/rename/apply', requireAuth, async (req, res) => {
   const { plans, dryRun, outputFolder } = req.body || {};
   if (!plans || !Array.isArray(plans)) return res.status(400).json({ error: 'plans required' });
-  const username = req.session && req.session.username ? req.session.username : null;
 
   // Diagnostic: dump the incoming plans payload
   try {
@@ -7770,12 +7549,15 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
           // Update Cache/DB
           try {
             const fromKey = canonicalize(fromPath);
-            const entry = enrichCache[fromKey] || {};
+            enrichCache[fromKey] = enrichCache[fromKey] || {};
+            enrichCache[fromKey].applied = true;
+            enrichCache[fromKey].hidden = true;
+            enrichCache[fromKey].appliedAt = Date.now();
+            enrichCache[fromKey].appliedTo = toPath;
+            
             const finalBasename = path.basename(toPath);
-            entry.renderedName = finalBasename;
-            entry.metadataFilename = finalBasename.replace(path.extname(finalBasename), '');
-            setUserFlags(entry, username, { applied: true, hidden: true, appliedAt: Date.now(), appliedTo: toPath });
-            updateEnrichCache(fromKey, entry);
+            enrichCache[fromKey].renderedName = finalBasename;
+            enrichCache[fromKey].metadataFilename = finalBasename.replace(path.extname(finalBasename), '');
 
             // Update renderedIndex
             const targetKey = canonicalize(toPath);
@@ -7790,8 +7572,8 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
             
             // Persist immediately to avoid data loss
             if (db) {
-              db.setKV('enrichCache', enrichCache);
-              db.setKV('renderedIndex', renderedIndex);
+                db.setKV('enrichCache', enrichCache);
+                db.setKV('renderedIndex', renderedIndex);
             }
           } catch (dbErr) {
             appendLog(`DB_UPDATE_FAIL ${dbErr.message}`);
@@ -7855,12 +7637,10 @@ function performUnapprove({ requestedPaths = null, count = 10, username = null }
     try {
       const entry = enrichCache[key];
       if (!entry) return;
-      const flags = getUserFlags(entry, username);
-      if (!flags || (!flags.applied && !flags.hidden && !flags.appliedTo)) return;
       
       // Determine if we need to restore a moved file or delete a hardlink
       const sourceExists = fs.existsSync(key);
-      const appliedTo = flags.appliedTo;
+      const appliedTo = entry.appliedTo;
       
       if (appliedTo) {
         const list = Array.isArray(appliedTo) ? appliedTo : [appliedTo];
@@ -7898,15 +7678,19 @@ function performUnapprove({ requestedPaths = null, count = 10, username = null }
       }
 
       let updated = false;
-      setUserFlags(entry, username, { applied: false, hidden: false, appliedAt: null, appliedTo: null, hiddenAt: null });
-      if (username === 'admin') {
-        if (entry.applied) entry.applied = false;
-        if (entry.hidden) entry.hidden = false;
-        if (typeof entry.appliedAt !== 'undefined') delete entry.appliedAt;
-        if (typeof entry.appliedTo !== 'undefined') delete entry.appliedTo;
-        if (typeof entry.hiddenAt !== 'undefined') delete entry.hiddenAt;
+      if (entry.applied) {
+        entry.applied = false;
+        delete entry.appliedAt;
+        delete entry.appliedTo;
+        updated = true;
+      } else if (entry.appliedTo) {
+        delete entry.appliedTo;
+        updated = true;
       }
-      updated = true;
+      if (entry.hidden) {
+        entry.hidden = false;
+        updated = true;
+      }
       if (updated) {
         if (!changed.includes(key)) changed.push(key);
         // Track item to restore to scans
@@ -7919,9 +7703,9 @@ function performUnapprove({ requestedPaths = null, count = 10, username = null }
     for (const p of requestedPaths) markUnapproved(p);
   } else {
     const applied = Object.keys(enrichCache)
-      .map(k => ({ k, v: enrichCache[k], flags: getUserFlags(enrichCache[k], username) }))
-      .filter(x => x.flags && x.flags.applied)
-      .sort((a, b) => (b.flags.appliedAt || 0) - (a.flags.appliedAt || 0));
+      .map(k => ({ k, v: enrichCache[k] }))
+      .filter(x => x.v && x.v.applied)
+      .sort((a, b) => (b.v.appliedAt || 0) - (a.v.appliedAt || 0));
     const limit = (count && count > 0) ? count : applied.length;
     const toUn = applied.slice(0, limit);
     for (const item of toUn) markUnapproved(item.k);
@@ -7973,7 +7757,6 @@ function performUnapprove({ requestedPaths = null, count = 10, username = null }
       for (const sid of scanIds) {
         const s = scans[sid];
         if (!s || !Array.isArray(s.items)) continue;
-        if (!scanOwnedByUser(s, username)) continue;
         let modified = false;
         for (const key of restoredItems) {
           // Check if already present
@@ -8019,15 +7802,13 @@ app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {
 
 app.get('/api/rename/hidden', requireAuth, requireAdmin, (req, res) => {
   try {
-    const username = req.session && req.session.username ? req.session.username : null;
     const items = []
     const entries = enrichCache || {}
     for (const key of Object.keys(entries)) {
       const entry = entries[key]
       if (!entry) continue
-      const flags = getUserFlags(entry, username)
-      const hidden = flags && flags.hidden === true
-      const applied = flags && flags.applied === true
+      const hidden = entry.hidden === true
+      const applied = entry.applied === true
       if (!hidden && !applied) continue
       const provider = entry.provider || {}
       const parsed = entry.parsed || {}
@@ -8035,8 +7816,8 @@ app.get('/api/rename/hidden', requireAuth, requireAdmin, (req, res) => {
         path: key,
         hidden,
         applied,
-        appliedAt: (flags && flags.appliedAt) || null,
-        appliedTo: (flags && flags.appliedTo) || null,
+        appliedAt: entry.appliedAt || null,
+        appliedTo: entry.appliedTo || null,
         providerTitle: provider.renderedName || provider.title || null,
         providerYear: provider.year || null,
         providerEpisodeTitle: provider.episodeTitle || null,
@@ -8060,7 +7841,6 @@ app.get('/api/rename/hidden', requireAuth, requireAdmin, (req, res) => {
 // List duplicate items grouped by preview name (case-insensitive) OR ED2K hash OR series+season+episode
 app.get('/api/rename/duplicates', requireAuth, requireAdmin, (req, res) => {
   try {
-    const username = req.session && req.session.username ? req.session.username : null;
     const groupsByPreview = new Map();
     const groupsByHash = new Map();
     const groupsByMetadata = new Map();
@@ -8121,15 +7901,14 @@ app.get('/api/rename/duplicates', requireAuth, requireAdmin, (req, res) => {
       const hash = resolveHash(key, entry);
       const parsed = entry.parsed || {};
       const provider = entry.provider || {};
-      const flags = getUserFlags(entry, username);
       const meta = {
         path: key,
         basename: path.basename(key),
         previewName: previewNameRaw || null,
-        applied: flags && flags.applied === true,
-        hidden: flags && flags.hidden === true,
-        appliedTo: flags && flags.appliedTo ? flags.appliedTo : null,
-        appliedAt: flags && flags.appliedAt ? flags.appliedAt : null,
+        applied: entry.applied === true,
+        hidden: entry.hidden === true,
+        appliedTo: entry.appliedTo || null,
+        appliedAt: entry.appliedAt || null,
         providerTitle: provider.renderedName || provider.title || null,
         parsedTitle: parsed.parsedName || parsed.title || null
       };

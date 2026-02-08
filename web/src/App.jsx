@@ -566,7 +566,6 @@ export default function App() {
   function updateScanDataAndPreserveView(meta, coll, options = {}) {
     try {
       const clean = (coll || []).filter(it => it && it.canonicalPath)
-      const deferVisibleUpdate = options.fromBackgroundPoll && (showScrollTop || selectMode)
       setScanMeta(meta)
       setTotal(meta.totalCount || clean.length)
       // If coll looks like a partial first-page (fewer items than reported total)
@@ -585,16 +584,7 @@ export default function App() {
       }
       // If user is actively searching, prefer client-side filtering when safe so
       // we don't cause a full server-side update that could reset the view.
-      if (deferVisibleUpdate) {
-        if (!items || items.length === 0) {
-          if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
-            setItems((baseline || clean).slice())
-          } else {
-            const firstPage = clean.slice(0, Math.max(batchSize, 50))
-            setItems(firstPage)
-          }
-        }
-      } else if (searchQuery && searchQuery.length) {
+      if (searchQuery && searchQuery.length) {
         try {
           if ((clean.length || 0) <= MAX_IN_MEMORY_SEARCH) {
             const q = searchQuery
@@ -827,10 +817,6 @@ export default function App() {
             hadEvents = true
             for (const ev of r.data.events) {
               try {
-                try {
-                  const activeUser = auth && auth.username ? String(auth.username) : null
-                  if (ev && ev.user && (!activeUser || ev.user !== activeUser)) continue
-                } catch (e) {}
                 // update last seen ts and persist
                 if (ev && ev.ts && ev.ts > (lastHideEventTsRef.current || 0)) {
                   lastHideEventTsRef.current = ev.ts
@@ -900,7 +886,7 @@ export default function App() {
     }
     poll()
     return () => { mounted = false; if (timer) clearTimeout(timer) }
-  }, [scanId, lastScanId, auth])
+  }, [scanId, lastScanId])
 
   // check auth status on load (prevents deep-link bypass)
   useEffect(() => {
@@ -3407,6 +3393,7 @@ function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
 function CustomMetadataInputs({ path, isOpen, onToggle, onSaved, pushToast }) {
   const [values, setValues] = useState({ title: '', episodeTitle: '', season: '', episode: '', year: '', isMovie: false })
   const [loading, setLoading] = useState(false)
+  const [renderedPreview, setRenderedPreview] = useState(null)
 
   useEffect(() => {
     let active = true
@@ -3444,7 +3431,7 @@ function CustomMetadataInputs({ path, isOpen, onToggle, onSaved, pushToast }) {
     }
     setLoading(true)
     try {
-      const res = await axios.post(API('/enrich/custom'), {
+      const response = await axios.post(API('/enrich/custom'), {
         path,
         title: String(values.title || '').trim(),
         episodeTitle: values.isMovie ? '' : String(values.episodeTitle || '').trim(),
@@ -3453,9 +3440,13 @@ function CustomMetadataInputs({ path, isOpen, onToggle, onSaved, pushToast }) {
         year: String(values.year || '').trim() || null,
         isMovie: !!values.isMovie
       })
+      const enrichment = response?.data?.enrichment
+      const rendered = enrichment?.provider?.renderedName
+      if (rendered) {
+        setRenderedPreview(rendered)
+      }
       pushToast && pushToast('Custom Metadata', 'Saved custom metadata')
-      const norm = normalizeEnrichResponse((res && res.data && res.data.enrichment) ? res.data.enrichment : (res && res.data ? res.data : null))
-      onSaved && onSaved(norm)
+      onSaved && onSaved(enrichment)
       onToggle && onToggle(false)
     } catch (e) {
       pushToast && pushToast('Custom Metadata', 'Failed to save custom metadata')
@@ -3485,6 +3476,11 @@ function CustomMetadataInputs({ path, isOpen, onToggle, onSaved, pushToast }) {
       >
         {isOpen ? 'Hide Custom Metadata' : 'Set Custom Metadata'}
       </button>
+      {renderedPreview && !isOpen ? (
+        <div style={{ marginTop: 4, fontSize: 12, color: 'var(--accent)', fontStyle: 'italic' }}>
+          New name: {renderedPreview}
+        </div>
+      ) : null}
       {isOpen ? (
         <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--muted)' }}>
@@ -3655,15 +3651,6 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
   // Construct rendered name with proper format: Title (Year) - S01E08 - Episode Title
   // Year must come BEFORE episode label for TV shows
   const providerRendered = provider?.renderedName || (providerTitle ? `${providerTitle}${providerYear}${epLabel ? ' - ' + epLabel : ''}${providerEpisodeTitle ? ' - ' + providerEpisodeTitle : ''}` : null)
-  
-  // Debug logging for custom metadata
-  if (provider?.source === 'custom') {
-    console.log('[Row] Custom metadata detected for:', it?.canonicalPath)
-    console.log('[Row] provider.renderedName:', provider?.renderedName)
-    console.log('[Row] providerRendered:', providerRendered)
-    console.log('[Row] provider:', provider)
-  }
-  
   const providerSourceLabel = provider?.source || (provider?.provider ? (PROVIDER_LABELS[String(provider.provider).toLowerCase()] || provider.provider) : 'provider')
   const manualIdTitle = providerTitle || parsedTitle || (it?.canonicalPath ? it.canonicalPath.split('/').pop() : '')
   const isManualOpen = !!(it && manualIdOpen[it.canonicalPath])
@@ -3802,12 +3789,11 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               path={it?.canonicalPath}
               isOpen={isCustomOpen}
               onToggle={toggleCustomOpen}
-              onSaved={async (updated) => {
+              onSaved={async (enrichment) => {
                 try {
-                  if (updated) {
-                    console.log('[CustomMetadata] Updating enrichCache with:', updated)
-                    console.log('[CustomMetadata] Provider renderedName:', updated?.provider?.renderedName)
-                    setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: updated }))
+                  if (enrichment) {
+                    const norm = normalizeEnrichResponse(enrichment)
+                    if (norm) setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
                   } else {
                     const r = await axios.get(API('/enrich'), { params: { path: it?.canonicalPath } }).catch(() => null)
                     const norm = normalizeEnrichResponse((r && r.data && r.data.enrichment) ? r.data.enrichment : (r && r.data ? r.data : null))
