@@ -3413,38 +3413,52 @@ function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
   )
 }
 
-function CustomMetadataInputs({ path, isOpen, onToggle, onSaved, pushToast }) {
+function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pushToast }) {
   const [values, setValues] = useState({ title: '', episodeTitle: '', season: '', episode: '', year: '', isMovie: false })
   const [loading, setLoading] = useState(false)
   const [renderedPreview, setRenderedPreview] = useState(null)
 
   useEffect(() => {
-    let active = true
-    if (!isOpen || !path) return undefined
-    setLoading(true)
-    ;(async () => {
-      try {
-        const r = await axios.get(API('/enrich'), { params: { path } }).catch(() => null)
-        const norm = normalizeEnrichResponse((r && r.data && r.data.enrichment) ? r.data.enrichment : (r && r.data ? r.data : null))
-        const extra = (norm && norm.extraGuess) ? norm.extraGuess : null
-        if (!active) return
-        const isMovie = (extra && typeof extra.isMovie === 'boolean') ? extra.isMovie : (norm && norm.isMovie === true)
-        setValues({
-          title: (extra && extra.title) ? String(extra.title) : (norm && norm.title ? String(norm.title) : ''),
-          episodeTitle: (extra && extra.episodeTitle) ? String(extra.episodeTitle) : (norm && norm.episodeTitle ? String(norm.episodeTitle) : ''),
-          season: (extra && typeof extra.season !== 'undefined' && extra.season !== null) ? String(extra.season) : (norm && typeof norm.season !== 'undefined' && norm.season !== null ? String(norm.season) : ''),
-          episode: (extra && typeof extra.episode !== 'undefined' && extra.episode !== null) ? String(extra.episode) : (norm && typeof norm.episode !== 'undefined' && norm.episode !== null ? String(norm.episode) : ''),
-          year: (extra && extra.year) ? String(extra.year) : (norm && norm.year ? String(norm.year) : ''),
-          isMovie
-        })
-      } catch (e) {
-        if (active) setValues({ title: '', episodeTitle: '', season: '', episode: '', year: '', isMovie: false })
-      } finally {
-        if (active) setLoading(false)
-      }
-    })()
-    return () => { active = false }
-  }, [isOpen, path])
+    if (!isOpen || !enrichment) return
+    
+    // Read from enrichment cache - prefer extraGuess, fallback to provider/parsed
+    const extra = enrichment?.extraGuess || null
+    const provider = enrichment?.provider || null
+    const parsed = enrichment?.parsed || null
+    
+    const isMovie = (extra && typeof extra.isMovie === 'boolean') ? extra.isMovie : 
+                    (enrichment && typeof enrichment.isMovie === 'boolean') ? enrichment.isMovie :
+                    (provider && provider.isMovie === true) : false
+    
+    setValues({
+      title: (extra && extra.title) ? String(extra.title) : 
+             (provider && provider.title) ? String(provider.title) :
+             (parsed && parsed.title) ? String(parsed.title) :
+             (enrichment && enrichment.title) ? String(enrichment.title) : '',
+      episodeTitle: (extra && extra.episodeTitle) ? String(extra.episodeTitle) : 
+                    (provider && provider.episodeTitle) ? String(provider.episodeTitle) :
+                    (enrichment && enrichment.episodeTitle) ? String(enrichment.episodeTitle) : '',
+      season: (extra && typeof extra.season !== 'undefined' && extra.season !== null) ? String(extra.season) : 
+              (provider && typeof provider.season !== 'undefined' && provider.season !== null) ? String(provider.season) :
+              (parsed && typeof parsed.season !== 'undefined' && parsed.season !== null) ? String(parsed.season) :
+              (enrichment && typeof enrichment.season !== 'undefined' && enrichment.season !== null) ? String(enrichment.season) : '',
+      episode: (extra && typeof extra.episode !== 'undefined' && extra.episode !== null) ? String(extra.episode) : 
+               (provider && typeof provider.episode !== 'undefined' && provider.episode !== null) ? String(provider.episode) :
+               (parsed && typeof parsed.episode !== 'undefined' && parsed.episode !== null) ? String(parsed.episode) :
+               (enrichment && typeof enrichment.episode !== 'undefined' && enrichment.episode !== null) ? String(enrichment.episode) : '',
+      year: (extra && extra.year) ? String(extra.year) : 
+            (provider && provider.year) ? String(provider.year) :
+            (enrichment && enrichment.year) ? String(enrichment.year) : '',
+      isMovie
+    })
+    
+    // Show rendered name preview if available
+    if (provider && provider.renderedName && provider.source === 'custom') {
+      setRenderedPreview(provider.renderedName)
+    } else {
+      setRenderedPreview(null)
+    }
+  }, [isOpen, enrichment])
 
   const handleSave = async () => {
     if (!path) return
@@ -3810,6 +3824,7 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
             </div>
             <CustomMetadataInputs
               path={it?.canonicalPath}
+              enrichment={enrichment}
               isOpen={isCustomOpen}
               onToggle={toggleCustomOpen}
               onSaved={async (enrichment) => {
