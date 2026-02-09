@@ -5374,7 +5374,8 @@ app.post('/api/enrich/custom', requireAuth, (req, res) => {
       cachedAt: Date.now()
     }))
 
-    return res.json({ ok: true, enrichment: cleanEnrichmentForClient(updated) })
+    // For custom metadata, keep renderedName in response so UI can display it immediately
+    return res.json({ ok: true, enrichment: updated })
   } catch (e) {
     return res.status(500).json({ error: e.message })
   }
