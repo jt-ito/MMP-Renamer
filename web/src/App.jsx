@@ -1782,12 +1782,29 @@ export default function App() {
     }
   }
 
+  const fetchOutputDestinationsFromServer = React.useCallback(async () => {
+    try {
+      const r = await axios.get(API('/settings')).catch(() => null)
+      const user = (r && r.data && r.data.userSettings) ? r.data.userSettings : null
+      if (!user) return null
+      const outputPath = user.scan_output_path || ''
+      const outputFolders = Array.isArray(user.output_folders) ? user.output_folders : []
+      try { if (outputPath) localStorage.setItem('scan_output_path', outputPath) } catch (e) {}
+      try { localStorage.setItem('output_folders', JSON.stringify(outputFolders)) } catch (e) {}
+      setDefaultOutputPath(outputPath)
+      setAlternativeOutputFolders(outputFolders)
+      return { outputPath, outputFolders }
+    } catch (e) {
+      return null
+    }
+  }, [])
+
   // Show folder selector modal and wait for user selection
   const selectOutputFolder = React.useCallback(async (paths = []) => {
     setFolderSelectorApplyAsFilename(false)
     const refreshed = refreshOutputDestinations()
     const refreshedFolders = refreshed && Array.isArray(refreshed.outputFolders) ? refreshed.outputFolders : null
-    const activeAlternatives = Array.isArray(refreshedFolders) && refreshedFolders.length
+    let activeAlternatives = Array.isArray(refreshedFolders) && refreshedFolders.length
       ? refreshedFolders
       : (Array.isArray(alternativeOutputFolders) ? alternativeOutputFolders : [])
 
@@ -1796,7 +1813,13 @@ export default function App() {
     console.log('[DEBUG] selectOutputFolder - refreshedFolders:', refreshedFolders)
 
     if (!activeAlternatives.length) {
-      return { cancelled: false, path: null, applyAsFilename: false }
+      const server = await fetchOutputDestinationsFromServer()
+      const serverFolders = server && Array.isArray(server.outputFolders) ? server.outputFolders : []
+      if (serverFolders.length) {
+        activeAlternatives = serverFolders
+      } else {
+        return { cancelled: false, path: null, applyAsFilename: false }
+      }
     }
 
     // Ensure the modal has the latest folder data by updating state immediately
@@ -1818,7 +1841,7 @@ export default function App() {
       })
       setFolderSelectorOpen(true)
     })
-  }, [alternativeOutputFolders, refreshOutputDestinations])
+  }, [alternativeOutputFolders, fetchOutputDestinationsFromServer, refreshOutputDestinations])
 
   async function applyRename(plans, dryRun = false, outputFolder = null) {
     // send plans to server; server will consult its configured scan_output_path to decide hardlink behavior
