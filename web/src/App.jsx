@@ -3428,7 +3428,7 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
     
     const isMovie = (extra && typeof extra.isMovie === 'boolean') ? extra.isMovie : 
                     (enrichment && typeof enrichment.isMovie === 'boolean') ? enrichment.isMovie :
-                    (provider && provider.isMovie === true) : false
+                    (provider && provider.isMovie === true) ? true : false
     
     setValues({
       title: (extra && extra.title) ? String(extra.title) : 
