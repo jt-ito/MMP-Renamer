@@ -4405,6 +4405,57 @@ function isProviderComplete(provider) {
   } catch (e) { return false }
 }
 
+// Render custom metadata with simple title casing and sanitization
+function renderCustomMetadataName(data, session) {
+  try {
+    const userTemplate = (session && session.username && users[session.username] && users[session.username].settings && users[session.username].settings.rename_template) ? users[session.username].settings.rename_template : null;
+    const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
+    
+    // Use the title provided by user, apply title casing if all-caps
+    let cleanTitle = String(data.title || '').trim();
+    try {
+      const letters = cleanTitle.replace(/[^a-zA-Z]/g, '');
+      const isAllCaps = letters.length > 0 && letters === letters.toUpperCase();
+      if (isAllCaps) cleanTitle = titleCase(cleanTitle);
+    } catch (e) { /* ignore casing errors */ }
+    
+    // Format episode label
+    function pad(n){ return String(n).padStart(2,'0') }
+    let epLabel = '';
+    if (data.episode != null) {
+      epLabel = data.season != null ? `S${pad(data.season)}E${pad(data.episode)}` : `E${pad(data.episode)}`;
+    }
+    
+    // Clean episode title
+    let cleanEpisodeTitle = String(data.episodeTitle || '').trim();
+    try {
+      const letters = cleanEpisodeTitle.replace(/[^a-zA-Z]/g, '');
+      const isAllCaps = letters.length > 0 && letters === letters.toUpperCase();
+      if (isAllCaps) cleanEpisodeTitle = titleCase(cleanEpisodeTitle);
+    } catch (e) { /* ignore */ }
+    
+    // Format year
+    const yearStr = data.year ? String(data.year).trim() : '';
+    
+    // Build rendered name from template
+    const rendered = String(baseNameTemplate)
+      .replace('{title}', sanitize(cleanTitle))
+      .replace('{year}', sanitize(yearStr))
+      .replace('{epLabel}', sanitize(epLabel))
+      .replace('{episodeTitle}', sanitize(cleanEpisodeTitle))
+      .replace('{season}', data.season != null ? String(data.season) : '')
+      .replace('{episode}', data.episode != null ? String(data.episode) : '')
+      .replace(/\s*-\s*-\s*/g, ' - ')  // collapse double separators
+      .replace(/\s+-\s*$/g, '')  // remove trailing separator
+      .replace(/\s+/g, ' ')  // normalize whitespace
+      .trim();
+    
+    return rendered;
+  } catch (e) {
+    return null;
+  }
+}
+
 // Render provider-based filename using a template and provider data
 function renderProviderName(data, key, session) {
   try {
@@ -5350,7 +5401,7 @@ app.post('/api/enrich/custom', requireAuth, (req, res) => {
     data.episodeTitle = (cleanExtra.episodeTitle != null) ? cleanExtra.episodeTitle : (existing.episodeTitle || '')
     data.isMovie = (typeof cleanExtra.isMovie === 'boolean') ? cleanExtra.isMovie : existing.isMovie
 
-    const providerRendered = renderProviderName(data, key, req.session)
+    const providerRendered = renderCustomMetadataName(data, req.session)
     const providerBlock = {
       title: data.title,
       year: data.year,
