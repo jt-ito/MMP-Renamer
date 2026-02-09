@@ -3417,9 +3417,16 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
   const [values, setValues] = useState({ title: '', episodeTitle: '', season: '', episode: '', year: '', isMovie: false })
   const [loading, setLoading] = useState(false)
   const [renderedPreview, setRenderedPreview] = useState(null)
+  const [initialized, setInitialized] = useState(false)
 
+  // Initialize form only when first opened, not on every enrichment change
   useEffect(() => {
-    if (!isOpen || !enrichment) return
+    if (!isOpen) {
+      setInitialized(false)
+      return
+    }
+    
+    if (initialized) return
     
     // Read from enrichment cache - prefer extraGuess, fallback to provider/parsed
     const extra = enrichment?.extraGuess || null
@@ -3458,7 +3465,9 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
     } else {
       setRenderedPreview(null)
     }
-  }, [isOpen, enrichment])
+    
+    setInitialized(true)
+  }, [isOpen, enrichment, initialized])
 
   const handleSave = async () => {
     if (!path) return
