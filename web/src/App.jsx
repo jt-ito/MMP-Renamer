@@ -249,18 +249,14 @@ export default function App() {
         nextOutputFolders = Array.isArray(detail.outputFolders) ? detail.outputFolders : []
       } else {
         const storedFolders = localStorage.getItem('output_folders')
-        console.log('[DEBUG] refreshOutputDestinations - localStorage output_folders:', storedFolders)
         if (storedFolders) {
           const parsed = JSON.parse(storedFolders)
-          console.log('[DEBUG] refreshOutputDestinations - parsed folders:', parsed)
           nextOutputFolders = Array.isArray(parsed) ? parsed : []
         }
       }
     } catch (e) { 
-      console.error('[DEBUG] refreshOutputDestinations - error:', e)
       nextOutputFolders = [] 
     }
-    console.log('[DEBUG] refreshOutputDestinations - final nextOutputFolders:', nextOutputFolders)
     setAlternativeOutputFolders(nextOutputFolders)
     return { outputPath: nextOutputPath, outputFolders: nextOutputFolders }
   }, [])
@@ -1808,10 +1804,6 @@ export default function App() {
       ? refreshedFolders
       : (Array.isArray(alternativeOutputFolders) ? alternativeOutputFolders : [])
 
-    console.log('[DEBUG] selectOutputFolder - activeAlternatives:', activeAlternatives)
-    console.log('[DEBUG] selectOutputFolder - alternativeOutputFolders state:', alternativeOutputFolders)
-    console.log('[DEBUG] selectOutputFolder - refreshedFolders:', refreshedFolders)
-
     if (!activeAlternatives.length) {
       const server = await fetchOutputDestinationsFromServer()
       const serverFolders = server && Array.isArray(server.outputFolders) ? server.outputFolders : []
@@ -2326,7 +2318,6 @@ export default function App() {
                   <span className="folder-option-icon" aria-hidden="true">&gt;</span>
                 </div>
               </button>
-              {console.log('[DEBUG] Rendering alternativeOutputFolders:', alternativeOutputFolders)}
               {alternativeOutputFolders && alternativeOutputFolders.map((folder, idx) => (
                 <button
                   type="button"
@@ -3832,17 +3823,15 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
               onToggle={toggleCustomOpen}
               onSaved={async (enrichment) => {
                 try {
-                  console.log('[CACHE_UPDATE] Path:', it.canonicalPath, 'Raw enrichment:', enrichment)
                   if (enrichment) {
                     const norm = normalizeEnrichResponse(enrichment)
-                    console.log('[CACHE_UPDATE] Normalized:', norm, 'Has provider:', !!norm?.provider, 'Provider source:', norm?.provider?.source, 'renderedName:', norm?.provider?.renderedName)
                     if (norm) setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
                   } else {
                     const r = await axios.get(API('/enrich'), { params: { path: it?.canonicalPath } }).catch(() => null)
                     const norm = normalizeEnrichResponse((r && r.data && r.data.enrichment) ? r.data.enrichment : (r && r.data ? r.data : null))
                     if (norm) setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
                   }
-                } catch (e) {console.error('[CACHE_UPDATE] Error:', e)}
+                } catch (e) {}
                 setCustomMetaTick(t => t + 1)
               }}
               pushToast={pushToast}
