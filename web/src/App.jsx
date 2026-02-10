@@ -2745,7 +2745,7 @@ export default function App() {
                   )}
 
                   {scanMeta ? (
-            <VirtualizedList items={filteredItems} enrichCache={enrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
+            <VirtualizedList items={filteredItems} enrichCache={enrichCache} setEnrichCache={setEnrichCache} onNearEnd={handleScrollNearEnd} enrichOne={enrichOne}
               previewRename={previewRename} applyRename={applyRename} pushToast={pushToast} loadingEnrich={loadingEnrich}
               selectOutputFolder={selectOutputFolder}
               selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
@@ -3596,7 +3596,7 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
 
 const DEFAULT_ROW_HEIGHT = 90
 
-function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null, setContextMenu = () => {} }) {
+function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null, setContextMenu = () => {} }) {
   const listRef = useRef(null)
   const containerRef = useRef(null)
   const [listHeight, setListHeight] = useState(700)
