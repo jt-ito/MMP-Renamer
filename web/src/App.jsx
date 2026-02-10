@@ -3414,6 +3414,7 @@ function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
 }
 
 function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pushToast }) {
+  console.log('[CustomMetadataInputs] Render:', { path, isOpen })
   const [values, setValues] = useState({ title: '', episodeTitle: '', season: '', episode: '', year: '', isMovie: false })
   const [loading, setLoading] = useState(false)
   const [renderedPreview, setRenderedPreview] = useState(null)
@@ -3470,6 +3471,7 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
   }, [isOpen, enrichment, initialized])
 
   const handleSave = async () => {
+    console.log('[handleSave] START', { path, values })
     if (!path) return
     if (!values.title || !String(values.title).trim()) {
       pushToast && pushToast('Custom Metadata', 'Series/movie title is required')
@@ -3588,7 +3590,7 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
           ) : null}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button type="button" className="btn-ghost" onClick={() => onToggle && onToggle(false)} disabled={loading}>Cancel</button>
-            <button type="button" className="btn-cta" onClick={handleSave} disabled={loading}>Save Metadata</button>
+            <button type="button" className="btn-cta" onClick={() => { console.log('[BUTTON CLICK] Save Metadata clicked'); handleSave(); }} disabled={loading}>Save Metadata</button>
           </div>
         </div>
       ) : null}
