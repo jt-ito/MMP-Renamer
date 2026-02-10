@@ -6586,10 +6586,12 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
         // fall through to template-based rendering below
         nameWithoutExtRaw = null;
       } else {
-        nameWithoutExtRaw = providerName;
+        // Sanitize to remove invalid filename characters (colons, etc)
+        nameWithoutExtRaw = sanitize(providerName);
       }
     } catch (e) {
-      nameWithoutExtRaw = providerName;
+      // Sanitize to remove invalid filename characters (colons, etc)
+      nameWithoutExtRaw = sanitize(providerName);
     }
   }
   
