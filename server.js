@@ -6239,6 +6239,40 @@ app.get('/api/enrich/hide-events', requireAuth, (req, res) => {
   }
 })
 
+// Helper function to render provider name for display
+// Creates format: "Title (Year) - S01E08 - Episode Title"
+function renderProviderName(data, fromPath, session) {
+  try {
+    if (!data || !data.title) return null;
+    
+    function pad(n) { return String(n).padStart(2, '0'); }
+    
+    const title = String(data.title).trim();
+    const year = data.year ? ` (${data.year})` : '';
+    
+    let epLabel = '';
+    if (data.episode != null) {
+      if (data.season != null) {
+        epLabel = `S${pad(data.season)}E${pad(data.episode)}`;
+      } else {
+        epLabel = `E${pad(data.episode)}`;
+      }
+    }
+    
+    const episodeTitle = data.episodeTitle ? String(data.episodeTitle).trim() : '';
+    
+    // Construct: Title (Year) - S01E08 - Episode Title
+    let rendered = title + year;
+    if (epLabel) rendered += ' - ' + epLabel;
+    if (episodeTitle) rendered += ' - ' + episodeTitle;
+    
+    return rendered;
+  } catch (e) {
+    console.error('[renderProviderName] Error:', e);
+    return null;
+  }
+}
+
 // Progress endpoint for long-running scan refreshes
 app.get('/api/scan/:scanId/progress', requireAuth, (req, res) => {
   try {
