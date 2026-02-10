@@ -3839,15 +3839,17 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               onToggle={toggleCustomOpen}
               onSaved={async (enrichment) => {
                 try {
+                  console.log('[CACHE_UPDATE] Path:', it.canonicalPath, 'Raw enrichment:', enrichment)
                   if (enrichment) {
                     const norm = normalizeEnrichResponse(enrichment)
+                    console.log('[CACHE_UPDATE] Normalized:', norm, 'Has provider:', !!norm?.provider, 'Provider source:', norm?.provider?.source, 'renderedName:', norm?.provider?.renderedName)
                     if (norm) setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
                   } else {
                     const r = await axios.get(API('/enrich'), { params: { path: it?.canonicalPath } }).catch(() => null)
                     const norm = normalizeEnrichResponse((r && r.data && r.data.enrichment) ? r.data.enrichment : (r && r.data ? r.data : null))
                     if (norm) setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
                   }
-                } catch (e) {}
+                } catch (e) {console.error('[CACHE_UPDATE] Error:', e)}
                 setCustomMetaTick(t => t + 1)
               }}
               pushToast={pushToast}
