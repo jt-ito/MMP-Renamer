@@ -3845,7 +3845,13 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
                   if (enrichment) {
                     const norm = normalizeEnrichResponse(enrichment)
                     console.log('[onSaved] Normalized:', { norm, hasProvider: !!norm?.provider, hasRenderedName: !!norm?.provider?.renderedName })
-                    if (norm) setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
+                    if (norm) {
+                      setEnrichCache(prev => {
+                        const updated = { ...prev, [it.canonicalPath]: norm }
+                        console.log('[onSaved] Updated cache for', it.canonicalPath, 'new value:', norm)
+                        return updated
+                      })
+                    }
                   } else {
                     const r = await axios.get(API('/enrich'), { params: { path: it?.canonicalPath } }).catch(() => null)
                     const norm = normalizeEnrichResponse((r && r.data && r.data.enrichment) ? r.data.enrichment : (r && r.data ? r.data : null))
