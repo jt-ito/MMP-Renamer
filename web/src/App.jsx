@@ -3431,39 +3431,32 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
     if (initializedFor.current === path) return
     initializedFor.current = path
     
-    // Read from enrichment cache - prefer extraGuess, fallback to provider/parsed
+    // Read from enrichment cache - ONLY use extraGuess or custom provider, NOT parsed
     const extra = enrichment?.extraGuess || null
     const provider = enrichment?.provider || null
-    const parsed = enrichment?.parsed || null
+    const isCustomProvider = provider && provider.source === 'custom'
     
     const isMovie = (extra && typeof extra.isMovie === 'boolean') ? extra.isMovie : 
-                    (enrichment && typeof enrichment.isMovie === 'boolean') ? enrichment.isMovie :
-                    (provider && provider.isMovie === true) ? true : false
+                    (isCustomProvider && typeof provider.isMovie === 'boolean') ? provider.isMovie :
+                    (enrichment && typeof enrichment.isMovie === 'boolean') ? enrichment.isMovie : false
     
+    // Only pre-fill if there's existing custom metadata (extraGuess or custom provider)
     setValues({
       title: (extra && extra.title) ? String(extra.title) : 
-             (provider && provider.title) ? String(provider.title) :
-             (parsed && parsed.title) ? String(parsed.title) :
-             (enrichment && enrichment.title) ? String(enrichment.title) : '',
+             (isCustomProvider && provider.title) ? String(provider.title) : '',
       episodeTitle: (extra && extra.episodeTitle) ? String(extra.episodeTitle) : 
-                    (provider && provider.episodeTitle) ? String(provider.episodeTitle) :
-                    (enrichment && enrichment.episodeTitle) ? String(enrichment.episodeTitle) : '',
+                    (isCustomProvider && provider.episodeTitle) ? String(provider.episodeTitle) : '',
       season: (extra && typeof extra.season !== 'undefined' && extra.season !== null) ? String(extra.season) : 
-              (provider && typeof provider.season !== 'undefined' && provider.season !== null) ? String(provider.season) :
-              (parsed && typeof parsed.season !== 'undefined' && parsed.season !== null) ? String(parsed.season) :
-              (enrichment && typeof enrichment.season !== 'undefined' && enrichment.season !== null) ? String(enrichment.season) : '',
+              (isCustomProvider && typeof provider.season !== 'undefined' && provider.season !== null) ? String(provider.season) : '',
       episode: (extra && typeof extra.episode !== 'undefined' && extra.episode !== null) ? String(extra.episode) : 
-               (provider && typeof provider.episode !== 'undefined' && provider.episode !== null) ? String(provider.episode) :
-               (parsed && typeof parsed.episode !== 'undefined' && parsed.episode !== null) ? String(parsed.episode) :
-               (enrichment && typeof enrichment.episode !== 'undefined' && enrichment.episode !== null) ? String(enrichment.episode) : '',
+               (isCustomProvider && typeof provider.episode !== 'undefined' && provider.episode !== null) ? String(provider.episode) : '',
       year: (extra && extra.year) ? String(extra.year) : 
-            (provider && provider.year) ? String(provider.year) :
-            (enrichment && enrichment.year) ? String(enrichment.year) : '',
+            (isCustomProvider && provider.year) ? String(provider.year) : '',
       isMovie
     })
     
     // Show rendered name preview if available
-    if (provider && provider.renderedName && provider.source === 'custom') {
+    if (isCustomProvider && provider.renderedName) {
       setRenderedPreview(provider.renderedName)
     } else {
       setRenderedPreview(null)
