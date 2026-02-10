@@ -5361,6 +5361,7 @@ app.post('/api/enrich/custom', requireAuth, (req, res) => {
   try {
     const body = req.body || {}
     const key = canonicalize(body.path || '')
+    console.log('[CUSTOM_META] Request:', { path: body.path, key, title: body.title })
     if (!key) return res.status(400).json({ error: 'path required' })
 
     const toNumber = (value) => {
@@ -5408,6 +5409,7 @@ app.post('/api/enrich/custom', requireAuth, (req, res) => {
     data.isMovie = (typeof cleanExtra.isMovie === 'boolean') ? cleanExtra.isMovie : existing.isMovie
 
     const providerRendered = renderCustomMetadataName(data, req.session)
+    console.log('[CUSTOM_META] Rendered name:', providerRendered)
     const providerBlock = {
       title: data.title,
       year: data.year,
@@ -5431,9 +5433,11 @@ app.post('/api/enrich/custom', requireAuth, (req, res) => {
       cachedAt: Date.now()
     }))
 
+    console.log('[CUSTOM_META] Updated cache, has renderedName:', !!updated?.provider?.renderedName, 'source:', updated?.provider?.source)
     // For custom metadata, keep renderedName in response so UI can display it immediately
     return res.json({ ok: true, enrichment: updated })
   } catch (e) {
+    console.error('[CUSTOM_META] Error:', e)
     return res.status(500).json({ error: e.message })
   }
 })
