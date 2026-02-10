@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
-    <title>MMP Renamer v2.0.DEBUG-V6</title>
+    <title>MMP Renamer v2.0.DEBUG-V7</title>
     
     <!-- Favicons for modern browsers -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -20,7 +20,7 @@
     
     <script>
       // Version indicator for cache validation
-      window.__MMP_VERSION__ = 'DEBUG-2026-02-09-V6';
+      window.__MMP_VERSION__ = 'DEBUG-2026-02-09-V7-CONSOLE-ENABLED';
       console.log('MMP Version:', window.__MMP_VERSION__);
     </script>
     <!-- Web App Manifest -->
@@ -61,7 +61,8 @@
     <script>
       // Force reload marker for cache busting
       console.log('Script loaded at:', new Date().toISOString());
+      window.__CACHE_BUST__ = '20260209-v7';
     </script>
-    <script type="module" src="/src/main.jsx"></script>
+    <script type="module" src="/src/main.jsx?v=20260209-v7"></script>
   </body>
 </html>

@@ -9,9 +9,9 @@ export default defineConfig({
     minify: 'terser',
     terserOptions: {
       compress: {
-        drop_console: true,
-        drop_debugger: true,
-        pure_funcs: ['console.log', 'console.info', 'console.debug']
+        drop_console: false, // DISABLED for debugging - re-enable after fixing cache issue
+        drop_debugger: false,
+        pure_funcs: []
       }
     },
     rollupOptions: {
