@@ -5435,7 +5435,10 @@ app.post('/api/enrich/custom', requireAuth, (req, res) => {
 
     console.log('[CUSTOM_META] Updated cache, has renderedName:', !!updated?.provider?.renderedName, 'source:', updated?.provider?.source)
     // For custom metadata, keep renderedName in response so UI can display it immediately
-    return res.json({ ok: true, enrichment: updated })
+    // Add cache buster to force client to process the update
+    const response = { ok: true, enrichment: updated, _cacheBuster: Date.now() }
+    console.log('[CUSTOM_META] Sending response with renderedName:', response.enrichment?.provider?.renderedName)
+    return res.json(response)
   } catch (e) {
     console.error('[CUSTOM_META] Error:', e)
     return res.status(500).json({ error: e.message })
