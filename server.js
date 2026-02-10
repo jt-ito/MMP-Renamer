@@ -791,6 +791,29 @@ function writeJson(filePath, obj) {
   }
 }
 
+// Persist all caches to disk/database immediately
+// Used during graceful shutdown and critical operations to prevent data loss
+function persistEnrichCacheNow() {
+  try {
+    if (db) {
+      db.setKV('enrichCache', enrichCache);
+      db.setKV('renderedIndex', renderedIndex);
+      db.setKV('parsedCache', parsedCache);
+      appendLog('CACHE_PERSIST_NOW db=true');
+    } else {
+      writeJson(enrichStoreFile, enrichCache);
+      writeJson(renderedIndexFile, renderedIndex);
+      writeJson(parsedCacheFile, parsedCache);
+      appendLog('CACHE_PERSIST_NOW files=true');
+    }
+  } catch (e) {
+    const msg = e && e.message ? e.message : String(e);
+    appendLog(`CACHE_PERSIST_ERROR ${msg}`);
+    console.error('persistEnrichCacheNow failed:', e);
+    throw e;
+  }
+}
+
 function safeCloneJson(value, context) {
   if (value === null || value === undefined) return null;
   if (typeof value !== 'object') return value;
@@ -7717,6 +7740,50 @@ app.post('/api/rename/apply', requireAuth, async (req, res) => {
   } else {
       // Ensure everything is flushed even if per-item saves were used
       try { persistEnrichCacheNow(); } catch (e) {}
+  }
+
+  // Remove applied items from scans to prevent them from reappearing on next load
+  // This is critical to keep scans in sync with enrichCache applied/hidden state
+  try {
+    let removedFromScans = 0;
+    const appliedPaths = new Set(plans.filter(p => {
+      const r = results.find(res => res.itemId === p.itemId);
+      return r && r.status === 'hardlinked';
+    }).map(p => canonicalize(p.fromPath)));
+
+    if (appliedPaths.size > 0) {
+      const scanIds = Object.keys(scans || {});
+      for (const sid of scanIds) {
+        try {
+          const scan = scans[sid];
+          if (!scan || !Array.isArray(scan.items)) continue;
+          const before = scan.items.length;
+          scan.items = scan.items.filter(it => {
+            try {
+              const k = canonicalize(it.canonicalPath);
+              return !appliedPaths.has(k);
+            } catch (e) { return true; }
+          });
+          const removed = before - scan.items.length;
+          if (removed > 0) {
+            scan.totalCount = scan.items.length;
+            removedFromScans += removed;
+          }
+        } catch (e) { /* ignore per-scan errors */ }
+      }
+      
+      if (removedFromScans > 0) {
+        try { 
+          if (db) db.saveScansObject(scans); 
+          else writeJson(scanStoreFile, scans); 
+          appendLog(`APPLY_SCAN_UPDATE removed=${removedFromScans} applied items from scans`);
+        } catch (e) { 
+          appendLog(`APPLY_SCAN_UPDATE_FAIL err=${e && e.message ? e.message : String(e)}`);
+        }
+      }
+    }
+  } catch (e) { 
+    appendLog(`APPLY_SCAN_FILTER_FAIL err=${e && e.message ? e.message : String(e)}`);
   }
 
   res.json({ results });
