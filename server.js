@@ -6421,6 +6421,24 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   const englishSeriesTitle = extractEnglishSeriesTitle(meta);
   const renderBaseTitle = englishSeriesTitle || resolvedSeriesTitle || rawTitle;
   
+  // Helper function to clean up title for rendering - strips episode artifacts but preserves full series title including subtitles
+  function cleanTitleForRender(baseTitle, epLabel, epTitle) {
+    try {
+      let cleaned = String(baseTitle || '').trim();
+      if (!cleaned) return '';
+      
+      // Remove episode markers like "- S01E01 - Episode Title" from end if present
+      // But preserve the full series title including any colons or subtitles
+      cleaned = cleaned.replace(/\s*[-–—:]+\s*S\d{1,2}E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
+      cleaned = cleaned.replace(/\s*[-–—:]+\s*E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
+      cleaned = cleaned.replace(/\s*[-–—:]+\s*Episode\s+\d+.*$/i, '');
+      
+      return cleaned.trim();
+    } catch (e) {
+      return String(baseTitle || '').trim();
+    }
+  }
+  
   // Format episode number for title - use AniDB raw format if available
   let episodeForTitle = '';
   if (meta && meta.episode != null) {
