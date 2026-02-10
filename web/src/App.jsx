@@ -3409,12 +3409,21 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
   const [loading, setLoading] = useState(false)
   const [renderedPreview, setRenderedPreview] = useState(null)
   const initializedFor = useRef(null)
+  const enrichmentSnapshot = useRef(null)
+
+  // Capture enrichment snapshot when form opens, don't react to changes while open
+  useEffect(() => {
+    if (isOpen && path) {
+      enrichmentSnapshot.current = enrichment
+    }
+  }, [isOpen, path, enrichment])
 
   // Initialize form data only on first open for each file
   useEffect(() => {
     if (!isOpen) {
       // Reset initialized state when form closes
       initializedFor.current = null
+      enrichmentSnapshot.current = null
       return
     }
     
@@ -3422,14 +3431,15 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
     if (initializedFor.current === path) return
     initializedFor.current = path
     
-    // Read from enrichment cache - ONLY use extraGuess or custom provider, NOT parsed
-    const extra = enrichment?.extraGuess || null
-    const provider = enrichment?.provider || null
+    // Read from enrichment snapshot - ONLY use extraGuess or custom provider, NOT parsed
+    const snapshot = enrichmentSnapshot.current
+    const extra = snapshot?.extraGuess || null
+    const provider = snapshot?.provider || null
     const isCustomProvider = provider && provider.source === 'custom'
     
     const isMovie = (extra && typeof extra.isMovie === 'boolean') ? extra.isMovie : 
                     (isCustomProvider && typeof provider.isMovie === 'boolean') ? provider.isMovie :
-                    (enrichment && typeof enrichment.isMovie === 'boolean') ? enrichment.isMovie : false
+                    (snapshot && typeof snapshot.isMovie === 'boolean') ? snapshot.isMovie : false
     
     // Only pre-fill if there's existing custom metadata (extraGuess or custom provider)
     setValues({
@@ -3452,7 +3462,7 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
     } else {
       setRenderedPreview(null)
     }
-  }, [isOpen, path, enrichment])
+  }, [isOpen, path])
 
   const handleSave = async () => {
     if (!path) return
