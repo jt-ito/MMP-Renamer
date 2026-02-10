@@ -1102,7 +1102,8 @@ function normalizeEnrichEntry(entry) {
         // 2) Prefer parsed/exact candidate when confident and when provider appears to be a parent fallback
         try {
           const parsedTitle = out.parsed && out.parsed.title ? String(out.parsed.title).trim() : null;
-          if (!alias && parsedTitle && parsedTitle.length > 2 && !looksLikeEpisodeTitleCandidate(parsedTitle)) {
+          // Removed looksLikeEpisodeTitleCandidate check - was causing valid subtitles to be stripped
+          if (!alias && parsedTitle && parsedTitle.length > 2) {
             // if provider raw indicates relations (parent) or provider lacks a clear seriesTitleExact, prefer parsedTitle
             const providerLooksLikeParent = !!(rawPick && (rawPick.relations || (rawPick.series && rawPick.series.relations)));
             if (providerLooksLikeParent || !out.seriesTitleExact) {
@@ -4340,9 +4341,8 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
       // if exact exists but no explicit English field, use it
       guess.seriesTitle = String(guess.seriesTitleExact).trim()
     } else {
-      const resolvedSeries = pickSeriesTitleFromCandidates(candidateValues, guess.episodeTitle || episodeTitle)
-      if (resolvedSeries) guess.seriesTitle = String(resolvedSeries).trim()
-      else guess.seriesTitle = normalizeCapitalization(seriesName).trim()
+      // Use first candidate (usually AniDB/provider result) or fall back to parsed series name
+      guess.seriesTitle = (candidateValues.length > 0 ? candidateValues[0] : normalizeCapitalization(seriesName)).trim()
     }
   }
   if (!guess.seriesTitleExact && guess.seriesTitle) {
@@ -4357,9 +4357,8 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
     guess.title = guess.seriesTitle
   } else if (!guess.title) {
     guess.title = normalizeCapitalization(seriesName).trim()
-  } else if (looksLikeEpisodeTitleCandidate(guess.title, guess.episodeTitle || episodeTitle)) {
-    guess.title = normalizeCapitalization(seriesName).trim()
   }
+  // Removed looksLikeEpisodeTitleCandidate check - was causing valid subtitles to be stripped
   if (!guess.seriesLookupTitle) guess.seriesLookupTitle = seriesLookupTitle || null
 
   // Diagnostic: log the final applied guess before returning
