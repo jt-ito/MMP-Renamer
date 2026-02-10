@@ -6479,10 +6479,9 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     const fallbackFolderTitle = stripEpisodeArtifactsForFolder(title) || stripEpisodeArtifactsForFolder(rawTitle) || 'Untitled';
     sanitizedBaseFolder = sanitize(fallbackFolderTitle) || 'Untitled';
   }
-  // Ensure series folders don't inherit a year token from provider titles; only movies should have folder years.
-  if (!(isMovie === true)) {
-    try { sanitizedBaseFolder = stripTrailingYear(sanitizedBaseFolder) } catch (e) {}
-  }
+  // Strip any trailing year from folder name - for movies it will be added back in standard format
+  try { sanitizedBaseFolder = stripTrailingYear(sanitizedBaseFolder) } catch (e) {}
+  
   // Enforce per-OS filename limits on folder and file base names
   try {
     const osKey = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.client_os) ? users[req.session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
