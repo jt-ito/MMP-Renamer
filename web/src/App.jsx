@@ -3414,20 +3414,22 @@ function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
 }
 
 function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pushToast }) {
-  console.log('[CustomMetadataInputs] Render:', { path, isOpen })
   const [values, setValues] = useState({ title: '', episodeTitle: '', season: '', episode: '', year: '', isMovie: false })
   const [loading, setLoading] = useState(false)
   const [renderedPreview, setRenderedPreview] = useState(null)
-  const [initialized, setInitialized] = useState(false)
+  const initializedFor = useRef(null)
 
-  // Initialize form only when first opened, not on every enrichment change
+  // Initialize form data only on first open for each file
   useEffect(() => {
     if (!isOpen) {
-      setInitialized(false)
+      // Reset initialized state when form closes
+      initializedFor.current = null
       return
     }
     
-    if (initialized) return
+    // Skip if already initialized for this path
+    if (initializedFor.current === path) return
+    initializedFor.current = path
     
     // Read from enrichment cache - prefer extraGuess, fallback to provider/parsed
     const extra = enrichment?.extraGuess || null
@@ -3466,12 +3468,9 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
     } else {
       setRenderedPreview(null)
     }
-    
-    setInitialized(true)
-  }, [isOpen, enrichment, initialized])
+  }, [isOpen, path, enrichment])
 
   const handleSave = async () => {
-    console.log('[handleSave] START', { path, values })
     if (!path) return
     if (!values.title || !String(values.title).trim()) {
       pushToast && pushToast('Custom Metadata', 'Series/movie title is required')
@@ -3479,7 +3478,6 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
     }
     setLoading(true)
     try {
-      console.log('Saving custom metadata:', { path, values })
       const response = await axios.post(API('/enrich/custom'), {
         path,
         title: String(values.title || '').trim(),
@@ -3489,7 +3487,6 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
         year: String(values.year || '').trim() || null,
         isMovie: !!values.isMovie
       })
-      console.log('Custom metadata response:', response?.data)
       const enrichment = response?.data?.enrichment
       const rendered = enrichment?.provider?.renderedName
       if (rendered) {
@@ -3499,7 +3496,6 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
       onSaved && onSaved(enrichment)
       onToggle && onToggle(false)
     } catch (e) {
-      console.error('Failed to save custom metadata:', e)
       pushToast && pushToast('Custom Metadata', 'Failed to save custom metadata')
     } finally {
       setLoading(false)
@@ -3590,7 +3586,7 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
           ) : null}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button type="button" className="btn-ghost" onClick={() => onToggle && onToggle(false)} disabled={loading}>Cancel</button>
-            <button type="button" className="btn-cta" onClick={() => { console.log('[BUTTON CLICK] Save Metadata clicked'); handleSave(); }} disabled={loading}>Save Metadata</button>
+            <button type="button" className="btn-cta" onClick={handleSave} disabled={loading}>Save Metadata</button>
           </div>
         </div>
       ) : null}
@@ -3843,25 +3839,15 @@ function VirtualizedList({ items = [], enrichCache = {}, onNearEnd, enrichOne, p
               onToggle={toggleCustomOpen}
               onSaved={async (enrichment) => {
                 try {
-                  console.log('[onSaved] Called with:', { path: it.canonicalPath, enrichment })
                   if (enrichment) {
                     const norm = normalizeEnrichResponse(enrichment)
-                    console.log('[onSaved] Normalized:', { norm, hasProvider: !!norm?.provider, hasRenderedName: !!norm?.provider?.renderedName })
-                    if (norm) {
-                      setEnrichCache(prev => {
-                        const updated = { ...prev, [it.canonicalPath]: norm }
-                        console.log('[onSaved] Updated cache for', it.canonicalPath, 'new value:', norm)
-                        return updated
-                      })
-                    }
+                    if (norm) setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
                   } else {
                     const r = await axios.get(API('/enrich'), { params: { path: it?.canonicalPath } }).catch(() => null)
                     const norm = normalizeEnrichResponse((r && r.data && r.data.enrichment) ? r.data.enrichment : (r && r.data ? r.data : null))
                     if (norm) setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
                   }
-                } catch (e) {
-                  console.error('[onSaved] Error:', e)
-                }
+                } catch (e) {}
                 setCustomMetaTick(t => t + 1)
               }}
               pushToast={pushToast}
