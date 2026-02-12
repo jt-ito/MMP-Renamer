@@ -3687,9 +3687,10 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
   const providerHasPart = providerTitleRaw && /\bPart\s+\d{1,2}\b/i.test(providerTitleRaw)
   const providerTitle = (parsedHasPart && !providerHasPart) ? parsedTitle : providerTitleRaw
 
-  // Avoid double year when provider title already embeds (YYYY)
-  const providerHasYearInTitle = providerTitle && /\(\d{4}\)$/.test(providerTitle.trim())
-  const providerYear = (provider?.year && !providerHasYearInTitle) ? ` (${provider.year})` : ''
+  // Avoid double year when provider title already embeds a year
+  const providerYearValue = provider?.year
+  const providerHasYearInTitle = !!(providerTitle && providerYearValue && new RegExp(`\\b${providerYearValue}\\b`).test(providerTitle))
+  const providerYear = (providerYearValue && !providerHasYearInTitle) ? ` (${providerYearValue})` : ''
 
   // Construct rendered name with proper format: Title (Year) - S01E08 - Episode Title
   // Year must come BEFORE episode label for TV shows
