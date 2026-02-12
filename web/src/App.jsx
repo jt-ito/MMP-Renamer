@@ -62,10 +62,12 @@ function ProviderStats({ filteredItems, enrichCache, total, metaPhase, metaProgr
         withMetadata++
         // Extract just the provider type without title info
         let source = (norm.provider.source || norm.provider.provider || 'unknown')
-        // Remove anything in parentheses (title info) and trim
-        source = source.replace(/\s*\([^)]*\)/g, '').trim()
-        // Extract base provider name (e.g., "ANILIST" from "ANILIST + TVDB")
-        const baseProvider = source.split(/\s*\+\s*/)[0].toLowerCase()
+        // Take first provider if multiple joined by '+' (e.g., "ANILIST + TVDB" -> "ANILIST + TVDB")
+        const firstProviders = source.split(/\s*\+\s*/)[0]
+        // Remove everything from first '(' onwards to strip series/episode detail (e.g., "ANILIST (Series Name)" -> "ANILIST")
+        const cleanedProvider = firstProviders.split('(')[0].trim()
+        // Extract just the provider name (first word only, handles malformed strings)
+        const baseProvider = cleanedProvider.split(/\s+/)[0].toLowerCase()
         providerCounts[baseProvider] = (providerCounts[baseProvider] || 0) + 1
       } else {
         withoutMetadata++
