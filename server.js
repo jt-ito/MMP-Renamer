@@ -4033,7 +4033,55 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
               if (!anilistRomaji && res && res.raw && res.raw.title && res.raw.title.romaji) anilistRomaji = String(res.raw.title.romaji).trim()
             } catch (e) { /* best-effort */ }
             // Use providerTitleRaw (from res.name) which is already cleaned, rather than raw anilistEnglish
-            const providerPreferred = providerTitleRaw || ((anilistEnglish && anilistEnglish.length) ? anilistEnglish : ((anilistRomaji && anilistRomaji.length) ? anilistRomaji : ''))
+            let providerPreferred = providerTitleRaw || ((anilistEnglish && anilistEnglish.length) ? anilistEnglish : ((anilistRomaji && anilistRomaji.length) ? anilistRomaji : ''))
+
+            // If AniList says this is a movie with sequels (e.g., Kizumonogatari I/II/III),
+            // map filename episode numbers (01/02/03) to the correct movie part title.
+            try {
+              const format = raw && raw.format ? String(raw.format).toUpperCase() : ''
+              const isAniListMovie = format === 'MOVIE'
+              const episodeIndex = (normEpisode != null && Number.isFinite(Number(normEpisode))) ? Number(normEpisode) : null
+              const edges = raw && raw.relations && Array.isArray(raw.relations.edges) ? raw.relations.edges : null
+              if (isAniListMovie && episodeIndex && edges && edges.length) {
+                function romanToInt(s) {
+                  const map = { I:1, II:2, III:3, IV:4, V:5 }
+                  const key = String(s || '').toUpperCase()
+                  return map[key] || null
+                }
+                function extractPartIndex(title) {
+                  if (!title) return null
+                  const t = String(title)
+                  let m = t.match(/\bPart\s+(\d{1,2})\b/i)
+                  if (m && m[1]) return parseInt(m[1], 10)
+                  m = t.match(/\b([IV]{1,3})\b/i)
+                  if (m && m[1]) return romanToInt(m[1])
+                  return null
+                }
+
+                const candidates = []
+                if (providerPreferred) {
+                  candidates.push({ title: providerPreferred, idx: extractPartIndex(providerPreferred), isBase: true })
+                }
+                for (const edge of edges) {
+                  if (!edge || String(edge.relationType || '').toUpperCase() !== 'SEQUEL') continue
+                  const nodeTitle = edge && edge.node && edge.node.title ? (edge.node.title.english || edge.node.title.romaji || edge.node.title.native) : null
+                  if (nodeTitle) candidates.push({ title: String(nodeTitle).trim(), idx: extractPartIndex(nodeTitle), isBase: false })
+                }
+
+                if (candidates.length) {
+                  const allHaveIndex = candidates.every(c => c.idx != null)
+                  let ordered = candidates.slice()
+                  if (allHaveIndex) {
+                    ordered = ordered.sort((a,b) => a.idx - b.idx)
+                  }
+                  const pick = ordered[episodeIndex - 1]
+                  if (pick && pick.title) {
+                    providerPreferred = pick.title
+                    try { appendLog(`META_ANILIST_MOVIE_PART_PICK episode=${episodeIndex} title=${String(providerPreferred).slice(0,120)}`) } catch (e) {}
+                  }
+                }
+              }
+            } catch (e) { /* best-effort only */ }
             
             // Check if AniList returned parent series information (for arcs/sequels that should be under parent folder)
             let useParentSeries = false
