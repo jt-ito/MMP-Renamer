@@ -3303,7 +3303,7 @@ function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
   )
 }
 
-function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
+function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pushToast }) {
   const [values, setValues] = useState({ anilist: '', tmdb: '', tvdb: '', anidbEpisode: '' })
   const [loading, setLoading] = useState(false)
 
@@ -3320,7 +3320,16 @@ function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
         const r = await axios.get(API('/manual-ids'))
         const map = (r && r.data && r.data.manualIds) ? r.data.manualIds : {}
         const key = normalizeKey(title)
-        const entry = (key && map && map[key]) ? map[key] : null
+        let entry = (key && map && map[key]) ? map[key] : null
+        if (!entry && Array.isArray(aliasTitles)) {
+          for (const alias of aliasTitles) {
+            const aliasKey = normalizeKey(alias)
+            if (aliasKey && map && map[aliasKey]) {
+              entry = map[aliasKey]
+              break
+            }
+          }
+        }
         if (!active) return
         setValues({
           anilist: entry && entry.anilist ? String(entry.anilist) : '',
@@ -3335,7 +3344,7 @@ function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
       }
     })()
     return () => { active = false }
-  }, [isOpen, title])
+  }, [isOpen, title, JSON.stringify(aliasTitles || [])])
 
   const handleSave = async () => {
     if (!title) return
@@ -3343,6 +3352,7 @@ function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
     try {
       await axios.post(API('/manual-ids'), {
         title,
+        aliasTitles,
         anilist: values.anilist || null,
         tmdb: values.tmdb || null,
         tvdb: values.tvdb || null,
@@ -3707,7 +3717,11 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
   // Year must come BEFORE episode label for TV shows
   const providerRendered = provider?.renderedName || (providerTitle ? `${providerTitle}${providerYear}${epLabel ? ' - ' + epLabel : ''}${providerEpisodeTitle ? ' - ' + providerEpisodeTitle : ''}` : null)
   const providerSourceLabel = provider?.source || (provider?.provider ? (PROVIDER_LABELS[String(provider.provider).toLowerCase()] || provider.provider) : 'provider')
-  const manualIdTitle = providerTitle || parsedTitle || (it?.canonicalPath ? it.canonicalPath.split('/').pop() : '')
+  const manualIdTitle = parsedTitle || providerTitle || (it?.canonicalPath ? it.canonicalPath.split('/').pop() : '')
+  const manualIdAliasTitles = [providerTitle, parsedTitle, parsed?.parsedName]
+    .map(v => (v ? String(v).trim() : ''))
+    .filter(Boolean)
+    .filter((v, idx, arr) => arr.indexOf(v) === idx)
   const isManualOpen = !!(it && manualIdOpen[it.canonicalPath])
   const toggleManualOpen = (next) => {
     if (!it || !it.canonicalPath) return
@@ -3975,6 +3989,7 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
         <div style={{ paddingLeft: selectMode ? 36 : 0 }}>
           <ManualIdInputs
             title={manualIdTitle}
+            aliasTitles={manualIdAliasTitles}
             isOpen={isManualOpen}
             onToggle={toggleManualOpen}
             onSaved={() => setManualIdsTick(t => t + 1)}

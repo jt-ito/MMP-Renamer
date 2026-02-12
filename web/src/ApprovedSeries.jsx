@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 
 const API = (p) => `/api${p}`
@@ -7,8 +7,14 @@ export default function ApprovedSeries({ pushToast }) {
   const [loading, setLoading] = useState(true)
   const [outputs, setOutputs] = useState([])
   const [activeOutputKey, setActiveOutputKey] = useState('')
-  const [fetchingOutput, setFetchingOutput] = useState({})
   const [savingSource, setSavingSource] = useState({})
+  const [autoFetching, setAutoFetching] = useState({})
+  const observedRef = useRef(new Set())
+  const queuedRef = useRef(new Set())
+  const inFlightRef = useRef(new Set())
+  const queueTimerRef = useRef(null)
+
+  const AUTO_FETCH_INTERVAL_MS = 1200
 
   const load = async () => {
     setLoading(true)
@@ -47,28 +53,96 @@ export default function ApprovedSeries({ pushToast }) {
     }
   }
 
-  const fetchImagesForOutput = async (outputKey) => {
-    const selected = outputs.find((o) => o.key === outputKey)
-    const source = selected && selected.source ? selected.source : 'anilist'
-    setFetchingOutput((prev) => ({ ...prev, [outputKey]: true }))
-    try {
-      const r = await axios.post(API('/approved-series/fetch-images'), { outputKey, source })
-      const data = r && r.data ? r.data : {}
-      const fetched = Number(data.fetched || 0)
-      const skipped = Number(data.skipped || 0)
-      pushToast && pushToast('Approved Series', `Image refresh done (${fetched} fetched, ${skipped} skipped)`)
-      await load()
-    } catch (e) {
-      pushToast && pushToast('Approved Series', 'Failed to fetch images')
-    } finally {
-      setFetchingOutput((prev) => ({ ...prev, [outputKey]: false }))
-    }
+  const enqueueAutoFetch = (outputKey, source, seriesName, cardKey) => {
+    if (!outputKey || !seriesName || !cardKey) return
+    if (queuedRef.current.has(cardKey) || inFlightRef.current.has(cardKey)) return
+    queuedRef.current.add(cardKey)
+    setAutoFetching((prev) => ({ ...prev, [cardKey]: true }))
+    if (queueTimerRef.current) return
+    queueTimerRef.current = setInterval(async () => {
+      const nextKey = queuedRef.current.values().next().value
+      if (!nextKey) {
+        clearInterval(queueTimerRef.current)
+        queueTimerRef.current = null
+        return
+      }
+      const [okey, sname] = nextKey.split('::')
+      queuedRef.current.delete(nextKey)
+      inFlightRef.current.add(nextKey)
+      try {
+        await axios.post(API('/approved-series/fetch-image'), {
+          outputKey: okey,
+          source,
+          seriesName: sname
+        })
+        setOutputs((prev) => prev.map((out) => {
+          if (out.key !== okey || !Array.isArray(out.series)) return out
+          return {
+            ...out,
+            series: out.series.map((item) => {
+              if ((item && item.name ? item.name : '') !== sname) return item
+              return { ...item, _autoFetched: true }
+            })
+          }
+        }))
+      } catch (e) {
+        // Keep silent for background fetch to avoid toast spam
+      } finally {
+        inFlightRef.current.delete(nextKey)
+        setAutoFetching((prev) => {
+          const next = { ...prev }
+          delete next[nextKey]
+          return next
+        })
+      }
+    }, AUTO_FETCH_INTERVAL_MS)
   }
+
+  useEffect(() => {
+    return () => {
+      if (queueTimerRef.current) {
+        clearInterval(queueTimerRef.current)
+        queueTimerRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!activeOutput || !Array.isArray(activeOutput.series)) return
+    const source = activeOutput.source || 'anilist'
+    if (!['anilist', 'tmdb'].includes(source)) return
+    const cards = Array.from(document.querySelectorAll('.approved-series-card[data-series-key]'))
+    if (!cards.length) return
+
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue
+        const el = entry.target
+        const seriesName = el.getAttribute('data-series-name') || ''
+        const outputKey = el.getAttribute('data-output-key') || ''
+        const cardKey = el.getAttribute('data-series-key') || ''
+        if (!seriesName || !outputKey || !cardKey) continue
+        enqueueAutoFetch(outputKey, source, seriesName, cardKey)
+      }
+    }, { root: null, rootMargin: '280px 0px 280px 0px', threshold: 0.2 })
+
+    cards.forEach((card) => {
+      const key = card.getAttribute('data-series-key') || ''
+      if (!key || observedRef.current.has(key)) return
+      observedRef.current.add(key)
+      observer.observe(card)
+    })
+
+    return () => {
+      observer.disconnect()
+      observedRef.current.clear()
+    }
+  }, [activeOutputKey, outputs])
 
   if (loading) {
     return (
-      <div className="settings-page-content">
-        <div className="form-card approved-series-page">
+      <div className="settings-page-content approved-series-layout">
+        <div className="approved-series-page">
           <h2>Approved Series</h2>
           <p className="small-muted">Loading approved series...</p>
         </div>
@@ -77,8 +151,8 @@ export default function ApprovedSeries({ pushToast }) {
   }
 
   return (
-    <div className="settings-page-content">
-      <div className="form-card approved-series-page">
+    <div className="settings-page-content approved-series-layout">
+      <div className="approved-series-page">
         <div className="approved-series-header">
           <div>
             <h2>Approved Series</h2>
@@ -118,30 +192,29 @@ export default function ApprovedSeries({ pushToast }) {
                     <option value="anilist">AniList</option>
                     <option value="tmdb">TMDB</option>
                   </select>
-                  <button
-                    className="btn-cta"
-                    onClick={() => fetchImagesForOutput(activeOutput.key)}
-                    disabled={!!fetchingOutput[activeOutput.key]}
-                  >
-                    {fetchingOutput[activeOutput.key] ? 'Pulling...' : 'Pull & Cache Images'}
-                  </button>
+                  <span className="small-muted">Images auto-fetch and cache while you scroll.</span>
                 </div>
 
                 <div className="approved-series-grid">
                   {activeOutput.series && activeOutput.series.length ? activeOutput.series.map((series) => (
-                    <article className="approved-series-card" key={`${activeOutput.key}:${series.key}`}>
+                    <article
+                      className="approved-series-card"
+                      key={`${activeOutput.key}:${series.key}`}
+                      data-output-key={activeOutput.key}
+                      data-series-name={series.name}
+                      data-series-key={`${activeOutput.key}::${series.name}`}
+                    >
                       <div className="approved-series-cover-wrap">
                         {series.imageUrl ? (
                           <img className="approved-series-cover" src={series.imageUrl} alt={series.name} loading="lazy" />
                         ) : (
-                          <div className="approved-series-cover approved-series-cover-placeholder">No image</div>
+                          <div className="approved-series-cover approved-series-cover-placeholder">{autoFetching[`${activeOutput.key}::${series.name}`] ? 'Fetching…' : 'No image yet'}</div>
                         )}
+                        <div className="approved-series-overlay">
+                          <p className="approved-series-summary">{series.summary || `${series.appliedCount || 0} approved items`}</p>
+                        </div>
                       </div>
-                      <div className="approved-series-body">
-                        <h3 className="approved-series-title">{series.name}</h3>
-                        <p className="approved-series-summary">{series.summary || `${series.appliedCount || 0} approved items`}</p>
-                        <div className="approved-series-meta">{series.appliedCount || 0} approved item{(series.appliedCount || 0) === 1 ? '' : 's'}</div>
-                      </div>
+                      <h3 className="approved-series-title" title={series.name}>{series.name}</h3>
                     </article>
                   )) : (
                     <p className="small-muted">No approved series found for this output.</p>

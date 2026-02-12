@@ -9,6 +9,7 @@ const { v4: uuidv4 } = require('uuid')
 const tvdb = require('./lib/tvdb')
 const chokidar = require('chokidar')
 const { lookupMetadataWithAniDB, getAniDBCredentials } = require('./lib/meta-providers')
+const { getAniDBUDPClient } = require('./lib/anidb-udp')
 const bcrypt = require('bcryptjs')
 const cookieParser = require('cookie-parser')
 const cookieSession = require('cookie-session')
@@ -255,8 +256,33 @@ function getManualId(title, provider) {
   try {
     if (!title) return null;
     const key = normalizeManualIdKey(title);
-    if (!key || !manualIds || !manualIds[key]) return null;
-    const entry = manualIds[key];
+    if (!key || !manualIds) return null;
+    let entry = manualIds[key] || null;
+    if (!entry) {
+      const normalizeLoose = (value) => {
+        try {
+          return String(value || '')
+            .toLowerCase()
+            .replace(/\(\s*\d{4}\s*\)/g, ' ')
+            .replace(/[^a-z0-9\s]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        } catch (e) { return String(value || '').toLowerCase().trim(); }
+      };
+      const looseKey = normalizeLoose(title);
+      if (looseKey) {
+        for (const candidateKey of Object.keys(manualIds || {})) {
+          if (!candidateKey) continue;
+          const looseCandidate = normalizeLoose(candidateKey);
+          if (!looseCandidate) continue;
+          if (looseCandidate === looseKey || looseCandidate.includes(looseKey) || looseKey.includes(looseCandidate)) {
+            entry = manualIds[candidateKey];
+            break;
+          }
+        }
+      }
+    }
+    if (!entry) return null;
     const raw = entry && provider ? entry[provider] : null;
     if (raw === undefined || raw === null || raw === '') return null;
     return raw;
@@ -440,6 +466,8 @@ try { wikiEpisodeCache = JSON.parse(fs.readFileSync(wikiEpisodeCacheFile, 'utf8'
 
 let approvedSeriesImages = {};
 try { approvedSeriesImages = JSON.parse(fs.readFileSync(approvedSeriesImagesFile, 'utf8') || '{}') } catch (e) { approvedSeriesImages = {} }
+const approvedSeriesImageFetchLocks = new Map();
+const APPROVED_SERIES_FETCH_COOLDOWN_MS = 3000;
 
 // Load optional series aliases to control canonical folder names for tricky titles
 const CONFIG_DIR = path.resolve(__dirname, 'config');
@@ -1419,6 +1447,56 @@ async function metaLookup(title, apiKey, opts = {}) {
   const manualAnilistId = getManualId(title, 'anilist')
   const manualTmdbId = getManualId(title, 'tmdb')
   const manualTvdbId = getManualId(title, 'tvdb')
+  const manualAniDbEpisodeId = getManualId(title, 'anidbEpisode')
+  let manualAniDbEpisodeFetched = false
+  let manualAniDbEpisodeData = null
+
+  function buildManualAniDbEpisodePayload(info) {
+    if (!info) return null
+    const title = info.episodeTitle || null
+    if (!title) return null
+    return {
+      name: title,
+      title,
+      localized_name: title,
+      source: 'anidb',
+      raw: info.raw || null
+    }
+  }
+
+  async function fetchManualAniDbEpisode() {
+    if (manualAniDbEpisodeFetched) return manualAniDbEpisodeData
+    manualAniDbEpisodeFetched = true
+    if (!manualAniDbEpisodeId) return null
+    if (!opts || !opts.anidb_username || !opts.anidb_password) {
+      try { appendLog(`MANUAL_ID_ANIDB_EP_SKIP reason=missing-credentials id=${manualAniDbEpisodeId} title=${title}`) } catch (e) {}
+      return null
+    }
+    try {
+      const clientName = opts.anidb_client_name || 'mmprename'
+      const clientVersion = opts.anidb_client_version || 1
+      const anidbClient = getAniDBUDPClient(opts.anidb_username, opts.anidb_password, clientName, clientVersion)
+      const episodeInfo = await anidbClient.lookupEpisode(manualAniDbEpisodeId)
+      if (!episodeInfo) {
+        try { appendLog(`MANUAL_ID_ANIDB_EP_NONE id=${manualAniDbEpisodeId} title=${title}`) } catch (e) {}
+        return null
+      }
+      const episodeTitle = String(episodeInfo.englishName || episodeInfo.romajiName || episodeInfo.kanjiName || '').trim()
+      if (!episodeTitle) {
+        try { appendLog(`MANUAL_ID_ANIDB_EP_EMPTY_TITLE id=${manualAniDbEpisodeId} title=${title}`) } catch (e) {}
+        return null
+      }
+      manualAniDbEpisodeData = {
+        episodeTitle,
+        raw: Object.assign({}, episodeInfo || {}, { eid: manualAniDbEpisodeId })
+      }
+      try { appendLog(`MANUAL_ID_ANIDB_EP_OK id=${manualAniDbEpisodeId} title=${title} episodeTitle=${episodeTitle}`) } catch (e) {}
+      return manualAniDbEpisodeData
+    } catch (err) {
+      try { appendLog(`MANUAL_ID_ANIDB_EP_ERROR id=${manualAniDbEpisodeId} title=${title} err=${err && err.message ? err.message : String(err)}`) } catch (e) {}
+      return null
+    }
+  }
 
   let effectiveProvidersOrder = metaProvidersOrder
   if (manualAnilistId || manualTmdbId || manualTvdbId) {
@@ -2785,7 +2863,13 @@ async function metaLookup(title, apiKey, opts = {}) {
       const uniqueTitleVariants = [...new Set(titleVariants)];
       let tmdbEpCheck = null;
 
-  if (!ep && allowTvdb && tvdbCreds && opts && opts.season != null && opts.episode != null) {
+      if (!ep && manualAniDbEpisodeId) {
+        const manualEpisode = await fetchManualAniDbEpisode()
+        const payload = buildManualAniDbEpisodePayload(manualEpisode)
+        if (payload) ep = payload
+      }
+
+      if (!ep && allowTvdb && tvdbCreds && opts && opts.season != null && opts.episode != null) {
         try {
           const tvdbEpisode = await tvdb.fetchEpisode(tvdbCreds, uniqueTitleVariants, opts.season, opts.episode, {
             log: (line) => {
@@ -3016,6 +3100,12 @@ async function metaLookup(title, apiKey, opts = {}) {
         })()
         if (parentIsMovie) {
           try { appendLog(`META_ANILIST_PARENT_MOVIE_SKIP_EP title=${String(parentAniListName || '').slice(0,120)}`) } catch (e) {}
+        }
+
+  if (!parentIsMovie && !ep && manualAniDbEpisodeId) {
+          const manualEpisode = await fetchManualAniDbEpisode()
+          const payload = buildManualAniDbEpisodePayload(manualEpisode)
+          if (payload) ep = payload
         }
 
   if (!parentIsMovie && !ep && allowTvdb && tvdbCreds && opts && opts.season != null && opts.episode != null) {
@@ -8388,6 +8478,67 @@ app.post('/api/approved-series/fetch-images', requireAuth, async (req, res) => {
   }
 });
 
+app.post('/api/approved-series/fetch-image', requireAuth, async (req, res) => {
+  try {
+    const username = req.session && req.session.username ? req.session.username : null;
+    const outputKey = normalizeOutputKey(req && req.body ? req.body.outputKey : '');
+    const seriesName = req && req.body && req.body.seriesName ? String(req.body.seriesName).trim() : '';
+    const seriesKey = seriesName ? (normalizeForCache(seriesName) || seriesName.toLowerCase()) : '';
+    if (!outputKey) return res.status(400).json({ error: 'outputKey is required' });
+    if (!seriesName || !seriesKey) return res.status(400).json({ error: 'seriesName is required' });
+
+    const sourcePrefs = getApprovedSeriesSourcePreferences(username);
+    const sourceRaw = req && req.body && req.body.source ? String(req.body.source).trim().toLowerCase() : '';
+    const selectedSource = sourceRaw || (sourcePrefs && sourcePrefs[outputKey]) || 'anilist';
+    if (!['anilist', 'tmdb'].includes(selectedSource)) return res.status(400).json({ error: 'invalid source' });
+    setApprovedSeriesSourcePreference(username, outputKey, selectedSource);
+
+    const cacheKey = `${outputKey}::${seriesKey}`;
+    const existing = approvedSeriesImages && approvedSeriesImages[cacheKey] ? approvedSeriesImages[cacheKey] : null;
+    if (existing && existing.imageUrl && existing.provider === selectedSource) {
+      return res.json({ ok: true, cached: true, fetched: false, source: selectedSource });
+    }
+
+    const lockKey = `${username || 'anon'}::${outputKey}::${seriesKey}`;
+    const now = Date.now();
+    const lockInfo = approvedSeriesImageFetchLocks.get(lockKey) || null;
+    if (lockInfo && lockInfo.inFlight) {
+      return res.json({ ok: true, skipped: true, reason: 'in-flight', source: selectedSource });
+    }
+    if (lockInfo && lockInfo.lastFetchedAt && (now - lockInfo.lastFetchedAt) < APPROVED_SERIES_FETCH_COOLDOWN_MS) {
+      return res.json({ ok: true, skipped: true, reason: 'cooldown', source: selectedSource });
+    }
+
+    approvedSeriesImageFetchLocks.set(lockKey, { inFlight: true, lastFetchedAt: lockInfo && lockInfo.lastFetchedAt ? lockInfo.lastFetchedAt : 0 });
+    try {
+      if (selectedSource !== 'anilist') {
+        return res.json({ ok: true, fetched: false, skipped: true, source: selectedSource, note: 'Only AniList fetching is currently implemented' });
+      }
+
+      const lookedUp = await fetchAniListSeriesArtwork(seriesName);
+      approvedSeriesImageFetchLocks.set(lockKey, { inFlight: false, lastFetchedAt: Date.now() });
+      if (!lookedUp || !lookedUp.imageUrl) {
+        return res.json({ ok: true, fetched: false, skipped: true, source: selectedSource, reason: 'no-image' });
+      }
+
+      approvedSeriesImages[cacheKey] = {
+        provider: 'anilist',
+        imageUrl: lookedUp.imageUrl,
+        summary: lookedUp.summary || (existing && existing.summary) || '',
+        mediaId: lookedUp.id || null,
+        fetchedAt: lookedUp.fetchedAt || Date.now()
+      };
+      try { writeJson(approvedSeriesImagesFile, approvedSeriesImages); } catch (e) {}
+      return res.json({ ok: true, fetched: true, source: selectedSource });
+    } catch (fetchErr) {
+      approvedSeriesImageFetchLocks.set(lockKey, { inFlight: false, lastFetchedAt: Date.now() });
+      throw fetchErr;
+    }
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
+
 // Manual provider ID overrides
 app.get('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
   try {
@@ -8401,8 +8552,12 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
   try {
     const title = req && req.body ? req.body.title : null;
     if (!title) return res.status(400).json({ error: 'title is required' });
-    const key = normalizeManualIdKey(title);
-    if (!key) return res.status(400).json({ error: 'invalid title' });
+    const aliasTitles = (req && req.body && Array.isArray(req.body.aliasTitles)) ? req.body.aliasTitles : [];
+    const keys = [title, ...aliasTitles]
+      .map((value) => normalizeManualIdKey(value))
+      .filter(Boolean)
+      .filter((value, index, arr) => arr.indexOf(value) === index);
+    if (!keys.length) return res.status(400).json({ error: 'invalid title' });
 
     const entry = {};
     const anilistId = normalizeManualIdValue(req.body.anilist);
@@ -8416,8 +8571,12 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
     if (anidbEpisodeId !== null) entry.anidbEpisode = anidbEpisodeId;
 
     manualIds = manualIds || {};
-    if (Object.keys(entry).length === 0) delete manualIds[key];
-    else manualIds[key] = entry;
+    if (Object.keys(entry).length === 0) {
+      for (const key of keys) delete manualIds[key];
+    }
+    else {
+      for (const key of keys) manualIds[key] = entry;
+    }
 
     try { writeJson(manualIdsFile, manualIds); } catch (e) {}
     return res.json({ ok: true });
