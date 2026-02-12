@@ -4239,13 +4239,25 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
   }
 
   // Only apply TVDb episode override when AniDB did not provide a match
+  // and the upstream provider is not an AniList movie.
   const providerIsAniDB = providerResult && providerResult.provider === 'anidb';
+  const providerIsAniList = providerResult && providerResult.provider === 'anilist';
+  const providerIsAniListMovie = (() => {
+    try {
+      if (!providerIsAniList) return false;
+      const raw = providerResult && providerResult.raw ? providerResult.raw : {};
+      const format = raw && raw.format ? String(raw.format).toUpperCase() : '';
+      if (format === 'MOVIE') return true;
+      return false;
+    } catch (e) { return false; }
+  })();
+  const skipTvdbOverride = providerIsAniDB || providerIsAniListMovie;
   
   try {
-    appendLog(`TVDB_SKIP_CHECK providerResult=${!!providerResult} provider=${providerResult?.provider || '<none>'} isAniDB=${providerIsAniDB} willSkipTVDB=${providerIsAniDB}`);
+    appendLog(`TVDB_SKIP_CHECK providerResult=${!!providerResult} provider=${providerResult?.provider || '<none>'} isAniDB=${providerIsAniDB} isAniListMovie=${providerIsAniListMovie} willSkipTVDB=${skipTvdbOverride}`);
   } catch (e) {}
 
-  if (tvdbCredentials && normSeason != null && normEpisode != null && !providerIsAniDB) {
+  if (tvdbCredentials && normSeason != null && normEpisode != null && !skipTvdbOverride) {
       try {
         let tvdbHit = null
         if (providerResult && providerResult.tvdb && providerResult.tvdb.episodeTitle) {
@@ -4322,6 +4334,10 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
     } else if (providerIsAniDB) {
       try {
         appendLog(`META_TVDB_OVERRIDE_SKIP path=${canonicalPath} reason=anidb-provider title=${providerResult && providerResult.episodeTitle ? providerResult.episodeTitle : '<none>'}`)
+      } catch (e) {}
+    } else if (providerIsAniListMovie) {
+      try {
+        appendLog(`META_TVDB_OVERRIDE_SKIP path=${canonicalPath} reason=anilist-movie title=${providerResult && providerResult.name ? providerResult.name : '<none>'}`)
       } catch (e) {}
     }
 
