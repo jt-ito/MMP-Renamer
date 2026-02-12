@@ -165,6 +165,7 @@ const renderedIndexFile = path.join(DATA_DIR, 'rendered-index.json');
 const logsFile = path.join(DATA_DIR, 'logs.txt');
 // Manual provider ID overrides for series that can't be auto-matched
 const manualIdsFile = path.join(DATA_DIR, 'manual-ids.json');
+const approvedSeriesImagesFile = path.join(DATA_DIR, 'approved-series-images.json');
 // Wikipedia episode cache file (persistent)
 const wikiEpisodeCacheFile = path.join(DATA_DIR, 'wiki-episode-cache.json');
 const wikiSearchLogFile = path.join(DATA_DIR, 'wiki-search.log');
@@ -429,12 +430,16 @@ try { ensureFile(scanCacheFile, {}); } catch (e) {}
 try { ensureFile(renderedIndexFile, {}); } catch (e) {}
 try { ensureFile(logsFile, ''); } catch (e) {}
 try { ensureFile(manualIdsFile, {}); } catch (e) {}
+try { ensureFile(approvedSeriesImagesFile, {}); } catch (e) {}
 try { ensureFile(wikiEpisodeCacheFile, {}); } catch (e) {}
 try { ensureFile(wikiSearchLogFile, ''); } catch (e) {}
 
 // Wikipedia episode cache (in-memory, persisted to wiki-episode-cache.json)
 let wikiEpisodeCache = {};
 try { wikiEpisodeCache = JSON.parse(fs.readFileSync(wikiEpisodeCacheFile, 'utf8') || '{}') } catch (e) { wikiEpisodeCache = {} }
+
+let approvedSeriesImages = {};
+try { approvedSeriesImages = JSON.parse(fs.readFileSync(approvedSeriesImagesFile, 'utf8') || '{}') } catch (e) { approvedSeriesImages = {} }
 
 // Load optional series aliases to control canonical folder names for tricky titles
 const CONFIG_DIR = path.resolve(__dirname, 'config');
@@ -8092,6 +8097,296 @@ function performUnapprove({ requestedPaths = null, count = 10, username = null }
 
   return { changed, deletedHardlinks, hardlinkErrors, shouldDeleteHardlinks };
 }
+
+function normalizeOutputKey(value) {
+  try {
+    if (!value) return '';
+    return canonicalize(path.resolve(String(value)));
+  } catch (e) {
+    try { return String(value || '').replace(/\\+/g, '/').trim(); } catch (ee) { return String(value || '') }
+  }
+}
+
+function getApprovedSeriesSourcePreferences(username) {
+  try {
+    if (!username || !users || !users[username]) return {};
+    const settings = users[username].settings || {};
+    const raw = settings.approved_series_image_source_by_output;
+    if (!raw || typeof raw !== 'object') return {};
+    return raw;
+  } catch (e) { return {}; }
+}
+
+function setApprovedSeriesSourcePreference(username, outputKey, source) {
+  try {
+    if (!username) return false;
+    users[username] = users[username] || { username, role: 'admin', passwordHash: null, settings: {} };
+    users[username].settings = users[username].settings || {};
+    const map = users[username].settings.approved_series_image_source_by_output && typeof users[username].settings.approved_series_image_source_by_output === 'object'
+      ? users[username].settings.approved_series_image_source_by_output
+      : {};
+    map[outputKey] = source;
+    users[username].settings.approved_series_image_source_by_output = map;
+    writeJson(usersFile, users);
+    return true;
+  } catch (e) { return false; }
+}
+
+function stripHtmlSummary(input) {
+  try {
+    const text = String(input || '')
+      .replace(/<br\s*\/?>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!text) return '';
+    return text.length > 220 ? `${text.slice(0, 217)}...` : text;
+  } catch (e) { return ''; }
+}
+
+async function fetchAniListSeriesArtwork(title) {
+  try {
+    const query = `query ($search: String) { Media(search: $search, type: ANIME) { id title { english romaji native } description(asHtml: false) coverImage { large medium color } bannerImage } }`;
+    const payload = JSON.stringify({ query, variables: { search: String(title || '').trim() } });
+    const res = await httpRequest({ hostname: 'graphql.anilist.co', path: '/', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } }, payload, 8000);
+    if (!res || res.statusCode !== 200) return null;
+    const parsed = safeJsonParse(res.body);
+    const media = parsed && parsed.data && parsed.data.Media ? parsed.data.Media : null;
+    if (!media) return null;
+    const displayName = (media.title && (media.title.english || media.title.romaji || media.title.native)) || String(title || '').trim();
+    const imageUrl = (media.coverImage && (media.coverImage.large || media.coverImage.medium)) || media.bannerImage || null;
+    const summary = stripHtmlSummary(media.description || '');
+    return {
+      id: media.id || null,
+      name: displayName,
+      imageUrl,
+      summary,
+      fetchedAt: Date.now(),
+      provider: 'anilist'
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+function deriveAppliedSeriesInfo(appliedPath) {
+  try {
+    const resolved = path.resolve(String(appliedPath || ''));
+    const seasonFolder = path.dirname(resolved);
+    const maybeSeriesFolder = path.dirname(seasonFolder);
+    const seasonName = path.basename(seasonFolder || '');
+    const isSeasonFolder = /^season\s+\d{1,2}$/i.test(seasonName) || /^specials?$/i.test(seasonName);
+    const seriesFolder = isSeasonFolder ? maybeSeriesFolder : seasonFolder;
+    const outputRoot = isSeasonFolder ? path.dirname(maybeSeriesFolder) : maybeSeriesFolder;
+    const seriesName = path.basename(seriesFolder || '') || null;
+    return {
+      resolved,
+      seriesFolder,
+      outputRoot,
+      seriesName
+    };
+  } catch (e) {
+    return { resolved: null, seriesFolder: null, outputRoot: null, seriesName: null };
+  }
+}
+
+function getConfiguredOutputRoots(username) {
+  const out = [];
+  const seen = new Set();
+  const push = (value) => {
+    const key = normalizeOutputKey(value);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push({ key, path: String(value || '') });
+  };
+  try {
+    const userSettings = username && users && users[username] && users[username].settings ? users[username].settings : {};
+    if (userSettings && userSettings.scan_output_path) push(userSettings.scan_output_path);
+    if (userSettings && Array.isArray(userSettings.output_folders)) {
+      for (const folder of userSettings.output_folders) {
+        if (folder && folder.path) push(folder.path);
+      }
+    }
+    if (serverSettings && serverSettings.scan_output_path) push(serverSettings.scan_output_path);
+  } catch (e) { /* ignore */ }
+  return out;
+}
+
+function buildApprovedSeriesPayload(username) {
+  const configuredOutputs = getConfiguredOutputRoots(username);
+  const outputMap = new Map();
+  const sourcePrefs = getApprovedSeriesSourcePreferences(username);
+
+  const ensureOutputBucket = (key, displayPath) => {
+    if (!key) return null;
+    if (!outputMap.has(key)) {
+      outputMap.set(key, {
+        key,
+        path: displayPath || key,
+        source: (sourcePrefs && sourcePrefs[key]) ? String(sourcePrefs[key]) : 'anilist',
+        seriesMap: new Map()
+      });
+    }
+    return outputMap.get(key);
+  };
+
+  for (const conf of configuredOutputs) {
+    ensureOutputBucket(conf.key, conf.path);
+  }
+
+  const configuredSorted = [...configuredOutputs].sort((a, b) => b.key.length - a.key.length);
+  const getOutputBucketForPath = (targetPath) => {
+    const targetKey = normalizeOutputKey(targetPath);
+    for (const conf of configuredSorted) {
+      if (targetKey === conf.key || targetKey.startsWith(conf.key + '/')) {
+        return ensureOutputBucket(conf.key, conf.path);
+      }
+    }
+    const inferred = deriveAppliedSeriesInfo(targetPath);
+    const inferredKey = normalizeOutputKey(inferred.outputRoot || path.dirname(path.dirname(targetPath || '')));
+    return ensureOutputBucket(inferredKey, inferred.outputRoot || inferredKey);
+  };
+
+  for (const cacheKey of Object.keys(enrichCache || {})) {
+    const entry = enrichCache[cacheKey];
+    if (!entry || entry.applied !== true || !entry.appliedTo) continue;
+    const targets = Array.isArray(entry.appliedTo) ? entry.appliedTo : [entry.appliedTo];
+    for (const target of targets) {
+      if (!target) continue;
+      const bucket = getOutputBucketForPath(target);
+      if (!bucket) continue;
+      const info = deriveAppliedSeriesInfo(target);
+      const seriesName = (info.seriesName || entry.seriesTitleEnglish || entry.seriesTitle || entry.title || 'Unknown Series').trim();
+      const seriesKey = normalizeForCache(seriesName) || seriesName.toLowerCase();
+      const map = bucket.seriesMap;
+      if (!map.has(seriesKey)) {
+        map.set(seriesKey, {
+          key: seriesKey,
+          name: seriesName,
+          appliedCount: 0,
+          latestAppliedAt: 0,
+          samplePath: info.seriesFolder || target,
+          summary: `${seriesName}`,
+          imageUrl: null,
+          imageProvider: null,
+          imageFetchedAt: null
+        });
+      }
+      const item = map.get(seriesKey);
+      item.appliedCount += 1;
+      item.latestAppliedAt = Math.max(item.latestAppliedAt || 0, Number(entry.appliedAt || 0));
+      const imageCacheKey = `${bucket.key}::${seriesKey}`;
+      const cached = approvedSeriesImages && approvedSeriesImages[imageCacheKey] ? approvedSeriesImages[imageCacheKey] : null;
+      if (cached) {
+        if (cached.imageUrl) item.imageUrl = cached.imageUrl;
+        if (cached.summary) item.summary = cached.summary;
+        if (cached.provider) item.imageProvider = cached.provider;
+        if (cached.fetchedAt) item.imageFetchedAt = cached.fetchedAt;
+      }
+      if (!item.summary || item.summary === seriesName) {
+        item.summary = `${item.appliedCount} approved item${item.appliedCount === 1 ? '' : 's'}`;
+      }
+    }
+  }
+
+  const outputs = Array.from(outputMap.values())
+    .map((bucket) => {
+      const series = Array.from(bucket.seriesMap.values())
+        .sort((a, b) => a.name.localeCompare(b.name));
+      return {
+        key: bucket.key,
+        path: bucket.path,
+        source: bucket.source || 'anilist',
+        seriesCount: series.length,
+        series
+      };
+    })
+    .sort((a, b) => a.path.localeCompare(b.path));
+
+  const totalSeries = outputs.reduce((sum, out) => sum + out.seriesCount, 0);
+  return { outputs, totalSeries };
+}
+
+app.get('/api/approved-series', requireAuth, (req, res) => {
+  try {
+    const username = req.session && req.session.username ? req.session.username : null;
+    const payload = buildApprovedSeriesPayload(username);
+    return res.json(payload);
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
+
+app.post('/api/approved-series/source', requireAuth, (req, res) => {
+  try {
+    const username = req.session && req.session.username ? req.session.username : null;
+    const outputKey = normalizeOutputKey(req && req.body ? req.body.outputKey : '');
+    const sourceRaw = req && req.body ? String(req.body.source || '').trim().toLowerCase() : '';
+    const source = sourceRaw || 'anilist';
+    if (!outputKey) return res.status(400).json({ error: 'outputKey is required' });
+    if (!['anilist', 'tmdb'].includes(source)) return res.status(400).json({ error: 'invalid source' });
+    const ok = setApprovedSeriesSourcePreference(username, outputKey, source);
+    if (!ok) return res.status(500).json({ error: 'failed to save preference' });
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
+
+app.post('/api/approved-series/fetch-images', requireAuth, async (req, res) => {
+  try {
+    const username = req.session && req.session.username ? req.session.username : null;
+    const outputKey = normalizeOutputKey(req && req.body ? req.body.outputKey : '');
+    if (!outputKey) return res.status(400).json({ error: 'outputKey is required' });
+
+    const payload = buildApprovedSeriesPayload(username);
+    const output = (payload.outputs || []).find((o) => o.key === outputKey);
+    if (!output) return res.status(404).json({ error: 'output not found' });
+
+    const sourcePrefs = getApprovedSeriesSourcePreferences(username);
+    const sourceRaw = req && req.body && req.body.source ? String(req.body.source).trim().toLowerCase() : '';
+    const selectedSource = sourceRaw || (sourcePrefs && sourcePrefs[outputKey]) || 'anilist';
+    if (!['anilist', 'tmdb'].includes(selectedSource)) return res.status(400).json({ error: 'invalid source' });
+
+    setApprovedSeriesSourcePreference(username, outputKey, selectedSource);
+
+    if (selectedSource !== 'anilist') {
+      return res.json({ ok: true, fetched: 0, skipped: output.seriesCount, source: selectedSource, note: 'Only AniList fetching is currently implemented' });
+    }
+
+    let fetched = 0;
+    let skipped = 0;
+    const seriesList = Array.isArray(output.series) ? output.series : [];
+    for (const series of seriesList) {
+      const seriesName = series && series.name ? String(series.name) : '';
+      if (!seriesName) { skipped++; continue; }
+      const seriesKey = normalizeForCache(seriesName) || seriesName.toLowerCase();
+      const cacheKey = `${outputKey}::${seriesKey}`;
+      const existing = approvedSeriesImages[cacheKey];
+      if (existing && existing.imageUrl && existing.provider === 'anilist') { skipped++; continue; }
+      const lookedUp = await fetchAniListSeriesArtwork(seriesName);
+      if (!lookedUp || !lookedUp.imageUrl) { skipped++; continue; }
+      approvedSeriesImages[cacheKey] = {
+        provider: 'anilist',
+        imageUrl: lookedUp.imageUrl,
+        summary: lookedUp.summary || (existing && existing.summary) || '',
+        mediaId: lookedUp.id || null,
+        fetchedAt: lookedUp.fetchedAt || Date.now()
+      };
+      fetched++;
+    }
+
+    try { writeJson(approvedSeriesImagesFile, approvedSeriesImages); } catch (e) {}
+    return res.json({ ok: true, fetched, skipped, source: selectedSource });
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
 
 // Manual provider ID overrides
 app.get('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {

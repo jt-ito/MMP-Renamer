@@ -13,6 +13,7 @@ import Users from './Users'
 import Notifications from './Notifications'
 import HiddenItems from './HiddenItems'
 import Duplicates from './Duplicates'
+import ApprovedSeries from './ApprovedSeries'
 
 function IconRefresh(){
   return (
@@ -2655,9 +2656,7 @@ export default function App() {
                 <path d="M18 16v-5c0-3.07-1.63-5.64-4.5-6.32V4a1.5 1.5 0 10-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z" />
               </svg>
             </button>
-            <button className="btn-ghost icon-only" title="Keyboard shortcuts (? or F1)" onClick={() => setShowKeyboardHelp(true)}>
-              <IconHelp/>
-            </button>
+            <button className="btn-ghost" onClick={() => (window.location.hash = route === '#/approved-series' ? '#/' : '#/approved-series')}>Approved Series</button>
             {auth && auth.role === 'admin' && <button className="btn-ghost" onClick={() => (window.location.hash = '#/users')}>Users</button>}
             {auth && <button className="btn-ghost" onClick={async ()=>{ try { await axios.post(API('/logout')); setAuth(null); pushToast && pushToast('Auth','Logged out') } catch { pushToast && pushToast('Auth','Logout failed') } }}>Logout</button>}
           </div>
@@ -2688,6 +2687,10 @@ export default function App() {
           ) : route === '#/duplicates' ? (
             <section className="list">
               <Duplicates pushToast={pushToast} />
+            </section>
+          ) : route === '#/approved-series' ? (
+            <section className="list settings-page">
+              <ApprovedSeries pushToast={pushToast} />
             </section>
           ) : route === '#/notifications' ? (
             <section className="list">
