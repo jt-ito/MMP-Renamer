@@ -2928,6 +2928,17 @@ async function metaLookup(title, apiKey, opts = {}) {
       const variantsForStore = Array.isArray(aniListResult.titleVariants) ? aniListResult.titleVariants : []
       storedAniListResult = Object.assign({}, aniListResult, { titleVariants: variantsForStore })
       storedAniListVariants = variantsForStore
+      const aniListIsMovie = (() => {
+        try {
+          const raw = aniListResult && aniListResult.raw ? aniListResult.raw : {}
+          const format = raw && raw.format ? String(raw.format).toUpperCase() : ''
+          return format === 'MOVIE'
+        } catch (e) { return false }
+      })()
+      if (aniListIsMovie) {
+        try { appendLog(`META_ANILIST_MOVIE_SKIP_EP_PROVIDERS title=${String(aniListResult.name || '').slice(0,120)}`) } catch (e) {}
+        return aniListResult
+      }
       if (!hasEpisodeProviderAfterAniList || (aniListResult && aniListResult.episode && (aniListResult.episode.name || aniListResult.episode.title))) {
         return aniListResult
       }
@@ -2971,8 +2982,18 @@ async function metaLookup(title, apiKey, opts = {}) {
         }
         const uniqueTitleVariantsP = [...new Set(titleVariantsP)];
         let tmdbEpCheckParent = null;
+        const parentIsMovie = (() => {
+          try {
+            const raw = a && a.raw ? a.raw : {}
+            const format = raw && raw.format ? String(raw.format).toUpperCase() : ''
+            return format === 'MOVIE'
+          } catch (e) { return false }
+        })()
+        if (parentIsMovie) {
+          try { appendLog(`META_ANILIST_PARENT_MOVIE_SKIP_EP title=${String(parentAniListName || '').slice(0,120)}`) } catch (e) {}
+        }
 
-  if (!ep && allowTvdb && tvdbCreds && opts && opts.season != null && opts.episode != null) {
+  if (!parentIsMovie && !ep && allowTvdb && tvdbCreds && opts && opts.season != null && opts.episode != null) {
           try {
             const tvdbEpisode = await tvdb.fetchEpisode(tvdbCreds, uniqueTitleVariantsP, opts.season, opts.episode, {
               log: (line) => {
@@ -3013,7 +3034,7 @@ async function metaLookup(title, apiKey, opts = {}) {
           }
         }
 
-  if (!ep && allowTmdb && apiKey) {
+  if (!parentIsMovie && !ep && allowTmdb && apiKey) {
           const tmLookupName = strippedParentName || parentAniListName || parentCandidate;
           try { appendLog(`META_TMDB_EP_AFTER_ANILIST_PARENT tmLookup=${tmLookupName} anilist=${parentAniListName} season=${opts && opts.season != null ? opts.season : '<none>'} episode=${opts && opts.episode != null ? opts.episode : '<none>'} usingKey=masked`) } catch (e) {}
           try {
@@ -3046,7 +3067,7 @@ async function metaLookup(title, apiKey, opts = {}) {
           }
         }
 
-  if (!ep && allowWikipedia) {
+  if (!parentIsMovie && !ep && allowWikipedia) {
           try {
             const wikiEp = await lookupWikipediaEpisode(uniqueTitleVariantsP.map(normalizeSearchQuery), opts && opts.season != null ? opts.season : null, opts && opts.episode != null ? opts.episode : null, { force: !!(opts && opts.force), tmdbKey: apiKey });
             const intendedSeries = parentAniListName;
@@ -3101,7 +3122,7 @@ async function metaLookup(title, apiKey, opts = {}) {
           } catch (e) {}
         }
 
-        if (!ep && allowKitsu) {
+        if (!parentIsMovie && !ep && allowKitsu) {
           if (allowTmdb && !apiKey) { try { appendLog(`META_TMDB_SKIPPED_NO_KEY_PARENT q=${parentAniListName}`) } catch (e) {} }
           ep = await fetchKitsuEpisode(strippedParentName || parentAniListName || parentCandidate, opts && opts.episode != null ? opts.episode : null)
           try { appendLog(`META_KITSU_EP_PARENT q=${parentAniListName} ep=${opts && opts.episode != null ? opts.episode : '<none>'} found=${ep && (ep.name||ep.title) ? 'yes' : 'no'}`) } catch (e) {}
@@ -3117,6 +3138,9 @@ async function metaLookup(title, apiKey, opts = {}) {
         }
         storedAniListResult = Object.assign({}, parentRes, { titleVariants: uniqueTitleVariantsP })
         storedAniListVariants = uniqueTitleVariantsP
+        if (parentIsMovie) {
+          return parentRes
+        }
         if (!hasEpisodeProviderAfterAniList || (parentRes && parentRes.episode && (parentRes.episode.name || parentRes.episode.title))) {
           return parentRes
         }
@@ -4024,13 +4048,16 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
             let providerTitleRaw = String(res.name || raw.name || raw.title || '').trim()
             let anilistEnglish = null
             let anilistRomaji = null
+            let anilistNative = null
             try {
               if (res && res.title) {
                 if (res.title.english) anilistEnglish = String(res.title.english).trim()
                 if (res.title.romaji) anilistRomaji = String(res.title.romaji).trim()
+                if (res.title.native) anilistNative = String(res.title.native).trim()
               }
               if (!anilistEnglish && res && res.raw && res.raw.title && res.raw.title.english) anilistEnglish = String(res.raw.title.english).trim()
               if (!anilistRomaji && res && res.raw && res.raw.title && res.raw.title.romaji) anilistRomaji = String(res.raw.title.romaji).trim()
+              if (!anilistNative && res && res.raw && res.raw.title && res.raw.title.native) anilistNative = String(res.raw.title.native).trim()
             } catch (e) { /* best-effort */ }
             // Use providerTitleRaw (from res.name) which is already cleaned, rather than raw anilistEnglish
             let providerPreferred = providerTitleRaw || ((anilistEnglish && anilistEnglish.length) ? anilistEnglish : ((anilistRomaji && anilistRomaji.length) ? anilistRomaji : ''))
@@ -4040,6 +4067,23 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
             try {
               const format = raw && raw.format ? String(raw.format).toUpperCase() : ''
               const isAniListMovie = format === 'MOVIE'
+              if (isAniListMovie) {
+                const isAllCaps = (s) => {
+                  if (!s) return false
+                  const letters = String(s).replace(/[^a-zA-Z]/g, '')
+                  return letters.length > 0 && letters === letters.toUpperCase()
+                }
+                const sameEnRomaji = anilistEnglish && anilistRomaji && anilistEnglish === anilistRomaji
+                if (sameEnRomaji && isAllCaps(anilistEnglish)) {
+                  providerPreferred = String(anilistRomaji).trim()
+                } else if (anilistEnglish) {
+                  providerPreferred = String(anilistEnglish).trim()
+                } else if (anilistRomaji) {
+                  providerPreferred = String(anilistRomaji).trim()
+                } else if (anilistNative) {
+                  providerPreferred = String(anilistNative).trim()
+                }
+              }
               const episodeIndex = (normEpisode != null && Number.isFinite(Number(normEpisode))) ? Number(normEpisode) : null
               const edges = raw && raw.relations && Array.isArray(raw.relations.edges) ? raw.relations.edges : null
               if (isAniListMovie && episodeIndex && edges && edges.length) {
@@ -4064,7 +4108,7 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
                 }
                 for (const edge of edges) {
                   if (!edge || String(edge.relationType || '').toUpperCase() !== 'SEQUEL') continue
-                  const nodeTitle = edge && edge.node && edge.node.title ? (edge.node.title.english || edge.node.title.romaji || edge.node.title.native) : null
+                  const nodeTitle = edge && edge.node && edge.node.title ? (edge.node.title.romaji || edge.node.title.english || edge.node.title.native) : null
                   if (nodeTitle) candidates.push({ title: String(nodeTitle).trim(), idx: extractPartIndex(nodeTitle), isBase: false })
                 }
 
