@@ -16,7 +16,8 @@ When the automatic metadata lookup fails due to unusual naming (e.g., "Sean Didd
   "Exact Series Title From Filename": {
     "tmdb": 12345,
     "tvdb": 67890,
-    "anilist": 54321
+    "anilist": 54321,
+    "anidbEpisode": 300154
   }
 }
 ```
@@ -42,6 +43,12 @@ When the automatic metadata lookup fails due to unusual naming (e.g., "Sean Didd
 2. Search for the anime
 3. The ID is in the URL: `anilist.co/anime/[ID]`
    - Example: `anilist.co/anime/21` → ID is `21`
+
+### AniDB Episode ID
+1. Go to [anidb.net](https://anidb.net)
+2. Open the episode page
+3. The ID is in the URL: `anidb.net/episode/[ID]`
+  - Example: `anidb.net/episode/300154` → ID is `300154`
 
 ## Example: Sean Combs: The Reckoning
 

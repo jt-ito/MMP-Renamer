@@ -3301,7 +3301,7 @@ function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
 }
 
 function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
-  const [values, setValues] = useState({ anilist: '', tmdb: '', tvdb: '' })
+  const [values, setValues] = useState({ anilist: '', tmdb: '', tvdb: '', anidbEpisode: '' })
   const [loading, setLoading] = useState(false)
 
   const normalizeKey = (value) => {
@@ -3322,10 +3322,11 @@ function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
         setValues({
           anilist: entry && entry.anilist ? String(entry.anilist) : '',
           tmdb: entry && entry.tmdb ? String(entry.tmdb) : '',
-          tvdb: entry && entry.tvdb ? String(entry.tvdb) : ''
+          tvdb: entry && entry.tvdb ? String(entry.tvdb) : '',
+          anidbEpisode: entry && entry.anidbEpisode ? String(entry.anidbEpisode) : ''
         })
       } catch (e) {
-        if (active) setValues({ anilist: '', tmdb: '', tvdb: '' })
+        if (active) setValues({ anilist: '', tmdb: '', tvdb: '', anidbEpisode: '' })
       } finally {
         if (active) setLoading(false)
       }
@@ -3341,7 +3342,8 @@ function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
         title,
         anilist: values.anilist || null,
         tmdb: values.tmdb || null,
-        tvdb: values.tvdb || null
+        tvdb: values.tvdb || null,
+        anidbEpisode: values.anidbEpisode || null
       })
       pushToast && pushToast('Manual IDs', 'Saved manual provider IDs')
       onSaved && onSaved()
@@ -3376,7 +3378,7 @@ function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
       </button>
       {isOpen ? (
         <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8 }}>
             <input
               className="form-input"
               placeholder="AniList ID"
@@ -3394,6 +3396,12 @@ function ManualIdInputs({ title, isOpen, onToggle, onSaved, pushToast }) {
               placeholder="TVDB ID"
               value={values.tvdb}
               onChange={(e) => setValues(prev => ({ ...prev, tvdb: e.target.value }))}
+            />
+            <input
+              className="form-input"
+              placeholder="AniDB Episode ID"
+              value={values.anidbEpisode}
+              onChange={(e) => setValues(prev => ({ ...prev, anidbEpisode: e.target.value }))}
             />
           </div>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

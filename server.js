@@ -219,6 +219,26 @@ function normalizeManualIdKey(value) {
   } catch (e) { return String(value || '').trim().toLowerCase(); }
 }
 
+function normalizeManualIdValue(value) {
+  try {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    if (/^\d+$/.test(raw)) return Number(raw);
+    return raw;
+  } catch (e) { return null; }
+}
+
+function normalizeAniDbEpisodeId(value) {
+  try {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    const urlMatch = raw.match(/anidb\.net\/episode\/(\d+)/i);
+    if (urlMatch && urlMatch[1]) return Number(urlMatch[1]);
+    if (/^\d+$/.test(raw)) return Number(raw);
+    return raw;
+  } catch (e) { return null; }
+}
+
 function loadManualIds() {
   try {
     ensureFile(manualIdsFile, {});
@@ -8072,6 +8092,44 @@ function performUnapprove({ requestedPaths = null, count = 10, username = null }
 
   return { changed, deletedHardlinks, hardlinkErrors, shouldDeleteHardlinks };
 }
+
+// Manual provider ID overrides
+app.get('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
+  try {
+    return res.json({ manualIds: manualIds || {} });
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
+
+app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const title = req && req.body ? req.body.title : null;
+    if (!title) return res.status(400).json({ error: 'title is required' });
+    const key = normalizeManualIdKey(title);
+    if (!key) return res.status(400).json({ error: 'invalid title' });
+
+    const entry = {};
+    const anilistId = normalizeManualIdValue(req.body.anilist);
+    const tmdbId = normalizeManualIdValue(req.body.tmdb);
+    const tvdbId = normalizeManualIdValue(req.body.tvdb);
+    const anidbEpisodeId = normalizeAniDbEpisodeId(req.body.anidbEpisode);
+
+    if (anilistId !== null) entry.anilist = anilistId;
+    if (tmdbId !== null) entry.tmdb = tmdbId;
+    if (tvdbId !== null) entry.tvdb = tvdbId;
+    if (anidbEpisodeId !== null) entry.anidbEpisode = anidbEpisodeId;
+
+    manualIds = manualIds || {};
+    if (Object.keys(entry).length === 0) delete manualIds[key];
+    else manualIds[key] = entry;
+
+    try { writeJson(manualIdsFile, manualIds); } catch (e) {}
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
 
 // Unapprove last N applied renames: mark applied->false, unhide, and optionally remove hardlinks
 app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {

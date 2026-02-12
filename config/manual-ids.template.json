@@ -5,13 +5,15 @@
     "Some Badly Named Series": {
       "tmdb": 12345,
       "tvdb": 67890,
-      "anilist": 54321
+      "anilist": 54321,
+      "anidbEpisode": 300154
     }
   },
   "_how_to_find_ids": {
     "tmdb": "Go to themoviedb.org, search for the series, the ID is in the URL: themoviedb.org/tv/[ID]",
     "tvdb": "Go to thetvdb.com, search for the series, the ID is in the URL: thetvdb.com/dereferrer/series/[ID]",
-    "anilist": "Go to anilist.co, search for the anime, the ID is in the URL: anilist.co/anime/[ID]"
+    "anilist": "Go to anilist.co, search for the anime, the ID is in the URL: anilist.co/anime/[ID]",
+    "anidbEpisode": "Go to anidb.net, open the episode page, the ID is in the URL: anidb.net/episode/[ID]"
   },
   "_example_diddy": {
     "_note": "For 'Sean Diddy Combs Netflix Documentary The Reckoning', you would add:",
