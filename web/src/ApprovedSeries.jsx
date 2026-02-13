@@ -96,7 +96,7 @@ export default function ApprovedSeries({ pushToast }) {
     }
   }
 
-  const enqueueAutoFetch = (outputKey, source, seriesName, cardKey) => {
+  const enqueueAutoFetch = (outputKey, source, outputPath, seriesName, cardKey) => {
     if (!outputKey || !seriesName || !cardKey) return
     if (queuedRef.current.has(cardKey) || inFlightRef.current.has(cardKey)) return
     queuedRef.current.add(cardKey)
@@ -116,6 +116,7 @@ export default function ApprovedSeries({ pushToast }) {
         await axios.post(API('/approved-series/fetch-image'), {
           outputKey: okey,
           source,
+          outputPath,
           seriesName: sname
         })
         setOutputs((prev) => prev.map((out) => {
@@ -165,7 +166,7 @@ export default function ApprovedSeries({ pushToast }) {
         const outputKey = el.getAttribute('data-output-key') || ''
         const cardKey = el.getAttribute('data-series-key') || ''
         if (!seriesName || !outputKey || !cardKey) continue
-        enqueueAutoFetch(outputKey, source, seriesName, cardKey)
+        enqueueAutoFetch(outputKey, source, activeOutput.path || '', seriesName, cardKey)
       }
     }, { root: null, rootMargin: '280px 0px 280px 0px', threshold: 0.2 })
 

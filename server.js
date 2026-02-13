@@ -8443,9 +8443,13 @@ function approvedSeriesSourceKeyVariants(value) {
 function resolveApprovedSeriesSourcePreference(sourcePrefs, outputKey, displayPath) {
   try {
     if (!sourcePrefs || typeof sourcePrefs !== 'object') return { source: 'anilist', configured: false };
+    const normalizedOutputKey = normalizeApprovedSeriesSourceKey(outputKey);
     const exact = sourcePrefs[outputKey];
     if (exact) {
       return { source: normalizeApprovedSeriesSource(exact), configured: true };
+    }
+    if (normalizedOutputKey && sourcePrefs[normalizedOutputKey]) {
+      return { source: normalizeApprovedSeriesSource(sourcePrefs[normalizedOutputKey]), configured: true };
     }
 
     const rawCandidates = [
@@ -8462,8 +8466,7 @@ function resolveApprovedSeriesSourcePreference(sourcePrefs, outputKey, displayPa
       const prefVariants = approvedSeriesSourceKeyVariants(prefKey);
       if (!prefVariants.length) continue;
       const intersects = prefVariants.some((v) => keyCandidates.includes(v));
-      const suffixMatch = prefVariants.some((pv) => keyCandidates.some((kc) => (pv.length > 6 && kc.endsWith(pv)) || (kc.length > 6 && pv.endsWith(kc))));
-      if (intersects || suffixMatch) {
+      if (intersects) {
         return { source: normalizeApprovedSeriesSource(sourcePrefs[prefKey]), configured: true };
       }
     }
@@ -8645,7 +8648,9 @@ async function findAniDbAidByTitle(seriesName, username) {
     try {
       const apiClient = getAniDBClient(
         (creds && creds.anidb_username) ? creds.anidb_username : '',
-        (creds && creds.anidb_password) ? creds.anidb_password : ''
+        (creds && creds.anidb_password) ? creds.anidb_password : '',
+        (creds && creds.anidb_client_name) ? creds.anidb_client_name : 'mmprename',
+        (creds && creds.anidb_client_version) ? creds.anidb_client_version : 1
       );
       const anime = await apiClient.getAnimeInfoByTitle(query);
       const apiAid = Number(anime && anime.aid ? anime.aid : NaN);
@@ -8655,6 +8660,40 @@ async function findAniDbAidByTitle(seriesName, username) {
       }
     } catch (e) {
       try { appendLog(`APPROVED_SERIES_ANIDB_TITLE_API_MISS series=${String(seriesName || '').slice(0,120)} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
+    }
+
+    try {
+      const queryText = normalizeApprovedSeriesLookupTitle(seriesName) || String(seriesName || '').trim();
+      const gql = `query ($search: String) { Media(search: $search, type: ANIME) { id externalLinks { site url } } }`;
+      const payload = JSON.stringify({ query: gql, variables: { search: queryText } });
+      const resp = await httpRequest({
+        hostname: 'graphql.anilist.co',
+        path: '/',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload)
+        }
+      }, payload, 8000);
+      if (resp && resp.statusCode === 200 && resp.body) {
+        const parsed = safeJsonParse(resp.body);
+        const media = parsed && parsed.data && parsed.data.Media ? parsed.data.Media : null;
+        const links = media && Array.isArray(media.externalLinks) ? media.externalLinks : [];
+        for (const link of links) {
+          const site = String((link && link.site) || '').toLowerCase();
+          const url = String((link && link.url) || '');
+          if (!site.includes('anidb') && !/anidb\.net/i.test(url)) continue;
+          const m = url.match(/anidb\.net\/anime\/(\d{1,8})\b/i);
+          if (!m || !m[1]) continue;
+          const aid = Number(m[1]);
+          if (Number.isFinite(aid) && aid > 0) {
+            try { appendLog(`APPROVED_SERIES_ANIDB_TITLE_ANILIST_LINK_HIT series=${String(seriesName || '').slice(0,120)} aid=${aid}`); } catch (e) {}
+            return aid;
+          }
+        }
+      }
+    } catch (e) {
+      try { appendLog(`APPROVED_SERIES_ANIDB_TITLE_ANILIST_LINK_MISS series=${String(seriesName || '').slice(0,120)} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
     }
 
     const encoded = encodeURIComponent(String(query).slice(0, 160));
@@ -8719,7 +8758,9 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
     try {
       const client = getAniDBClient(
         (creds && creds.anidb_username) ? creds.anidb_username : '',
-        (creds && creds.anidb_password) ? creds.anidb_password : ''
+        (creds && creds.anidb_password) ? creds.anidb_password : '',
+        (creds && creds.anidb_client_name) ? creds.anidb_client_name : 'mmprename',
+        (creds && creds.anidb_client_version) ? creds.anidb_client_version : 1
       );
       const anime = await client.getAnimeInfo(aid);
       if (anime && anime.raw) {
@@ -9097,9 +9138,10 @@ app.post('/api/approved-series/fetch-images', requireAuth, async (req, res) => {
     const sourcePrefs = getApprovedSeriesSourcePreferences(username);
     const resolvedPref = resolveApprovedSeriesSourcePreference(sourcePrefs, outputKey, output.path || outputKey);
     const selectedSource = normalizeApprovedSeriesSource((req && req.body && req.body.source) || resolvedPref.source || 'anilist');
+    const outputPath = (output && output.path) ? String(output.path) : '';
     if (!['anilist', 'tmdb', 'anidb'].includes(selectedSource)) return res.status(400).json({ error: 'invalid source' });
 
-    setApprovedSeriesSourcePreference(username, outputKey, selectedSource);
+    setApprovedSeriesSourcePreference(username, outputKey, selectedSource, outputPath);
 
     let fetched = 0;
     let skipped = 0;
@@ -9122,6 +9164,7 @@ app.post('/api/approved-series/fetch-image', requireAuth, async (req, res) => {
     const username = req.session && req.session.username ? req.session.username : null;
     const outputKey = normalizeOutputKey(req && req.body ? req.body.outputKey : '');
     const seriesName = req && req.body && req.body.seriesName ? String(req.body.seriesName).trim() : '';
+    const outputPath = req && req.body ? String(req.body.outputPath || '') : '';
     if (!outputKey) return res.status(400).json({ error: 'outputKey is required' });
     if (!seriesName) return res.status(400).json({ error: 'seriesName is required' });
 
@@ -9129,7 +9172,7 @@ app.post('/api/approved-series/fetch-image', requireAuth, async (req, res) => {
     const resolvedPref = resolveApprovedSeriesSourcePreference(sourcePrefs, outputKey, outputKey);
     const selectedSource = normalizeApprovedSeriesSource((req && req.body && req.body.source) || resolvedPref.source || 'anilist');
     if (!['anilist', 'tmdb', 'anidb'].includes(selectedSource)) return res.status(400).json({ error: 'invalid source' });
-    setApprovedSeriesSourcePreference(username, outputKey, selectedSource);
+    setApprovedSeriesSourcePreference(username, outputKey, selectedSource, outputPath);
 
     const result = await fetchAndCacheApprovedSeriesImage({ username, outputKey, source: selectedSource, seriesName, allowCooldown: true });
     return res.json(result);
