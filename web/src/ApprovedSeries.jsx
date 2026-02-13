@@ -264,33 +264,34 @@ export default function ApprovedSeries({ pushToast }) {
             background: 'var(--card-bg)',
             border: '1px solid var(--border)',
             borderRadius: 4,
-            maxHeight: 400,
-            overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column'
+            width: '100%',
+            boxSizing: 'border-box'
           }}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8,flexShrink:0}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
               <strong style={{fontSize:14}}>
                 Logs {activeOutput ? `for ${activeOutput.path}` : '(all outputs)'}
               </strong>
               <button className="btn-ghost" onClick={fetchLogs} style={{padding:'4px 8px',fontSize:12}}>Refresh</button>
             </div>
             <div style={{
-              flex: 1,
+              height: '300px',
               overflow: 'auto',
               background: '#1a1a1a',
-              border: '1px solid var(--border)',
+              border: '1px solid #444',
               borderRadius: 3,
-              padding: 8
+              padding: 8,
+              width: '100%',
+              boxSizing: 'border-box'
             }}>
               <pre style={{
                 margin: 0,
                 fontSize: 11,
-                fontFamily: 'monospace',
+                fontFamily: 'Consolas, Monaco, "Courier New", monospace',
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',
                 color: '#e0e0e0',
-                lineHeight: '1.4'
+                lineHeight: '1.5',
+                overflowWrap: 'anywhere'
               }}>{logs || 'No logs yet'}</pre>
             </div>
           </div>
