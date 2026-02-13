@@ -8636,6 +8636,29 @@ function findAniDbAidForApprovedSeries(outputKey, seriesName) {
   } catch (e) { return null; }
 }
 
+async function findAniDbAidByTitle(seriesName) {
+  try {
+    const query = normalizeApprovedSeriesLookupTitle(seriesName);
+    if (!query) return null;
+    const encoded = encodeURIComponent(String(query).slice(0, 160));
+    const page = await httpRequest({
+      hostname: 'anidb.net',
+      path: `/anime/?adb.search=${encoded}&do.search=1`,
+      method: 'GET',
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
+      }
+    }, null, 10000);
+    if (!page || page.statusCode !== 200 || !page.body) return null;
+    const body = String(page.body || '');
+    const match = body.match(/\/anime\/(\d{1,8})\b/i);
+    if (!match || !match[1]) return null;
+    const parsed = Number(match[1]);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  } catch (e) { return null; }
+}
+
 function extractAniDbPageImageUrl(html) {
   try {
     const content = String(html || '');
@@ -8662,7 +8685,14 @@ function extractAniDbPageSummary(html) {
 
 async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
   try {
-    const aid = findAniDbAidForApprovedSeries(outputKey, seriesName);
+    let aid = findAniDbAidForApprovedSeries(outputKey, seriesName);
+    if (!aid) {
+      aid = await findAniDbAidByTitle(seriesName);
+      try {
+        if (aid) appendLog(`APPROVED_SERIES_ANIDB_TITLE_FALLBACK_HIT series=${String(seriesName || '').slice(0,120)} aid=${aid}`);
+        else appendLog(`APPROVED_SERIES_ANIDB_TITLE_FALLBACK_NONE series=${String(seriesName || '').slice(0,120)}`);
+      } catch (e) {}
+    }
     if (!aid) return null;
 
     let imageUrl = null;
@@ -8902,6 +8932,16 @@ function buildApprovedSeriesPayload(username) {
   const outputs = Array.from(outputMap.values())
     .map((bucket) => {
       const series = Array.from(bucket.seriesMap.values())
+        .map((item) => {
+          if (item && item.imageProvider && item.imageProvider !== bucket.source) {
+            return Object.assign({}, item, {
+              imageUrl: null,
+              imageFetchedAt: null,
+              imageProvider: null
+            });
+          }
+          return item;
+        })
         .sort((a, b) => a.name.localeCompare(b.name));
       return {
         key: bucket.key,
@@ -9037,7 +9077,8 @@ app.post('/api/approved-series/fetch-images', requireAuth, async (req, res) => {
     if (!output) return res.status(404).json({ error: 'output not found' });
 
     const sourcePrefs = getApprovedSeriesSourcePreferences(username);
-    const selectedSource = normalizeApprovedSeriesSource((req && req.body && req.body.source) || (sourcePrefs && sourcePrefs[outputKey]) || 'anilist');
+    const resolvedPref = resolveApprovedSeriesSourcePreference(sourcePrefs, outputKey, output.path || outputKey);
+    const selectedSource = normalizeApprovedSeriesSource((req && req.body && req.body.source) || resolvedPref.source || 'anilist');
     if (!['anilist', 'tmdb', 'anidb'].includes(selectedSource)) return res.status(400).json({ error: 'invalid source' });
 
     setApprovedSeriesSourcePreference(username, outputKey, selectedSource);
@@ -9067,7 +9108,8 @@ app.post('/api/approved-series/fetch-image', requireAuth, async (req, res) => {
     if (!seriesName) return res.status(400).json({ error: 'seriesName is required' });
 
     const sourcePrefs = getApprovedSeriesSourcePreferences(username);
-    const selectedSource = normalizeApprovedSeriesSource((req && req.body && req.body.source) || (sourcePrefs && sourcePrefs[outputKey]) || 'anilist');
+    const resolvedPref = resolveApprovedSeriesSourcePreference(sourcePrefs, outputKey, outputKey);
+    const selectedSource = normalizeApprovedSeriesSource((req && req.body && req.body.source) || resolvedPref.source || 'anilist');
     if (!['anilist', 'tmdb', 'anidb'].includes(selectedSource)) return res.status(400).json({ error: 'invalid source' });
     setApprovedSeriesSourcePreference(username, outputKey, selectedSource);
 
