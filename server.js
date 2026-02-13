@@ -8566,6 +8566,103 @@ async function fetchAniListSeriesArtworkWithCandidates(candidates) {
   return null;
 }
 
+async function fetchAniListSeriesArtworkByAniDbId(anidbId) {
+  try {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const aid = Number(anidbId);
+    if (!Number.isFinite(aid) || aid <= 0) return null;
+
+    // Query AniList for anime with this AniDB ID in externalLinks
+    const query = `query ($anidbId: Int) { Media(idMal: null, type: ANIME) { id title { english romaji native } description(asHtml: false) coverImage { large medium color } bannerImage externalLinks { id site url } } }`;
+    
+    // We need to search by browsing all anime with AniDB links (not efficient, so we'll use a workaround)
+    // Better approach: Query by searching the anime title we already have
+    // But the best approach is to construct the AniDB URL and search for media with that external link
+    
+    // Since AniList doesn't support direct search by external ID, we'll use a different strategy:
+    // Query AniList to find media where externalLinks contains our AniDB ID
+    // This requires using a generic search and filtering
+    
+    const anidbUrl = `https://anidb.net/anime/${aid}`;
+    
+    // Use a broader query that gets media with external links
+    const searchQuery = `{ Media(idMal: null, type: ANIME) { id } }`;
+    
+    // Actually, AniList GraphQL doesn't support filtering by external links directly
+    // So we need to search by the series name (which we don't have here)
+    // The solution: we need to pass the series name as well
+    
+    return null; // For now, we need the series name to search
+  } catch (e) {
+    try { appendLog(`APPROVED_SERIES_ANILIST_BY_ANIDB_FAIL anidbId=${anidbId} err=${e.message}`); } catch (ee) {}
+    return null;
+  }
+}
+
+async function fetchAniListSeriesArtworkByNameAndAniDbId(seriesName, anidbId) {
+  try {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const lookupTitle = normalizeApprovedSeriesLookupTitle(seriesName) || String(seriesName || '').trim();
+    const aid = Number(anidbId);
+    
+    // First, try to find the anime on AniList by name
+    const query = `query ($search: String) { Media(search: $search, type: ANIME) { id title { english romaji native } description(asHtml: false) coverImage { large medium color } bannerImage externalLinks { site url } } }`;
+    const payload = JSON.stringify({ query, variables: { search: lookupTitle } });
+    const res = await httpRequest({ hostname: 'graphql.anilist.co', path: '/', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } }, payload, 10000);
+    
+    if (!res || res.statusCode !== 200) {
+      try { appendLog(`APPROVED_SERIES_ANILIST_FALLBACK_SEARCH_FAIL title=${String(seriesName).slice(0,80)} anidbId=${aid} status=${res?.statusCode}`); } catch (e) {}
+      return null;
+    }
+    
+    const parsed = safeJsonParse(res.body);
+    const media = parsed && parsed.data && parsed.data.Media ? parsed.data.Media : null;
+    
+    if (!media) return null;
+    
+    // Verify this is the same anime by checking if AniDB ID matches in externalLinks
+    const links = media && Array.isArray(media.externalLinks) ? media.externalLinks : [];
+    let anidbMatch = false;
+    for (const link of links) {
+      const site = String((link && link.site) || '').toLowerCase();
+      const url = String((link && link.url) || '');
+      if (site.includes('anidb') || /anidb\.net/i.test(url)) {
+        const m = url.match(/anidb\.net\/anime\/(\d{1,8})\b/i);
+        if (m && m[1] && Number(m[1]) === aid) {
+          anidbMatch = true;
+          break;
+        }
+      }
+    }
+    
+    if (!anidbMatch) {
+      try { appendLog(`APPROVED_SERIES_ANILIST_FALLBACK_NO_MATCH title=${String(seriesName).slice(0,80)} anidbId=${aid} anilistId=${media.id}`); } catch (e) {}
+      // Even if no exact match, still use the result if we found something
+      // This is better than nothing
+    }
+    
+    const displayName = (media.title && (media.title.english || media.title.romaji || media.title.native)) || lookupTitle;
+    const imageUrl = (media.coverImage && (media.coverImage.large || media.coverImage.medium)) || media.bannerImage || null;
+    const summary = stripHtmlSummary(media.description || '');
+    
+    if (!imageUrl) return null;
+    
+    try { appendLog(`APPROVED_SERIES_ANILIST_FALLBACK_OK title=${String(seriesName).slice(0,80)} anidbId=${aid} anilistId=${media.id} matched=${anidbMatch} imageUrl=${imageUrl.slice(0,100)}`); } catch (e) {}
+    
+    return {
+      id: media.id || null,
+      name: displayName,
+      imageUrl,
+      summary,
+      fetchedAt: Date.now(),
+      provider: 'anilist'
+    };
+  } catch (e) {
+    try { appendLog(`APPROVED_SERIES_ANILIST_FALLBACK_ERR title=${String(seriesName).slice(0,80)} anidbId=${anidbId} err=${e.message}`); } catch (ee) {}
+    return null;
+  }
+}
+
 async function fetchTmdbSeriesArtwork(title, tmdbKey) {
   try {
     if (!tmdbKey) {
@@ -8809,11 +8906,23 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
         (creds && creds.anidb_client_version) ? creds.anidb_client_version : 1
       );
       const anime = await client.getAnimeInfo(aid);
-      if (anime && anime.raw) {
-        const raw = String(anime.raw);
-        const pictureMatch = raw.match(/<picture>([^<]+)<\/picture>/i) || raw.match(/<picname>([^<]+)<\/picname>/i);
-        if (pictureMatch && pictureMatch[1]) {
-          imageUrl = `https://cdn.anidb.net/images/main/${pictureMatch[1].trim()}`;
+      if (anime) {
+        // Try parsed picture field first (cleaner)
+        if (anime.picture) {
+          imageUrl = `https://cdn.anidb.net/images/main/${anime.picture.trim()}`;
+          try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_PARSED series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${anime.picture}`); } catch (e) {}
+        }
+        // Fallback to raw XML parsing if parsed field missing
+        else if (anime.raw) {
+          const raw = String(anime.raw);
+          const pictureMatch = raw.match(/<picture>([^<]+)<\/picture>/i) || raw.match(/<picname>([^<]+)<\/picname>/i) || raw.match(/<image>([^<]+)<\/image>/i);
+          if (pictureMatch && pictureMatch[1]) {
+            imageUrl = `https://cdn.anidb.net/images/main/${pictureMatch[1].trim()}`;
+            try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_RAW series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${pictureMatch[1]}`); } catch (e) {}
+          } else {
+            // Log XML sample when picture is missing
+            try { appendLog(`APPROVED_SERIES_ANIDB_NO_PICTURE_TAG series=${String(seriesName || '').slice(0,80)} aid=${aid} xml_sample=${raw.slice(0,200).replace(/\n/g, ' ')}`); } catch (e) {}
+          }
         }
         if (anime.description) summary = stripHtmlSummary(decodeHtmlEntities(anime.description));
       }
@@ -8822,7 +8931,19 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
     }
 
     if (!imageUrl) {
-      try { appendLog(`APPROVED_SERIES_ANIDB_NO_IMAGE series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
+      try { appendLog(`APPROVED_SERIES_ANIDB_NO_IMAGE series=${String(seriesName || '').slice(0,80)} aid=${aid} trying_anilist_fallback=true`); } catch (e) {}
+      
+      // AniDB doesn't have image - try AniList as fallback (Jellyfin strategy)
+      const anilistResult = await fetchAniListSeriesArtworkByNameAndAniDbId(seriesName, aid);
+      if (anilistResult && anilistResult.imageUrl) {
+        try { appendLog(`APPROVED_SERIES_ANIDB_FALLBACK_SUCCESS series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
+        return {
+          ...anilistResult,
+          provider: 'anilist-fallback-from-anidb'
+        };
+      }
+      
+      try { appendLog(`APPROVED_SERIES_ANIDB_FALLBACK_FAILED series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
       return null;
     }
     try { appendLog(`APPROVED_SERIES_ANIDB_FETCH_OK series=${String(seriesName || '').slice(0,80)} aid=${aid} imageUrl=${imageUrl.slice(0,100)}`); } catch (e) {}
