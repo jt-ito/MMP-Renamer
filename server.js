@@ -8907,34 +8907,22 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
       );
       const anime = await client.getAnimeInfo(aid);
       
-      let pictureFilename = null;
-      
       if (anime) {
-        // Try parsed picture field first
-        if (anime.picture) {
-          pictureFilename = anime.picture.trim();
-          try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_FROM_XML series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${pictureFilename}`); } catch (e) {}
-        }
-        
-        // If no picture in XML, try scraping the website
-        if (!pictureFilename) {
-          try { appendLog(`APPROVED_SERIES_ANIDB_NO_XML_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aid} trying_web_scrape=true`); } catch (e) {}
-          pictureFilename = await client.scrapePictureFromWeb(aid);
-          if (pictureFilename) {
-            try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_FROM_WEB series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${pictureFilename}`); } catch (e) {}
-          }
-        }
-        
-        // Construct image URL from picture filename
-        if (pictureFilename) {
-          // Clean the filename - remove any URL prefix if present
-          const cleanFilename = pictureFilename.replace(/^.*\/images\/main\//, '');
-          // Try both CDN endpoints
+        // AniDB HTTP API returns a picture filename (like "12345.jpg")
+        // We construct the full CDN URL from it
+        if (anime.picture && anime.picture.trim()) {
+          const cleanFilename = anime.picture.trim();
           imageUrl = `https://cdn.anidb.net/images/main/${cleanFilename}`;
-          try { appendLog(`APPROVED_SERIES_ANIDB_IMAGE_URL series=${String(seriesName || '').slice(0,80)} aid=${aid} url=${imageUrl.slice(0,120)}`); } catch (e) {}
+          try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_OK series=${String(seriesName || '').slice(0,80)} aid=${aid} restricted=${!!anime.restricted} picture=${cleanFilename}`); } catch (e) {}
+        } else {
+          // No picture in API response - common for adult/restricted content
+          const reason = anime.restricted ? 'restricted_content' : 'no_picture_in_api';
+          try { appendLog(`APPROVED_SERIES_ANIDB_NO_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aid} restricted=${!!anime.restricted} reason=${reason}`); } catch (e) {}
         }
         
-        if (anime.description) summary = stripHtmlSummary(decodeHtmlEntities(anime.description));
+        if (anime.description) {
+          summary = stripHtmlSummary(decodeHtmlEntities(anime.description));
+        }
       }
     } catch (e) {
       try { appendLog(`APPROVED_SERIES_ANIDB_CLIENT_ERR series=${String(seriesName || '').slice(0,80)} aid=${aid} err=${e.message}`); } catch (ee) {}
