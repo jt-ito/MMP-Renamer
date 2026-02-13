@@ -3328,6 +3328,8 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     || normalizeManualValue(values.anidbEpisode) !== normalizeManualValue(initialValues.anidbEpisode)
   )
 
+  // Memoize aliasTitles to prevent useEffect re-running on every render
+  // Stable stringified version of aliasTitles to prevent re-renders from array reference changes
   useEffect(() => {
     let active = true
     if (!isOpen || !title) {
@@ -3373,6 +3375,9 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       setInitialValues(cachedValues)
     }
 
+    // Mark as loaded BEFORE async call to prevent race condition where user types
+    // while API call is in flight, then API response overwrites their input
+    loadedForRef.current = cacheKey
     setLoading(true)
     ;(async () => {
       try {
