@@ -14,9 +14,9 @@ What it does:
 [CmdletBinding()]
 param(
   [int]$Port = 5173,
-  [switch]$NewWindow = $true,
-  [switch]$KillExisting = $true,
-  [switch]$SkipInstall = $false
+  [bool]$NewWindow = $true,
+  [bool]$KillExisting = $true,
+  [switch]$SkipInstall
 )
 
 try {
@@ -33,14 +33,14 @@ if (-not (Test-Path (Join-Path $Root 'data'))) {
   New-Item -ItemType Directory -Path (Join-Path $Root 'data') | Out-Null
 }
 
-function Get-PidOnPort($p) {
+function Get-ProcessIdOnPort($PortNumber) {
   try {
-    $c = Get-NetTCPConnection -LocalPort $p -ErrorAction SilentlyContinue
+    $c = Get-NetTCPConnection -LocalPort $PortNumber -ErrorAction SilentlyContinue
     if ($c) { return $c.OwningProcess }
   } catch {}
   # fallback: parse netstat output
   try {
-    $line = netstat -ano | Select-String ":$p " | Select-Object -First 1
+    $line = netstat -ano | Select-String ":$PortNumber " | Select-Object -First 1
     if ($line) {
       $parts = ($line -split '\s+') | Where-Object { $_ -ne '' }
       return $parts[-1]
@@ -50,10 +50,10 @@ function Get-PidOnPort($p) {
 }
 
 if ($KillExisting) {
-  $pid = Get-PidOnPort $Port
-  if ($pid) {
-    Write-Host "Killing process on port $Port (PID $pid)"
-    try { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 } catch { }
+  $listenerProcess = Get-ProcessIdOnPort $Port
+  if ($listenerProcess) {
+    Write-Host "Killing process on port $Port (PID $listenerProcess)"
+    try { Stop-Process -Id $listenerProcess -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 } catch { }
   }
 }
 

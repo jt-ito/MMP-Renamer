@@ -1057,6 +1057,16 @@ function normalizeEnrichEntry(entry) {
     out.parsedName = out.parsedName || (out.parsed && out.parsed.parsedName) || null;
     out.season = (typeof out.season !== 'undefined' && out.season !== null) ? out.season : (out.parsed && typeof out.parsed.season !== 'undefined' ? out.parsed.season : null);
     out.episode = (typeof out.episode !== 'undefined' && out.episode !== null) ? out.episode : (out.parsed && typeof out.parsed.episode !== 'undefined' ? out.parsed.episode : null);
+    try {
+      const providerRaw = out.provider && out.provider.raw && typeof out.provider.raw === 'object' ? out.provider.raw : null;
+      const mediaType = providerRaw ? (providerRaw.media_type || providerRaw.mediaType || null) : null;
+      if (!out.mediaFormat && mediaType) out.mediaFormat = String(mediaType);
+      if (typeof out.isMovie !== 'boolean' && mediaType) {
+        const mediaTypeNorm = String(mediaType).toLowerCase();
+        if (mediaTypeNorm.includes('movie') || mediaTypeNorm === 'film') out.isMovie = true;
+        else if (mediaTypeNorm.includes('tv') || mediaTypeNorm.includes('series') || mediaTypeNorm.includes('show')) out.isMovie = false;
+      }
+    } catch (e) { /* ignore media_type normalization errors */ }
     out.timestamp = out.timestamp || Date.now();
     const normalizedFailure = normalizeProviderFailure(entry.providerFailure);
     out.providerFailure = normalizedFailure;
@@ -1399,10 +1409,10 @@ async function fetchTmdbById(id, apiKey, season, episode) {
     const epPath = `/3/tv/${encodeURIComponent(tmdbId)}/season/${encodeURIComponent(season)}/episode/${encodeURIComponent(episode)}?api_key=${encodeURIComponent(apiKey)}&language=en-US`;
     const epRes = await httpRequest({ hostname: 'api.themoviedb.org', path: epPath, method: 'GET', headers: baseHeaders }, null, 8000);
     const epParsed = epRes && epRes.statusCode === 200 ? safeJsonParse(epRes.body) : null;
-    if (epParsed && epParsed.name) episodePayload = { name: epParsed.name, raw: epParsed };
+    if (epParsed && epParsed.name) episodePayload = { name: epParsed.name, source: 'tmdb', media_type: 'tv', raw: epParsed };
   }
 
-  const raw = Object.assign({}, parsed, { id: tmdbId, source: 'tmdb' });
+  const raw = Object.assign({}, parsed, { id: tmdbId, source: 'tmdb', media_type: isMovie ? 'movie' : 'tv' });
   return { id: tmdbId, name, year, raw, episode: episodePayload };
 }
 
@@ -3359,20 +3369,35 @@ async function metaLookup(title, apiKey, opts = {}) {
   async function attemptTmdb(baseResult = null) {
     if (!allowTmdb || !apiKey) return null
 
+    const inferTmdbMediaType = (rawObj, hasEpisodeContext) => {
+      try {
+        if (rawObj && (rawObj.media_type || rawObj.mediaType)) return String(rawObj.media_type || rawObj.mediaType).toLowerCase()
+        if (rawObj && rawObj.release_date && !rawObj.first_air_date) return 'movie'
+        if (rawObj && (rawObj.first_air_date || rawObj.number_of_episodes || rawObj.episode_run_time)) return 'tv'
+        return hasEpisodeContext ? 'tv' : 'movie'
+      } catch (e) {
+        return hasEpisodeContext ? 'tv' : 'movie'
+      }
+    }
+
     if (manualTmdbId) {
       try { appendLog(`MANUAL_ID_TMDB_FETCH id=${manualTmdbId} title=${title}`) } catch (e) {}
       const t = await fetchTmdbById(manualTmdbId, apiKey, opts && opts.season, opts && opts.episode)
       if (t) {
         const episodePayload = t.episode || null
-        const providerRaw = Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' })
+        const hasEpisodeContext = (opts && opts.season != null && opts && opts.episode != null)
+        const mediaType = inferTmdbMediaType(t.raw, hasEpisodeContext)
+        const providerRaw = Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb', media_type: mediaType })
         if (baseResult) {
           const merged = Object.assign({}, baseResult, { episode: episodePayload })
           if (merged.raw && typeof merged.raw === 'object') {
-            try { merged.raw.tmdb = { id: t.id, name: t.name } } catch (e) {}
+            try { merged.raw.tmdb = { id: t.id, name: t.name, media_type: mediaType } } catch (e) {}
           }
           try { merged.tmdb = Object.assign({}, t, { raw: providerRaw }) } catch (e) {}
+          try { appendLog(`TMDB_MEDIA_TYPE_RESOLVED path=manual id=${t.id} media_type=${mediaType}`) } catch (e) {}
           return merged
         }
+        try { appendLog(`TMDB_MEDIA_TYPE_RESOLVED path=manual id=${t.id} media_type=${mediaType}`) } catch (e) {}
         return { provider: 'tmdb', id: t.id, name: t.name, raw: providerRaw, episode: episodePayload }
       }
     }
@@ -3397,13 +3422,16 @@ async function metaLookup(title, apiKey, opts = {}) {
         }
       } catch (e) { /* ignore wiki lookup errors and fall back to TMDb episode */ }
 
-      const providerRaw = Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb' })
+      const hasEpisodeContext = (opts && opts.season != null && opts && opts.episode != null)
+      const mediaType = inferTmdbMediaType(t.raw, hasEpisodeContext)
+      const providerRaw = Object.assign({}, t.raw || {}, { id: t.id, source: 'tmdb', media_type: mediaType })
       if (baseResult) {
         const merged = Object.assign({}, baseResult, { episode: episodePayload })
         if (merged.raw && typeof merged.raw === 'object') {
-          try { merged.raw.tmdb = { id: t.id, name: t.name } } catch (e) {}
+          try { merged.raw.tmdb = { id: t.id, name: t.name, media_type: mediaType } } catch (e) {}
         }
         try { merged.tmdb = Object.assign({}, t, { raw: providerRaw }) } catch (e) {}
+        try { appendLog(`TMDB_MEDIA_TYPE_RESOLVED path=lookup id=${t.id} media_type=${mediaType}`) } catch (e) {}
         // If we merged TMDb into an AniList base result, capture a fallback year
         try {
           if (merged.raw && !merged.raw._fallbackProviderYear) {
@@ -3426,7 +3454,8 @@ async function metaLookup(title, apiKey, opts = {}) {
           }
         }
       } catch (e) {}
-      return { name: t.name, raw: providerRaw, episode: episodePayload, tmdb: Object.assign({}, t, { raw: providerRaw }) }
+      try { appendLog(`TMDB_MEDIA_TYPE_RESOLVED path=lookup id=${t.id} media_type=${mediaType}`) } catch (e) {}
+      return { provider: 'tmdb', id: t.id, name: t.name, raw: providerRaw, episode: episodePayload, tmdb: Object.assign({}, t, { raw: providerRaw }) }
     }
 
     for (let i = 0; i < Math.min(variants.length, 3); i++) {
@@ -6494,30 +6523,58 @@ app.get('/api/enrich/hide-events', requireAuth, (req, res) => {
 // Creates format: "Title (Year) - S01E08 - Episode Title"
 function renderProviderName(data, fromPath, session) {
   try {
-    if (!data || !data.title) return null;
-    
+    if (!data) return null;
+
+    const userTemplate = (session && session.username && users[session.username] && users[session.username].settings && users[session.username].settings.rename_template)
+      ? users[session.username].settings.rename_template
+      : null;
+    const baseNameTemplate = userTemplate || serverSettings.rename_template || '{title} ({year}) - {epLabel} - {episodeTitle}';
+
     function pad(n) { return String(n).padStart(2, '0'); }
-    
-    const title = String(data.title).trim();
-    const year = data.year ? ` (${data.year})` : '';
-    
+
+    const mediaFormat = data && data.mediaFormat ? String(data.mediaFormat).toUpperCase() : '';
+    const rawSource = data && data.source ? String(data.source).toLowerCase() : '';
+    const looksLikeTmdbMovie = !!(data && data.raw && data.raw.title && !data.raw.name);
+    const isMovie = data.isMovie === true || mediaFormat.includes('MOVIE') || mediaFormat === 'FILM' || looksLikeTmdbMovie || rawSource === 'tmdb-movie';
+
+    let rawTitle = isMovie
+      ? (data.title || data.seriesTitleEnglish || data.seriesTitle || '')
+      : (data.seriesTitleEnglish || data.title || '');
+    rawTitle = String(rawTitle || '').trim();
+    if (!rawTitle) return null;
+
+    let templateYear = data && data.year ? String(data.year).trim() : '';
+    if (!templateYear && data && data.parsed && data.parsed.year) templateYear = String(data.parsed.year).trim();
+
     let epLabel = '';
-    if (data.episode != null) {
-      if (data.season != null) {
-        epLabel = `S${pad(data.season)}E${pad(data.episode)}`;
-      } else {
-        epLabel = `E${pad(data.episode)}`;
-      }
+    let episodeTitle = '';
+    if (!isMovie) {
+      if (data.episodeRange) epLabel = data.season != null ? `S${pad(data.season)}E${data.episodeRange}` : `E${data.episodeRange}`;
+      else if (data.episode != null) epLabel = data.season != null ? `S${pad(data.season)}E${pad(data.episode)}` : `E${pad(data.episode)}`;
+      episodeTitle = data.episodeTitle ? String(data.episodeTitle).trim() : '';
     }
-    
-    const episodeTitle = data.episodeTitle ? String(data.episodeTitle).trim() : '';
-    
-    // Construct: Title (Year) - S01E08 - Episode Title
-    let rendered = title + year;
-    if (epLabel) rendered += ' - ' + epLabel;
-    if (episodeTitle) rendered += ' - ' + episodeTitle;
-    
-    return rendered;
+
+    const titleToken = isMovie ? rawTitle : cleanTitleForRender(rawTitle, epLabel, episodeTitle);
+
+    let rendered = String(baseNameTemplate)
+      .replace('{title}', sanitize(titleToken))
+      .replace('{basename}', sanitize(path.basename(fromPath || '', path.extname(fromPath || ''))))
+      .replace('{year}', sanitize(templateYear || ''))
+      .replace('{epLabel}', sanitize(epLabel || ''))
+      .replace('{episodeTitle}', sanitize(episodeTitle || ''))
+      .replace('{season}', data.season != null ? String(data.season) : '')
+      .replace('{episode}', data.episode != null ? String(data.episode) : '')
+      .replace('{episodeRange}', data.episodeRange || '');
+
+    rendered = String(rendered)
+      .replace(/\s*\(\s*\)\s*/g, '')
+      .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
+      .replace(/(^\s*\-\s*)|(\s*\-\s*$)/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+
+    rendered = ensureRenderedNameHasYear(rendered, templateYear || '');
+    return rendered || null;
   } catch (e) {
     console.error('[renderProviderName] Error:', e);
     return null;
