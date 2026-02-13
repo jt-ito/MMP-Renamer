@@ -214,6 +214,23 @@ let users = {};
 try { ensureFile(settingsFile, {}); serverSettings = JSON.parse(fs.readFileSync(settingsFile, 'utf8') || '{}') } catch (e) { serverSettings = {} }
 try { ensureFile(usersFile, { admin: { username: 'admin', role: 'admin', passwordHash: null, settings: {} } }); users = JSON.parse(fs.readFileSync(usersFile, 'utf8') || '{}') } catch (e) { users = {} }
 
+// Log approved series source preferences on startup
+try {
+  for (const username of Object.keys(users || {})) {
+    const prefs = users[username] && users[username].settings && users[username].settings.approved_series_image_source_by_output;
+    if (prefs && typeof prefs === 'object') {
+      const keys = Object.keys(prefs);
+      if (keys.length > 0) {
+        for (const key of keys) {
+          appendLog(`STARTUP_APPROVED_SERIES_SOURCE_PREF user=${username} key=${key.slice(0,80)} source=${prefs[key]}`);
+        }
+      }
+    }
+  }
+} catch (e) {
+  appendLog(`STARTUP_APPROVED_SERIES_PREF_LOG_FAIL err=${e.message}`);
+}
+
 // Load manual provider ID overrides
 let manualIds = {};
 function normalizeManualIdKey(value) {
@@ -5793,6 +5810,27 @@ app.get('/api/debug/session', requireAuth, (req, res) => {
     return res.status(500).json({ error: e && e.message ? e.message : String(e) });
   }
 });
+// Logs endpoint for UI debugging
+app.get('/api/logs/recent', requireAuth, (req, res) => {
+  try {
+    const lines = req.query && req.query.lines ? parseInt(req.query.lines, 10) : 500;
+    const filter = req.query && req.query.filter ? String(req.query.filter).toLowerCase() : '';
+    if (!fs.existsSync(logsFile)) {
+      return res.json({ logs: '', lines: 0 });
+    }
+    const content = fs.readFileSync(logsFile, 'utf8');
+    const allLines = content.split('\n').filter(Boolean);
+    let filtered = allLines;
+    if (filter) {
+      filtered = allLines.filter(line => line.toLowerCase().includes(filter));
+    }
+    const recent = filtered.slice(-lines).reverse().join('\n');
+    return res.json({ logs: recent, lines: filtered.length, total: allLines.length });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // Simple login endpoint used by the web client. Sets req.session.username on success.
 app.post('/api/login', (req, res) => {
   try {
@@ -8416,20 +8454,32 @@ function normalizeApprovedSeriesSourceKey(value) {
 
 function resolveApprovedSeriesSourcePreference(sourcePrefs, outputKey) {
   try {
-    if (!sourcePrefs || typeof sourcePrefs !== 'object') return { source: 'anilist', configured: false };
+    if (!sourcePrefs || typeof sourcePrefs !== 'object') {
+      return { source: 'anilist', configured: false };
+    }
     const normalized = normalizeApprovedSeriesSourceKey(outputKey);
-    if (!normalized) return { source: 'anilist', configured: false };
+    if (!normalized) {
+      return { source: 'anilist', configured: false };
+    }
     const saved = sourcePrefs[normalized];
     if (saved) {
-      return { source: normalizeApprovedSeriesSource(saved), configured: true };
+      const resolvedSource = normalizeApprovedSeriesSource(saved);
+      try { appendLog(`APPROVED_SERIES_SOURCE_RESOLVED key=${normalized.slice(0,80)} source=${resolvedSource}`); } catch (e) {}
+      return { source: resolvedSource, configured: true };
     }
-  } catch (e) { /* ignore */ }
+    try { appendLog(`APPROVED_SERIES_SOURCE_DEFAULT key=${normalized.slice(0,80)} reason=not_configured`); } catch (e) {}
+  } catch (e) {
+    try { appendLog(`APPROVED_SERIES_SOURCE_RESOLVE_ERR key=${outputKey} err=${e.message}`); } catch (ee) {}
+  }
   return { source: 'anilist', configured: false };
 }
 
 function setApprovedSeriesSourcePreference(username, outputKey, source) {
   try {
-    if (!username) return false;
+    if (!username) {
+      try { appendLog(`APPROVED_SERIES_SOURCE_SAVE_FAIL reason=no_username source=${source}`); } catch (e) {}
+      return false;
+    }
     users[username] = users[username] || { username, role: 'admin', passwordHash: null, settings: {} };
     users[username].settings = users[username].settings || {};
     const map = users[username].settings.approved_series_image_source_by_output && typeof users[username].settings.approved_series_image_source_by_output === 'object'
@@ -8437,11 +8487,15 @@ function setApprovedSeriesSourcePreference(username, outputKey, source) {
       : {};
     const normalizedSource = normalizeApprovedSeriesSource(source);
     const normalizedKey = normalizeApprovedSeriesSourceKey(outputKey);
-    if (!normalizedKey) return false;
+    if (!normalizedKey) {
+      try { appendLog(`APPROVED_SERIES_SOURCE_SAVE_FAIL user=${username} reason=invalid_key source=${normalizedSource}`); } catch (e) {}
+      return false;
+    }
+    const oldSource = map[normalizedKey] || null;
     map[normalizedKey] = normalizedSource;
     users[username].settings.approved_series_image_source_by_output = map;
     writeJson(usersFile, users);
-    try { appendLog(`APPROVED_SERIES_SOURCE_SAVED user=${username} key=${normalizedKey.slice(0,80)} source=${normalizedSource}`); } catch (e) {}
+    try { appendLog(`APPROVED_SERIES_SOURCE_SAVED user=${username} key=${normalizedKey.slice(0,80)} old=${oldSource||'none'} new=${normalizedSource}`); } catch (e) {}
     return true;
   } catch (e) { 
     try { appendLog(`APPROVED_SERIES_SOURCE_SAVE_FAIL user=${username} err=${e.message}`); } catch (ee) {}
@@ -8827,32 +8881,50 @@ async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, s
   const normalizedOutputKey = normalizeOutputKey(outputKey);
   const cleanSeriesName = String(seriesName || '').trim();
   const seriesKey = cleanSeriesName ? (normalizeForCache(cleanSeriesName) || cleanSeriesName.toLowerCase()) : '';
-  if (!normalizedOutputKey) return { ok: false, error: 'outputKey is required' };
-  if (!cleanSeriesName || !seriesKey) return { ok: false, error: 'seriesName is required' };
-  if (!['anilist', 'tmdb', 'anidb'].includes(selectedSource)) return { ok: false, error: 'invalid source' };
+  if (!normalizedOutputKey) {
+    try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_FAIL reason=no_output_key series=${cleanSeriesName.slice(0,80)}`); } catch (e) {}
+    return { ok: false, error: 'outputKey is required' };
+  }
+  if (!cleanSeriesName || !seriesKey) {
+    try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_FAIL reason=no_series_name output=${normalizedOutputKey.slice(0,80)}`); } catch (e) {}
+    return { ok: false, error: 'seriesName is required' };
+  }
+  if (!['anilist', 'tmdb', 'anidb'].includes(selectedSource)) {
+    try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_FAIL reason=invalid_source source=${selectedSource} series=${cleanSeriesName.slice(0,80)}`); } catch (e) {}
+    return { ok: false, error: 'invalid source' };
+  }
 
   const cacheKey = `${normalizedOutputKey}::${seriesKey}`;
   const existing = approvedSeriesImages && approvedSeriesImages[cacheKey] ? approvedSeriesImages[cacheKey] : null;
   if (existing && existing.imageUrl && existing.provider === selectedSource) {
+    try { appendLog(`APPROVED_SERIES_IMAGE_CACHE_HIT series=${cleanSeriesName.slice(0,80)} source=${selectedSource}`); } catch (e) {}
     return { ok: true, cached: true, fetched: false, source: selectedSource };
+  }
+  if (existing && existing.provider !== selectedSource) {
+    try { appendLog(`APPROVED_SERIES_IMAGE_CACHE_PROVIDER_MISMATCH series=${cleanSeriesName.slice(0,80)} cached=${existing.provider} requested=${selectedSource}`); } catch (e) {}
   }
 
   const lockKey = `${username || 'anon'}::${normalizedOutputKey}::${seriesKey}`;
   const now = Date.now();
   const lockInfo = approvedSeriesImageFetchLocks.get(lockKey) || null;
   if (lockInfo && lockInfo.inFlight) {
+    try { appendLog(`APPROVED_SERIES_IMAGE_SKIP series=${cleanSeriesName.slice(0,80)} reason=in_flight source=${selectedSource}`); } catch (e) {}
     return { ok: true, skipped: true, fetched: false, reason: 'in-flight', source: selectedSource };
   }
   if (allowCooldown && lockInfo && lockInfo.lastFetchedAt && (now - lockInfo.lastFetchedAt) < APPROVED_SERIES_FETCH_COOLDOWN_MS) {
+    const remainingMs = APPROVED_SERIES_FETCH_COOLDOWN_MS - (now - lockInfo.lastFetchedAt);
+    try { appendLog(`APPROVED_SERIES_IMAGE_SKIP series=${cleanSeriesName.slice(0,80)} reason=cooldown remaining_ms=${remainingMs} source=${selectedSource}`); } catch (e) {}
     return { ok: true, skipped: true, fetched: false, reason: 'cooldown', source: selectedSource };
   }
 
+  try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_START series=${cleanSeriesName.slice(0,80)} source=${selectedSource} output=${normalizedOutputKey.slice(0,80)}`); } catch (e) {}
   approvedSeriesImageFetchLocks.set(lockKey, { inFlight: true, lastFetchedAt: lockInfo && lockInfo.lastFetchedAt ? lockInfo.lastFetchedAt : 0 });
   try {
     const lookedUp = await fetchApprovedSeriesArtwork({ username, outputKey: normalizedOutputKey, source: selectedSource, seriesName: cleanSeriesName });
     approvedSeriesImageFetchLocks.set(lockKey, { inFlight: false, lastFetchedAt: Date.now() });
 
     if (!lookedUp || !lookedUp.imageUrl) {
+      try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_NO_IMAGE series=${cleanSeriesName.slice(0,80)} source=${selectedSource}`); } catch (e) {}
       return { ok: true, fetched: false, skipped: true, source: selectedSource, reason: 'no-image' };
     }
 
@@ -8864,9 +8936,11 @@ async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, s
       fetchedAt: lookedUp.fetchedAt || Date.now()
     };
     try { writeJson(approvedSeriesImagesFile, approvedSeriesImages); } catch (e) {}
+    try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_SUCCESS series=${cleanSeriesName.slice(0,80)} source=${selectedSource} imageUrl=${lookedUp.imageUrl.slice(0,100)}`); } catch (e) {}
     return { ok: true, fetched: true, source: selectedSource };
   } catch (err) {
     approvedSeriesImageFetchLocks.set(lockKey, { inFlight: false, lastFetchedAt: Date.now() });
+    try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_EXCEPTION series=${cleanSeriesName.slice(0,80)} source=${selectedSource} err=${err.message}`); } catch (e) {}
     throw err;
   }
 }

@@ -11,10 +11,13 @@ export default function ApprovedSeries({ pushToast }) {
   const [clearingCache, setClearingCache] = useState({})
   const [autoFetching, setAutoFetching] = useState({})
   const [sourcePromptOutput, setSourcePromptOutput] = useState(null)
+  const [showLogs, setShowLogs] = useState(false)
+  const [logs, setLogs] = useState('')
   const observedRef = useRef(new Set())
   const queuedRef = useRef(new Set())
   const inFlightRef = useRef(new Set())
   const queueTimerRef = useRef(null)
+  const logsTimerRef = useRef(null)
 
   const AUTO_FETCH_INTERVAL_MS = 1200
 
@@ -140,11 +143,42 @@ export default function ApprovedSeries({ pushToast }) {
     }, AUTO_FETCH_INTERVAL_MS)
   }
 
+  const fetchLogs = async () => {
+    try {
+      const r = await axios.get(API('/logs/recent?lines=300&filter=approved_series'))
+      setLogs(r.data.logs || '')
+    } catch (e) {
+      // silent
+    }
+  }
+
+  useEffect(() => {
+    if (showLogs) {
+      fetchLogs()
+      logsTimerRef.current = setInterval(fetchLogs, 2000)
+    } else {
+      if (logsTimerRef.current) {
+        clearInterval(logsTimerRef.current)
+        logsTimerRef.current = null
+      }
+    }
+    return () => {
+      if (logsTimerRef.current) {
+        clearInterval(logsTimerRef.current)
+        logsTimerRef.current = null
+      }
+    }
+  }, [showLogs])
+
   useEffect(() => {
     return () => {
       if (queueTimerRef.current) {
         clearInterval(queueTimerRef.current)
         queueTimerRef.current = null
+      }
+      if (logsTimerRef.current) {
+        clearInterval(logsTimerRef.current)
+        logsTimerRef.current = null
       }
     }
   }, [])
@@ -200,8 +234,21 @@ export default function ApprovedSeries({ pushToast }) {
             <h2>Approved Series</h2>
             <p className="small-muted">Browse approved series by output folder and cache artwork/summary metadata.</p>
           </div>
-          <button className="btn-ghost" onClick={load}>Refresh</button>
+          <div style={{display:'flex',gap:8}}>
+            <button className="btn-ghost" onClick={() => setShowLogs(!showLogs)}>{showLogs ? 'Hide Logs' : 'Show Logs'}</button>
+            <button className="btn-ghost" onClick={load}>Refresh</button>
+          </div>
         </div>
+
+        {showLogs && (
+          <div style={{marginBottom:16,padding:12,background:'var(--card-bg)',border:'1px solid var(--border)',borderRadius:4,maxHeight:300,overflow:'auto'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <strong style={{fontSize:14}}>Approved Series Logs</strong>
+              <button className="btn-ghost" onClick={fetchLogs} style={{padding:'4px 8px',fontSize:12}}>Refresh</button>
+            </div>
+            <pre style={{margin:0,fontSize:11,fontFamily:'monospace',whiteSpace:'pre-wrap',wordBreak:'break-all',color:'var(--text)'}}>{logs || 'No logs yet'}</pre>
+          </div>
+        )}
 
         {!outputs.length ? (
           <p className="small-muted">No approved series found yet.</p>
