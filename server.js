@@ -6773,18 +6773,30 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     } else if (meta && meta.episode != null) {
       epLabel = meta.season != null ? `S${pad(meta.season)}E${pad(meta.episode)}` : `E${pad(meta.episode)}`
     }
-  const episodeTitleToken = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '';
+  let episodeTitleToken = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '';
 
   // Support extra template tokens: {season}, {episode}, {episodeRange}, {tmdbId}
-  const seasonToken = (meta && meta.season != null) ? String(meta.season) : '';
-  const episodeToken = (meta && meta.episode != null) ? String(meta.episode) : '';
-  const episodeRangeToken = (meta && meta.episodeRange) ? String(meta.episodeRange) : '';
+  let seasonToken = (meta && meta.season != null) ? String(meta.season) : '';
+  let episodeToken = (meta && meta.episode != null) ? String(meta.episode) : '';
+  let episodeRangeToken = (meta && meta.episodeRange) ? String(meta.episodeRange) : '';
   const tmdbIdToken = (meta && meta.tmdb && meta.tmdb.raw && (meta.tmdb.raw.id || meta.tmdb.raw.seriesId)) ? String(meta.tmdb.raw.id || meta.tmdb.raw.seriesId) : '';
+  const isMovie = determineIsMovie(meta);
+  if (isMovie === true) {
+    epLabel = '';
+    episodeTitleToken = '';
+    seasonToken = '';
+    episodeToken = '';
+    episodeRangeToken = '';
+  }
 
-  const episodeTitleTokenFromMeta = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '';
+  const episodeTitleTokenFromMeta = (isMovie === true)
+    ? ''
+    : ((meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '');
   const resolvedSeriesTitle = resolveSeriesTitle(meta, rawTitle, fromPath, episodeTitleTokenFromMeta, { preferExact: true });
   const englishSeriesTitle = extractEnglishSeriesTitle(meta);
-  const renderBaseTitle = englishSeriesTitle || resolvedSeriesTitle || rawTitle;
+  const renderBaseTitle = (isMovie === true)
+    ? (resolvedSeriesTitle || rawTitle)
+    : (englishSeriesTitle || resolvedSeriesTitle || rawTitle);
   
   // Helper function to clean up title for rendering - strips episode artifacts but preserves full series title including subtitles
   function cleanTitleForRender(baseTitle, epLabel, epTitle) {
@@ -6815,7 +6827,6 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   }
   
   const title = cleanTitleForRender(renderBaseTitle, episodeForTitle, episodeTitleTokenFromMeta);
-  const isMovie = determineIsMovie(meta);
   const templateYear = year ? String(year) : '';
   const folderYear = (isMovie === true && templateYear) ? templateYear : '';
   const folderBaseTitle = renderBaseTitle || title;
@@ -6908,7 +6919,7 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
     // have episode metadata, prefer the template rendering so each episode gets
     // a unique filename.
     try {
-      const hasEpisodeMeta = (meta && (meta.episode != null || meta.episodeRange));
+      const hasEpisodeMeta = (isMovie !== true) && (meta && (meta.episode != null || meta.episodeRange));
       const providerLower = String(providerName || '').toLowerCase();
       const epLabelPresent = epLabel && providerLower.indexOf(String(epLabel).toLowerCase()) !== -1;
       const epTitlePresent = episodeTitleToken && providerLower.indexOf(String(episodeTitleToken).toLowerCase()) !== -1;
