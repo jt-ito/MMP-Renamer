@@ -3308,6 +3308,8 @@ function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pu
   const [values, setValues] = useState(EMPTY_MANUAL_VALUES)
   const [initialValues, setInitialValues] = useState(EMPTY_MANUAL_VALUES)
   const [loading, setLoading] = useState(false)
+  const loadedForTitleRef = useRef(null)
+  const hasUnsavedChangesRef = useRef(false)
 
   const normalizeKey = (value) => {
     try { return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ') } catch (e) { return String(value || '').trim().toLowerCase() }
@@ -3317,9 +3319,30 @@ function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pu
     try { return String(value || '').trim() } catch (e) { return String(value || '') }
   }
 
+  // Track unsaved changes
+  hasUnsavedChangesRef.current = (
+    normalizeManualValue(values.anilist) !== normalizeManualValue(initialValues.anilist)
+    || normalizeManualValue(values.tmdb) !== normalizeManualValue(initialValues.tmdb)
+    || normalizeManualValue(values.tvdb) !== normalizeManualValue(initialValues.tvdb)
+    || normalizeManualValue(values.anidbEpisode) !== normalizeManualValue(initialValues.anidbEpisode)
+  )
+
   useEffect(() => {
     let active = true
-    if (!isOpen || !title) return undefined
+    if (!isOpen || !title) {
+      // Reset when panel closes
+      if (!isOpen) loadedForTitleRef.current = null
+      return undefined
+    }
+    
+    // Skip reload if we already loaded data for this title, unless the user has no unsaved changes
+    // This prevents clearing inputs during typing when title/aliasTitles props change
+    const titleKey = normalizeKey(title)
+    if (loadedForTitleRef.current === titleKey && hasUnsavedChangesRef.current) {
+      console.log('[ManualIdInputs] Skipping reload - already loaded for this title with unsaved changes')
+      return undefined
+    }
+
     setLoading(true)
     ;(async () => {
       try {
@@ -3345,10 +3368,12 @@ function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pu
         }
         setValues(nextLoadedValues)
         setInitialValues(nextLoadedValues)
+        loadedForTitleRef.current = titleKey
       } catch (e) {
         if (active) {
           setValues(EMPTY_MANUAL_VALUES)
           setInitialValues(EMPTY_MANUAL_VALUES)
+          loadedForTitleRef.current = titleKey
         }
       } finally {
         if (active) setLoading(false)
@@ -3397,7 +3422,10 @@ function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pu
         anidbEpisode: nextPayload.anidbEpisode || ''
       })
       pushToast && pushToast('Manual IDs', 'Saved manual provider IDs')
-      onSaved && onSaved()
+      // Reset loaded ref so next open can reload if needed
+      loadedForTitleRef.current = null
+      // Trigger callback to force rescan with new manual IDs
+      if (onSaved) await onSaved()
       onToggle && onToggle(false)
     } catch (e) {
       const msg = e && e.response && e.response.data && e.response.data.error ? e.response.data.error : 'Failed to save manual IDs'
@@ -4045,7 +4073,17 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
             aliasTitles={manualIdAliasTitles}
             isOpen={isManualOpen}
             onToggle={toggleManualOpen}
-            onSaved={() => setManualIdsTick(t => t + 1)}
+            onSaved={async () => {
+              setManualIdsTick(t => t + 1)
+              // Force rescan to apply new manual IDs immediately (clears cache)
+              if (it && enrichOne) {
+                try {
+                  await enrichOne(it, true)
+                } catch (e) {
+                  console.error('[ManualIdInputs] Force rescan after save failed:', e)
+                }
+              }
+            }}
             pushToast={pushToast}
           />
         </div>
