@@ -8208,6 +8208,18 @@ function normalizeApprovedSeriesSource(value) {
   return 'anilist';
 }
 
+function normalizeApprovedSeriesLookupTitle(value) {
+  try {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    return raw
+      .replace(/\s*\(\s*(19|20)\d{2}\s*\)\s*$/i, '')
+      .replace(/\s+(19|20)\d{2}\s*$/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  } catch (e) { return String(value || '').trim(); }
+}
+
 function getApprovedSeriesSourcePreferences(username) {
   try {
     if (!username || !users || !users[username]) return {};
@@ -8252,14 +8264,15 @@ function stripHtmlSummary(input) {
 
 async function fetchAniListSeriesArtwork(title) {
   try {
+    const lookupTitle = normalizeApprovedSeriesLookupTitle(title) || String(title || '').trim();
     const query = `query ($search: String) { Media(search: $search, type: ANIME) { id title { english romaji native } description(asHtml: false) coverImage { large medium color } bannerImage } }`;
-    const payload = JSON.stringify({ query, variables: { search: String(title || '').trim() } });
+    const payload = JSON.stringify({ query, variables: { search: lookupTitle } });
     const res = await httpRequest({ hostname: 'graphql.anilist.co', path: '/', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } }, payload, 8000);
     if (!res || res.statusCode !== 200) return null;
     const parsed = safeJsonParse(res.body);
     const media = parsed && parsed.data && parsed.data.Media ? parsed.data.Media : null;
     if (!media) return null;
-    const displayName = (media.title && (media.title.english || media.title.romaji || media.title.native)) || String(title || '').trim();
+    const displayName = (media.title && (media.title.english || media.title.romaji || media.title.native)) || lookupTitle;
     const imageUrl = (media.coverImage && (media.coverImage.large || media.coverImage.medium)) || media.bannerImage || null;
     const summary = stripHtmlSummary(media.description || '');
     return {
@@ -8300,8 +8313,11 @@ function getSeriesNameForApprovedEntry(entry, targetPath) {
 function findAniDbAidForApprovedSeries(outputKey, seriesName) {
   try {
     const normalizedOutputKey = normalizeOutputKey(outputKey);
-    const normalizedSeries = normalizeForCache(seriesName);
-    if (!normalizedOutputKey || !normalizedSeries) return null;
+    const normalizedSeriesCandidates = Array.from(new Set([
+      normalizeForCache(seriesName),
+      normalizeForCache(normalizeApprovedSeriesLookupTitle(seriesName))
+    ].filter(Boolean)));
+    if (!normalizedOutputKey || !normalizedSeriesCandidates.length) return null;
     let best = null;
 
     for (const cacheKey of Object.keys(enrichCache || {})) {
@@ -8315,7 +8331,8 @@ function findAniDbAidForApprovedSeries(outputKey, seriesName) {
         if (!bucketKey || bucketKey !== normalizedOutputKey) continue;
 
         const candidateName = getSeriesNameForApprovedEntry(entry, target);
-        if (normalizeForCache(candidateName) !== normalizedSeries) continue;
+        const normalizedCandidate = normalizeForCache(candidateName);
+        if (!normalizedCandidate || !normalizedSeriesCandidates.includes(normalizedCandidate)) continue;
 
         const providerRaw = (entry.provider && entry.provider.raw && typeof entry.provider.raw === 'object')
           ? entry.provider.raw
@@ -8541,6 +8558,7 @@ function buildApprovedSeriesPayload(username) {
         key,
         path: displayPath || key,
         source: normalizeApprovedSeriesSource((sourcePrefs && sourcePrefs[key]) ? String(sourcePrefs[key]) : 'anilist'),
+        sourceConfigured: !!(sourcePrefs && Object.prototype.hasOwnProperty.call(sourcePrefs, key)),
         seriesMap: new Map()
       });
     }
@@ -8614,6 +8632,7 @@ function buildApprovedSeriesPayload(username) {
         key: bucket.key,
         path: bucket.path,
         source: bucket.source || 'anilist',
+        sourceConfigured: !!bucket.sourceConfigured,
         seriesCount: series.length,
         series
       };
@@ -8701,6 +8720,31 @@ app.post('/api/approved-series/source', requireAuth, (req, res) => {
     const ok = setApprovedSeriesSourcePreference(username, outputKey, source);
     if (!ok) return res.status(500).json({ error: 'failed to save preference' });
     return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
+
+app.post('/api/approved-series/clear-cache', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const outputKey = normalizeOutputKey(req && req.body ? req.body.outputKey : '');
+    if (!outputKey) return res.status(400).json({ error: 'outputKey is required' });
+
+    let removed = 0;
+    for (const key of Object.keys(approvedSeriesImages || {})) {
+      if (!key || !key.startsWith(`${outputKey}::`)) continue;
+      delete approvedSeriesImages[key];
+      removed += 1;
+    }
+
+    for (const lockKey of Array.from(approvedSeriesImageFetchLocks.keys())) {
+      if (!lockKey || lockKey.indexOf(`::${outputKey}::`) === -1) continue;
+      approvedSeriesImageFetchLocks.delete(lockKey);
+    }
+
+    try { writeJson(approvedSeriesImagesFile, approvedSeriesImages); } catch (e) {}
+    try { appendLog(`APPROVED_SERIES_CACHE_CLEARED outputKey=${outputKey} removed=${removed}`); } catch (e) {}
+    return res.json({ ok: true, removed, outputKey });
   } catch (e) {
     return res.status(500).json({ error: e && e.message ? e.message : String(e) });
   }

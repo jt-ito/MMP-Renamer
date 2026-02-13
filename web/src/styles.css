@@ -372,7 +372,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 }
 
 .approved-series-title {
-  margin: 8px 4px 0 6px;
+  margin: 8px 6px 0 11px;
   font-size: 12px;
   font-weight: 600;
   line-height: 1.35;
@@ -380,6 +380,36 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.approved-source-prompt-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+
+.approved-source-prompt-card {
+  width: min(520px, calc(100% - 28px));
+  background: var(--bg-800);
+  border: 1px solid var(--bg-600);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
+}
+
+.approved-source-prompt-card h3 {
+  margin: 0 0 8px 0;
+}
+
+.approved-source-prompt-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
 }
 
 .approved-series-meta {

@@ -8,7 +8,9 @@ export default function ApprovedSeries({ pushToast }) {
   const [outputs, setOutputs] = useState([])
   const [activeOutputKey, setActiveOutputKey] = useState('')
   const [savingSource, setSavingSource] = useState({})
+  const [clearingCache, setClearingCache] = useState({})
   const [autoFetching, setAutoFetching] = useState({})
+  const [sourcePromptOutput, setSourcePromptOutput] = useState(null)
   const observedRef = useRef(new Set())
   const queuedRef = useRef(new Set())
   const inFlightRef = useRef(new Set())
@@ -44,12 +46,52 @@ export default function ApprovedSeries({ pushToast }) {
     setSavingSource((prev) => ({ ...prev, [outputKey]: true }))
     try {
       await axios.post(API('/approved-series/source'), { outputKey, source })
-      setOutputs((prev) => prev.map((o) => o.key === outputKey ? { ...o, source } : o))
+      setOutputs((prev) => prev.map((o) => o.key === outputKey ? { ...o, source, sourceConfigured: true } : o))
       pushToast && pushToast('Approved Series', 'Saved image source preference')
+      return true
     } catch (e) {
       pushToast && pushToast('Approved Series', 'Failed to save image source')
+      return false
     } finally {
       setSavingSource((prev) => ({ ...prev, [outputKey]: false }))
+    }
+  }
+
+  const handleOutputTabClick = (output) => {
+    if (!output || !output.key) return
+    if (output.key === activeOutputKey) return
+    if (!output.sourceConfigured) {
+      setSourcePromptOutput(output)
+      return
+    }
+    setActiveOutputKey(output.key)
+  }
+
+  const chooseSourceForOutput = async (source) => {
+    if (!sourcePromptOutput || !sourcePromptOutput.key) return
+    const outputKey = sourcePromptOutput.key
+    const ok = await setOutputSource(outputKey, source)
+    if (ok) {
+      setActiveOutputKey(outputKey)
+      setSourcePromptOutput(null)
+    }
+  }
+
+  const clearOutputCache = async (output) => {
+    if (!output || !output.key) return
+    const confirmClear = window.confirm(`Clear cached images for this output only?\n\n${output.path}`)
+    if (!confirmClear) return
+    const outputKey = output.key
+    setClearingCache((prev) => ({ ...prev, [outputKey]: true }))
+    try {
+      const r = await axios.post(API('/approved-series/clear-cache'), { outputKey })
+      const removed = r && r.data && typeof r.data.removed === 'number' ? r.data.removed : 0
+      pushToast && pushToast('Approved Series', `Cleared ${removed} cached image${removed === 1 ? '' : 's'} for this output`)
+      await load()
+    } catch (e) {
+      pushToast && pushToast('Approved Series', 'Failed to clear output cache')
+    } finally {
+      setClearingCache((prev) => ({ ...prev, [outputKey]: false }))
     }
   }
 
@@ -170,7 +212,7 @@ export default function ApprovedSeries({ pushToast }) {
                 <button
                   key={output.key}
                   className={`approved-output-tab ${output.key === activeOutputKey ? 'active' : ''}`}
-                  onClick={() => setActiveOutputKey(output.key)}
+                  onClick={() => handleOutputTabClick(output)}
                   title={output.path}
                 >
                   {output.path}
@@ -193,6 +235,14 @@ export default function ApprovedSeries({ pushToast }) {
                     <option value="tmdb">TMDB</option>
                     <option value="anidb">AniDB</option>
                   </select>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => clearOutputCache(activeOutput)}
+                    disabled={!!clearingCache[activeOutput.key]}
+                  >
+                    {clearingCache[activeOutput.key] ? 'Clearing…' : 'Clear Output Cache'}
+                  </button>
                   <span className="small-muted">Images auto-fetch and cache while you scroll.</span>
                 </div>
 
@@ -225,6 +275,21 @@ export default function ApprovedSeries({ pushToast }) {
             ) : null}
           </>
         )}
+
+        {sourcePromptOutput ? (
+          <div className="approved-source-prompt-backdrop" role="dialog" aria-modal="true">
+            <div className="approved-source-prompt-card">
+              <h3>Choose Image Source</h3>
+              <p className="small-muted">Pick a source for this output folder before loading posters.</p>
+              <div className="approved-source-prompt-actions">
+                <button type="button" className="btn-cta" onClick={() => chooseSourceForOutput('anilist')} disabled={!!savingSource[sourcePromptOutput.key]}>AniList</button>
+                <button type="button" className="btn-ghost" onClick={() => chooseSourceForOutput('tmdb')} disabled={!!savingSource[sourcePromptOutput.key]}>TMDB</button>
+                <button type="button" className="btn-ghost" onClick={() => chooseSourceForOutput('anidb')} disabled={!!savingSource[sourcePromptOutput.key]}>AniDB</button>
+                <button type="button" className="btn-ghost" onClick={() => setSourcePromptOutput(null)} disabled={!!savingSource[sourcePromptOutput.key]}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   )
