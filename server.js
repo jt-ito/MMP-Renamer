@@ -9637,7 +9637,31 @@ app.get('/api/logs/recent', requireAuth, requireAdmin, (req, res) => {
     })
     stream.on('end', () => {
       try {
-        const tail = String(sb || '').split('\n').slice(-200).join('\n')
+        // Parse query parameters: filter mode and line count
+        const filterMode = req.query.filter || 'dashboard' // 'dashboard' (default) | 'approved_series'
+        const lineCount = parseInt(req.query.lines, 10) || 200
+        
+        // Split into lines and filter based on mode
+        let lines = String(sb || '').split('\n')
+        
+        // Apply filtering based on filter mode
+        if (filterMode === 'dashboard') {
+          // Dashboard mode: exclude APPROVED_SERIES_* logs to reduce noise
+          lines = lines.filter(line => {
+            const logContent = line.includes(' ') ? line.substring(line.indexOf(' ') + 1) : line
+            return !logContent.startsWith('APPROVED_SERIES_')
+          })
+        } else if (filterMode === 'approved_series') {
+          // Approved Series mode: show only APPROVED_SERIES_* logs for debugging artwork fetching
+          lines = lines.filter(line => {
+            const logContent = line.includes(' ') ? line.substring(line.indexOf(' ') + 1) : line
+            return logContent.startsWith('APPROVED_SERIES_')
+          })
+        }
+        // For any other filter mode or no filter, show all logs
+        
+        // Take the last N lines and join them back
+        const tail = lines.slice(-lineCount).join('\n')
         return res.json({ logs: tail })
       } catch (e) {
         try { console.error('logs/recent post-process failed', e && e.message ? e.message : e) } catch (ee) {}
