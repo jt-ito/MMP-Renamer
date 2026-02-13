@@ -6597,7 +6597,12 @@ function renderProviderName(data, fromPath, session) {
       .replace(/\s{2,}/g, ' ')
       .trim();
 
-    rendered = ensureRenderedNameHasYear(rendered, templateYear || '');
+    if (isMovie) {
+      const y = String(templateYear || '').trim();
+      if (y) rendered = `${stripTrailingYear(rendered)} (${y})`;
+    } else {
+      rendered = ensureRenderedNameHasYear(rendered, templateYear || '');
+    }
     return rendered || null;
   } catch (e) {
     console.error('[renderProviderName] Error:', e);
@@ -6914,7 +6919,12 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
       // Strip any existing year before adding to prevent duplication
       providerName = stripTrailingYear(providerName);
     } catch (e) {}
-    providerName = ensureRenderedNameHasYear(providerName, templateYear);
+    if (isMovie === true) {
+      const y = String(templateYear || '').trim();
+      if (y) providerName = `${stripTrailingYear(providerName)} (${y})`;
+    } else {
+      providerName = ensureRenderedNameHasYear(providerName, templateYear);
+    }
     // If this looks like a series-level rendered name (no episode tokens) but we
     // have episode metadata, prefer the template rendering so each episode gets
     // a unique filename.
