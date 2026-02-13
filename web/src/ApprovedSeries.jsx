@@ -145,8 +145,25 @@ export default function ApprovedSeries({ pushToast }) {
 
   const fetchLogs = async () => {
     try {
-      const r = await axios.get(API('/logs/recent?lines=300&filter=approved_series'))
-      setLogs(r.data.logs || '')
+      const r = await axios.get(API('/logs/recent?lines=500&filter=approved_series'))
+      const allLogs = r.data.logs || ''
+      
+      // Filter logs by current output path if activeOutput is set
+      if (activeOutput && activeOutput.path) {
+        const outputPath = activeOutput.path
+        const lines = allLogs.split('\n')
+        const filtered = lines.filter(line => {
+          // Include lines that mention the current output path
+          // The logs typically include "output=" or "key=" with the path
+          return line.includes(`output=${outputPath}`) || 
+                 line.includes(`key=${outputPath}`) ||
+                 line.includes(`output=/${outputPath}`) ||
+                 line.includes(outputPath)
+        })
+        setLogs(filtered.join('\n'))
+      } else {
+        setLogs(allLogs)
+      }
     } catch (e) {
       // silent
     }
@@ -168,7 +185,7 @@ export default function ApprovedSeries({ pushToast }) {
         logsTimerRef.current = null
       }
     }
-  }, [showLogs])
+  }, [showLogs, activeOutput])
 
   useEffect(() => {
     return () => {
@@ -241,12 +258,41 @@ export default function ApprovedSeries({ pushToast }) {
         </div>
 
         {showLogs && (
-          <div style={{marginBottom:16,padding:12,background:'var(--card-bg)',border:'1px solid var(--border)',borderRadius:4,maxHeight:300,overflow:'auto'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-              <strong style={{fontSize:14}}>Approved Series Logs</strong>
+          <div style={{
+            marginBottom: 16,
+            padding: 12,
+            background: 'var(--card-bg)',
+            border: '1px solid var(--border)',
+            borderRadius: 4,
+            maxHeight: 400,
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column'
+          }}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8,flexShrink:0}}>
+              <strong style={{fontSize:14}}>
+                Logs {activeOutput ? `for ${activeOutput.path}` : '(all outputs)'}
+              </strong>
               <button className="btn-ghost" onClick={fetchLogs} style={{padding:'4px 8px',fontSize:12}}>Refresh</button>
             </div>
-            <pre style={{margin:0,fontSize:11,fontFamily:'monospace',whiteSpace:'pre-wrap',wordBreak:'break-all',color:'var(--text)'}}>{logs || 'No logs yet'}</pre>
+            <div style={{
+              flex: 1,
+              overflow: 'auto',
+              background: '#1a1a1a',
+              border: '1px solid var(--border)',
+              borderRadius: 3,
+              padding: 8
+            }}>
+              <pre style={{
+                margin: 0,
+                fontSize: 11,
+                fontFamily: 'monospace',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                color: '#e0e0e0',
+                lineHeight: '1.4'
+              }}>{logs || 'No logs yet'}</pre>
+            </div>
           </div>
         )}
 
