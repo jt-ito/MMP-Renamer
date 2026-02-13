@@ -3395,7 +3395,13 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         // Check for episode-specific AniDB Episode ID
         const episodeEntry = (filePath && map[filePath]) ? map[filePath] : null
         
-        if (!active) return
+        // Don't overwrite user's changes if they've started editing
+        if (!active || hasUnsavedChangesRef.current) {
+          console.log('[ManualIdInputs] Skipping value update - user has unsaved changes')
+          if (active) loadedForRef.current = cacheKey
+          return
+        }
+        
         const nextLoadedValues = {
           anilist: seriesEntry?.anilist ? String(seriesEntry.anilist) : '',
           tmdb: seriesEntry?.tmdb ? String(seriesEntry.tmdb) : '',
@@ -3416,7 +3422,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       }
     })()
     return () => { active = false }
-  }, [isOpen, title, filePath, JSON.stringify(aliasTitles || [])])
+  }, [isOpen, title, filePath])
 
   const hasChanges = (
     normalizeManualValue(values.anilist) !== normalizeManualValue(initialValues.anilist)

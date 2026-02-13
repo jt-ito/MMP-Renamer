@@ -278,6 +278,9 @@ function getManualId(title, provider, filePath = null) {
       if (pathEntry && pathEntry.anidbEpisode) {
         return pathEntry.anidbEpisode;
       }
+      // Don't fall back to title-based lookup for episode IDs
+      // Episode IDs are file-specific, not series-wide
+      return null;
     }
     
     // For series-level IDs or fallback, check by title
@@ -9474,6 +9477,17 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
       if (anidbEpisodeId !== null && filePath) {
         if (!manualIds[filePath]) manualIds[filePath] = {};
         manualIds[filePath].anidbEpisode = anidbEpisodeId;
+        
+        // Clean up old episode IDs that were stored at title keys (migration cleanup)
+        // Episode IDs should only be stored at file paths, not title keys
+        for (const key of keys) {
+          if (manualIds[key] && manualIds[key].anidbEpisode) {
+            delete manualIds[key].anidbEpisode;
+            if (Object.keys(manualIds[key]).length === 0) {
+              delete manualIds[key];
+            }
+          }
+        }
       } else if (anidbEpisodeId === null && filePath && manualIds[filePath]) {
         // Clear episode ID if explicitly set to null
         delete manualIds[filePath].anidbEpisode;
