@@ -6535,13 +6535,37 @@ function renderProviderName(data, fromPath, session) {
     const mediaFormat = data && data.mediaFormat ? String(data.mediaFormat).toUpperCase() : '';
     const rawSource = data && data.source ? String(data.source).toLowerCase() : '';
     const looksLikeTmdbMovie = !!(data && data.raw && data.raw.title && !data.raw.name);
-    const isMovie = data.isMovie === true || mediaFormat.includes('MOVIE') || mediaFormat === 'FILM' || looksLikeTmdbMovie || rawSource === 'tmdb-movie';
+    const tmdbMediaType = String(
+      (data && data.raw && (data.raw.media_type || data.raw.mediaType)) ||
+      (data && data.tmdb && data.tmdb.raw && (data.tmdb.raw.media_type || data.tmdb.raw.mediaType)) ||
+      ''
+    ).toLowerCase();
+    const noEpisodeContext = (data && data.season == null && data.episode == null && !data.episodeRange);
+    const isMovie = data.isMovie === true
+      || mediaFormat.includes('MOVIE')
+      || mediaFormat === 'FILM'
+      || tmdbMediaType === 'movie'
+      || looksLikeTmdbMovie
+      || rawSource === 'tmdb-movie'
+      || (noEpisodeContext && /\bmovie\b/i.test(String(data.episodeTitle || '')));
 
     let rawTitle = isMovie
       ? (data.title || data.seriesTitleEnglish || data.seriesTitle || '')
       : (data.seriesTitleEnglish || data.title || '');
     rawTitle = String(rawTitle || '').trim();
     if (!rawTitle) return null;
+
+    // If upstream mapping split a movie subtitle into episodeTitle, stitch it back into title.
+    if (isMovie && data.episodeTitle) {
+      const movieSubtitle = String(data.episodeTitle || '').trim();
+      if (movieSubtitle) {
+        const titleNorm = rawTitle.toLowerCase();
+        const subtitleNorm = movieSubtitle.toLowerCase();
+        if (!titleNorm.includes(subtitleNorm)) {
+          rawTitle = `${rawTitle} - ${movieSubtitle}`.replace(/\s{2,}/g, ' ').trim();
+        }
+      }
+    }
 
     let templateYear = data && data.year ? String(data.year).trim() : '';
     if (!templateYear && data && data.parsed && data.parsed.year) templateYear = String(data.parsed.year).trim();
