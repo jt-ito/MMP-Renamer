@@ -43,9 +43,10 @@ export default function ApprovedSeries({ pushToast }) {
   const activeOutput = useMemo(() => outputs.find((o) => o.key === activeOutputKey) || null, [outputs, activeOutputKey])
 
   const setOutputSource = async (outputKey, source) => {
+    const currentOutput = outputs.find((o) => o.key === outputKey) || null
     setSavingSource((prev) => ({ ...prev, [outputKey]: true }))
     try {
-      await axios.post(API('/approved-series/source'), { outputKey, source })
+      await axios.post(API('/approved-series/source'), { outputKey, outputPath: currentOutput ? currentOutput.path : '', source })
       setOutputs((prev) => prev.map((o) => o.key === outputKey ? { ...o, source, sourceConfigured: true } : o))
       pushToast && pushToast('Approved Series', 'Saved image source preference')
       return true

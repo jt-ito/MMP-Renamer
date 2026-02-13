@@ -372,7 +372,9 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 }
 
 .approved-series-title {
-  margin: 8px 6px 0 11px;
+  margin: 8px 6px 0 0;
+  padding: 0 8px 8px 14px;
+  max-height: 1.35em;
   font-size: 12px;
   font-weight: 600;
   line-height: 1.35;
@@ -380,6 +382,18 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: max-height 170ms ease, padding-bottom 170ms ease;
+}
+
+.approved-series-card:hover .approved-series-title {
+  max-height: 4.2em;
+  padding-bottom: 10px;
+  white-space: normal;
+  text-overflow: clip;
+  display: -webkit-box;
+  line-clamp: 3;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
 }
 
 .approved-source-prompt-backdrop {

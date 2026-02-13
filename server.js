@@ -8213,11 +8213,87 @@ function normalizeApprovedSeriesLookupTitle(value) {
     const raw = String(value || '').trim();
     if (!raw) return '';
     return raw
+      .replace(/\(\s*((?:19|20)\d{2})\s*\)\s*\(\s*\1\s*\)\s*$/i, '($1)')
       .replace(/\s*\(\s*(19|20)\d{2}\s*\)\s*$/i, '')
       .replace(/\s+(19|20)\d{2}\s*$/i, '')
       .replace(/\s+/g, ' ')
       .trim();
   } catch (e) { return String(value || '').trim(); }
+}
+
+function normalizeApprovedSeriesDisplayTitle(value) {
+  try {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    return raw
+      .replace(/\(\s*((?:19|20)\d{2})\s*\)\s*\(\s*\1\s*\)\s*$/i, '($1)')
+      .replace(/\s*\(\s*(19|20)\d{2}\s*\)\s*$/i, '')
+      .replace(/\s+(19|20)\d{2}\s*$/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  } catch (e) { return String(value || '').trim(); }
+}
+
+function collectApprovedSeriesMetadataTitles(outputKey, seriesName) {
+  const titles = [];
+  const seen = new Set();
+  const addTitle = (value) => {
+    try {
+      const raw = String(value || '').trim();
+      if (!raw) return;
+      const normalized = normalizeApprovedSeriesLookupTitle(raw);
+      if (!normalized) return;
+      const cacheKey = normalized.toLowerCase();
+      if (seen.has(cacheKey)) return;
+      seen.add(cacheKey);
+      titles.push(normalized);
+    } catch (e) { /* ignore */ }
+  };
+
+  try {
+    const normalizedOutputKey = normalizeOutputKey(outputKey);
+    const normalizedSeriesCandidates = Array.from(new Set([
+      normalizeForCache(seriesName),
+      normalizeForCache(normalizeApprovedSeriesDisplayTitle(seriesName)),
+      normalizeForCache(normalizeApprovedSeriesLookupTitle(seriesName))
+    ].filter(Boolean)));
+    if (!normalizedOutputKey || !normalizedSeriesCandidates.length) {
+      addTitle(seriesName);
+      return titles;
+    }
+
+    addTitle(seriesName);
+
+    for (const cacheKey of Object.keys(enrichCache || {})) {
+      const entry = enrichCache[cacheKey];
+      if (!entry || entry.applied !== true || !entry.appliedTo) continue;
+      const targets = Array.isArray(entry.appliedTo) ? entry.appliedTo : [entry.appliedTo];
+      for (const target of targets) {
+        if (!target) continue;
+        const info = deriveAppliedSeriesInfo(target);
+        const bucketKey = normalizeOutputKey(info.outputRoot || path.dirname(path.dirname(target)));
+        if (!bucketKey || bucketKey !== normalizedOutputKey) continue;
+
+        const folderSeries = normalizeForCache(info.seriesName || '');
+        if (!folderSeries || !normalizedSeriesCandidates.includes(folderSeries)) continue;
+
+        addTitle(entry.seriesTitleEnglish);
+        addTitle(entry.seriesTitleExact);
+        addTitle(entry.seriesTitle);
+        addTitle(entry.title);
+        if (entry.provider && typeof entry.provider === 'object') {
+          addTitle(entry.provider.title);
+          addTitle(entry.provider.seriesTitleEnglish);
+          addTitle(entry.provider.seriesTitleRomaji);
+          addTitle(entry.provider.seriesTitleExact);
+        }
+      }
+    }
+  } catch (e) {
+    addTitle(seriesName);
+  }
+
+  return titles;
 }
 
 function getApprovedSeriesSourcePreferences(username) {
@@ -8230,7 +8306,48 @@ function getApprovedSeriesSourcePreferences(username) {
   } catch (e) { return {}; }
 }
 
-function setApprovedSeriesSourcePreference(username, outputKey, source) {
+function normalizeApprovedSeriesSourceKey(value) {
+  try {
+    return String(value || '')
+      .trim()
+      .replace(/\\+/g, '/')
+      .replace(/\/+/g, '/')
+      .replace(/\/+$/g, '')
+      .toLowerCase();
+  } catch (e) { return String(value || '').trim().toLowerCase(); }
+}
+
+function resolveApprovedSeriesSourcePreference(sourcePrefs, outputKey, displayPath) {
+  try {
+    if (!sourcePrefs || typeof sourcePrefs !== 'object') return { source: 'anilist', configured: false };
+    const exact = sourcePrefs[outputKey];
+    if (exact) {
+      return { source: normalizeApprovedSeriesSource(exact), configured: true };
+    }
+
+    const keyCandidates = [
+      outputKey,
+      normalizeOutputKey(displayPath || ''),
+      displayPath || ''
+    ]
+      .filter(Boolean)
+      .map((v) => normalizeApprovedSeriesSourceKey(v))
+      .filter(Boolean);
+
+    if (!keyCandidates.length) return { source: 'anilist', configured: false };
+
+    for (const prefKey of Object.keys(sourcePrefs)) {
+      const normalizedPrefKey = normalizeApprovedSeriesSourceKey(prefKey);
+      if (!normalizedPrefKey) continue;
+      if (keyCandidates.includes(normalizedPrefKey)) {
+        return { source: normalizeApprovedSeriesSource(sourcePrefs[prefKey]), configured: true };
+      }
+    }
+  } catch (e) { /* ignore */ }
+  return { source: 'anilist', configured: false };
+}
+
+function setApprovedSeriesSourcePreference(username, outputKey, source, outputPath = null) {
   try {
     if (!username) return false;
     users[username] = users[username] || { username, role: 'admin', passwordHash: null, settings: {} };
@@ -8238,7 +8355,10 @@ function setApprovedSeriesSourcePreference(username, outputKey, source) {
     const map = users[username].settings.approved_series_image_source_by_output && typeof users[username].settings.approved_series_image_source_by_output === 'object'
       ? users[username].settings.approved_series_image_source_by_output
       : {};
-    map[outputKey] = normalizeApprovedSeriesSource(source);
+    const normalizedSource = normalizeApprovedSeriesSource(source);
+    map[outputKey] = normalizedSource;
+    const aliasFromPath = normalizeOutputKey(outputPath || '');
+    if (aliasFromPath && aliasFromPath !== outputKey) map[aliasFromPath] = normalizedSource;
     users[username].settings.approved_series_image_source_by_output = map;
     writeJson(usersFile, users);
     return true;
@@ -8288,6 +8408,19 @@ async function fetchAniListSeriesArtwork(title) {
   }
 }
 
+async function fetchAniListSeriesArtworkWithCandidates(candidates) {
+  try {
+    const queue = Array.isArray(candidates) ? candidates : [];
+    for (const candidate of queue) {
+      const lookup = normalizeApprovedSeriesLookupTitle(candidate);
+      if (!lookup) continue;
+      const result = await fetchAniListSeriesArtwork(lookup);
+      if (result && result.imageUrl) return result;
+    }
+  } catch (e) { /* ignore */ }
+  return null;
+}
+
 function decodeHtmlEntities(input) {
   try {
     return String(input || '')
@@ -8304,9 +8437,11 @@ function decodeHtmlEntities(input) {
 function getSeriesNameForApprovedEntry(entry, targetPath) {
   try {
     const info = deriveAppliedSeriesInfo(targetPath);
-    return (info.seriesName || entry.seriesTitleEnglish || entry.seriesTitle || entry.title || 'Unknown Series').trim();
+    return normalizeApprovedSeriesDisplayTitle(info.seriesName || entry.seriesTitleEnglish || entry.seriesTitle || entry.title || 'Unknown Series');
   } catch (e) {
-    return (entry && (entry.seriesTitleEnglish || entry.seriesTitle || entry.title)) ? String(entry.seriesTitleEnglish || entry.seriesTitle || entry.title).trim() : 'Unknown Series';
+    return (entry && (entry.seriesTitleEnglish || entry.seriesTitle || entry.title))
+      ? normalizeApprovedSeriesDisplayTitle(String(entry.seriesTitleEnglish || entry.seriesTitle || entry.title))
+      : 'Unknown Series';
   }
 }
 
@@ -8445,8 +8580,9 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
 
 async function fetchApprovedSeriesArtwork({ username, outputKey, source, seriesName }) {
   const selectedSource = normalizeApprovedSeriesSource(source);
+  const titleCandidates = collectApprovedSeriesMetadataTitles(outputKey, seriesName);
   if (selectedSource === 'anilist') {
-    return fetchAniListSeriesArtwork(seriesName);
+    return fetchAniListSeriesArtworkWithCandidates(titleCandidates);
   }
   if (selectedSource === 'anidb') {
     return fetchAniDbSeriesArtwork(seriesName, outputKey, username);
@@ -8554,11 +8690,12 @@ function buildApprovedSeriesPayload(username) {
   const ensureOutputBucket = (key, displayPath) => {
     if (!key) return null;
     if (!outputMap.has(key)) {
+      const resolvedPref = resolveApprovedSeriesSourcePreference(sourcePrefs, key, displayPath || key);
       outputMap.set(key, {
         key,
         path: displayPath || key,
-        source: normalizeApprovedSeriesSource((sourcePrefs && sourcePrefs[key]) ? String(sourcePrefs[key]) : 'anilist'),
-        sourceConfigured: !!(sourcePrefs && Object.prototype.hasOwnProperty.call(sourcePrefs, key)),
+        source: resolvedPref.source,
+        sourceConfigured: !!resolvedPref.configured,
         seriesMap: new Map()
       });
     }
@@ -8714,10 +8851,11 @@ app.post('/api/approved-series/source', requireAuth, (req, res) => {
   try {
     const username = req.session && req.session.username ? req.session.username : null;
     const outputKey = normalizeOutputKey(req && req.body ? req.body.outputKey : '');
+    const outputPath = req && req.body ? String(req.body.outputPath || '') : '';
     const source = normalizeApprovedSeriesSource(req && req.body ? req.body.source : 'anilist');
     if (!outputKey) return res.status(400).json({ error: 'outputKey is required' });
     if (!['anilist', 'tmdb', 'anidb'].includes(source)) return res.status(400).json({ error: 'invalid source' });
-    const ok = setApprovedSeriesSourcePreference(username, outputKey, source);
+    const ok = setApprovedSeriesSourcePreference(username, outputKey, source, outputPath);
     if (!ok) return res.status(500).json({ error: 'failed to save preference' });
     return res.json({ ok: true });
   } catch (e) {
