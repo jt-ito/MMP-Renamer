@@ -3303,13 +3303,14 @@ function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
   )
 }
 
-function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pushToast }) {
+function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, onSaved, pushToast }) {
   const EMPTY_MANUAL_VALUES = { anilist: '', tmdb: '', tvdb: '', anidbEpisode: '' }
   const [values, setValues] = useState(EMPTY_MANUAL_VALUES)
   const [initialValues, setInitialValues] = useState(EMPTY_MANUAL_VALUES)
   const [loading, setLoading] = useState(false)
-  const loadedForTitleRef = useRef(null)
+  const loadedForRef = useRef(null)
   const hasUnsavedChangesRef = useRef(false)
+  const manualIdsCache = useRef(null)
 
   const normalizeKey = (value) => {
     try { return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ') } catch (e) { return String(value || '').trim().toLowerCase() }
@@ -3331,16 +3332,45 @@ function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pu
     let active = true
     if (!isOpen || !title) {
       // Reset when panel closes
-      if (!isOpen) loadedForTitleRef.current = null
+      if (!isOpen) loadedForRef.current = null
       return undefined
     }
     
-    // Skip reload if we already loaded data for this title, unless the user has no unsaved changes
-    // This prevents clearing inputs during typing when title/aliasTitles props change
-    const titleKey = normalizeKey(title)
-    if (loadedForTitleRef.current === titleKey && hasUnsavedChangesRef.current) {
-      console.log('[ManualIdInputs] Skipping reload - already loaded for this title with unsaved changes')
+    // Create a unique key that includes file path for episode-level IDs
+    const cacheKey = filePath || normalizeKey(title)
+    
+    // Skip reload if we already loaded data for this specific item (prevents flickering)
+    if (loadedForRef.current === cacheKey) {
+      console.log('[ManualIdInputs] Skipping reload - already loaded')
       return undefined
+    }
+
+    // Load data immediately from cache if available to prevent flash
+    if (manualIdsCache.current) {
+      const map = manualIdsCache.current
+      const titleKey = normalizeKey(title)
+      let seriesEntry = (titleKey && map[titleKey]) ? map[titleKey] : null
+      if (!seriesEntry && Array.isArray(aliasTitles)) {
+        for (const alias of aliasTitles) {
+          const aliasKey = normalizeKey(alias)
+          if (aliasKey && map[aliasKey]) {
+            seriesEntry = map[aliasKey]
+            break
+          }
+        }
+      }
+      
+      // Check for episode-specific AniDB Episode ID
+      const episodeEntry = (filePath && map[filePath]) ? map[filePath] : null
+      
+      const cachedValues = {
+        anilist: seriesEntry?.anilist ? String(seriesEntry.anilist) : '',
+        tmdb: seriesEntry?.tmdb ? String(seriesEntry.tmdb) : '',
+        tvdb: seriesEntry?.tvdb ? String(seriesEntry.tvdb) : '',
+        anidbEpisode: episodeEntry?.anidbEpisode ? String(episodeEntry.anidbEpisode) : ''
+      }
+      setValues(cachedValues)
+      setInitialValues(cachedValues)
     }
 
     setLoading(true)
@@ -3348,39 +3378,45 @@ function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pu
       try {
         const r = await axios.get(API('/manual-ids'))
         const map = (r && r.data && r.data.manualIds) ? r.data.manualIds : {}
-        const key = normalizeKey(title)
-        let entry = (key && map && map[key]) ? map[key] : null
-        if (!entry && Array.isArray(aliasTitles)) {
+        manualIdsCache.current = map
+        
+        const titleKey = normalizeKey(title)
+        let seriesEntry = (titleKey && map[titleKey]) ? map[titleKey] : null
+        if (!seriesEntry && Array.isArray(aliasTitles)) {
           for (const alias of aliasTitles) {
             const aliasKey = normalizeKey(alias)
-            if (aliasKey && map && map[aliasKey]) {
-              entry = map[aliasKey]
+            if (aliasKey && map[aliasKey]) {
+              seriesEntry = map[aliasKey]
               break
             }
           }
         }
+        
+        // Check for episode-specific AniDB Episode ID
+        const episodeEntry = (filePath && map[filePath]) ? map[filePath] : null
+        
         if (!active) return
         const nextLoadedValues = {
-          anilist: entry && entry.anilist ? String(entry.anilist) : '',
-          tmdb: entry && entry.tmdb ? String(entry.tmdb) : '',
-          tvdb: entry && entry.tvdb ? String(entry.tvdb) : '',
-          anidbEpisode: entry && entry.anidbEpisode ? String(entry.anidbEpisode) : ''
+          anilist: seriesEntry?.anilist ? String(seriesEntry.anilist) : '',
+          tmdb: seriesEntry?.tmdb ? String(seriesEntry.tmdb) : '',
+          tvdb: seriesEntry?.tvdb ? String(seriesEntry.tvdb) : '',
+          anidbEpisode: episodeEntry?.anidbEpisode ? String(episodeEntry.anidbEpisode) : ''
         }
         setValues(nextLoadedValues)
         setInitialValues(nextLoadedValues)
-        loadedForTitleRef.current = titleKey
+        loadedForRef.current = cacheKey
       } catch (e) {
         if (active) {
           setValues(EMPTY_MANUAL_VALUES)
           setInitialValues(EMPTY_MANUAL_VALUES)
-          loadedForTitleRef.current = titleKey
+          loadedForRef.current = cacheKey
         }
       } finally {
         if (active) setLoading(false)
       }
     })()
     return () => { active = false }
-  }, [isOpen, title, JSON.stringify(aliasTitles || [])])
+  }, [isOpen, title, filePath, JSON.stringify(aliasTitles || [])])
 
   const hasChanges = (
     normalizeManualValue(values.anilist) !== normalizeManualValue(initialValues.anilist)
@@ -3410,6 +3446,7 @@ function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pu
       await axios.post(API('/manual-ids'), {
         title,
         aliasTitles,
+        filePath,
         anilist: nextPayload.anilist,
         tmdb: nextPayload.tmdb,
         tvdb: nextPayload.tvdb,
@@ -3422,8 +3459,9 @@ function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pu
         anidbEpisode: nextPayload.anidbEpisode || ''
       })
       pushToast && pushToast('Manual IDs', 'Saved manual provider IDs')
-      // Reset loaded ref so next open can reload if needed
-      loadedForTitleRef.current = null
+      // Clear cache to force reload next time
+      manualIdsCache.current = null
+      loadedForRef.current = null
       // Trigger callback to force rescan with new manual IDs
       if (onSaved) await onSaved()
       onToggle && onToggle(false)
@@ -4071,6 +4109,7 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
           <ManualIdInputs
             title={manualIdTitle}
             aliasTitles={manualIdAliasTitles}
+            filePath={it?.canonicalPath}
             isOpen={isManualOpen}
             onToggle={toggleManualOpen}
             onSaved={async () => {

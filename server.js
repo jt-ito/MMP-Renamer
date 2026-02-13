@@ -270,8 +270,17 @@ function loadManualIds() {
   }
 }
 
-function getManualId(title, provider) {
+function getManualId(title, provider, filePath = null) {
   try {
+    // For AniDB Episode IDs, check file path first (episode-specific)
+    if (provider === 'anidbEpisode' && filePath) {
+      const pathEntry = manualIds && manualIds[filePath];
+      if (pathEntry && pathEntry.anidbEpisode) {
+        return pathEntry.anidbEpisode;
+      }
+    }
+    
+    // For series-level IDs or fallback, check by title
     if (!title) return null;
     const key = normalizeManualIdKey(title);
     if (!key || !manualIds) return null;
@@ -1479,7 +1488,7 @@ async function metaLookup(title, apiKey, opts = {}) {
   const manualAnilistId = getManualId(title, 'anilist')
   const manualTmdbId = getManualId(title, 'tmdb')
   const manualTvdbId = getManualId(title, 'tvdb')
-  const manualAniDbEpisodeId = getManualId(title, 'anidbEpisode')
+  const manualAniDbEpisodeId = getManualId(title, 'anidbEpisode', opts.filePath || null)
   let manualAniDbEpisodeFetched = false
   let manualAniDbEpisodeData = null
 
@@ -3883,12 +3892,13 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
     anidb_password: anidbCreds.anidb_password,
     anidb_client_name: anidbCreds.anidb_client_name,
     anidb_client_version: anidbCreds.anidb_client_version,
-    tmdbApiKey: tmdbKey
+    tmdbApiKey: tmdbKey,
+    filePath: canonicalPath || null
   });
 
   // Check for manual AniDB episode ID override
   try {
-    const manualAnidbEpisodeId = getManualId(seriesLookupTitle, 'anidbEpisode');
+    const manualAnidbEpisodeId = getManualId(seriesLookupTitle, 'anidbEpisode', canonicalPath || null);
     if (manualAnidbEpisodeId) {
       metaLookupOpts.manualAnidbEpisodeId = manualAnidbEpisodeId;
       appendLog(`MANUAL_ANIDB_EPISODE_ID title=${seriesLookupTitle} eid=${manualAnidbEpisodeId}`);
@@ -9408,40 +9418,71 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
     const title = req && req.body ? req.body.title : null;
     if (!title) return res.status(400).json({ error: 'title is required' });
     const aliasTitles = (req && req.body && Array.isArray(req.body.aliasTitles)) ? req.body.aliasTitles : [];
+    const filePath = req && req.body ? req.body.filePath : null;
+    
     const keys = [title, ...aliasTitles]
       .map((value) => normalizeManualIdKey(value))
       .filter(Boolean)
       .filter((value, index, arr) => arr.indexOf(value) === index);
     if (!keys.length) return res.status(400).json({ error: 'invalid title' });
 
-    const entry = {};
+    const seriesEntry = {};
     const anilistId = normalizeManualIdValue(req.body.anilist);
     const tmdbId = normalizeManualIdValue(req.body.tmdb);
     const tvdbId = normalizeManualIdValue(req.body.tvdb);
     const anidbEpisodeId = normalizeAniDbEpisodeId(req.body.anidbEpisode);
 
-    if (anilistId !== null) entry.anilist = anilistId;
-    if (tmdbId !== null) entry.tmdb = tmdbId;
-    if (tvdbId !== null) entry.tvdb = tvdbId;
-    if (anidbEpisodeId !== null) entry.anidbEpisode = anidbEpisodeId;
+    // Series-level IDs go in the series entry
+    if (anilistId !== null) seriesEntry.anilist = anilistId;
+    if (tmdbId !== null) seriesEntry.tmdb = tmdbId;
+    if (tvdbId !== null) seriesEntry.tvdb = tvdbId;
 
     const rawClear = req && req.body ? req.body.clear : null;
     const clearRequested = rawClear === true || rawClear === 'true' || rawClear === 1 || rawClear === '1';
 
     manualIds = manualIds || {};
-    if (Object.keys(entry).length === 0) {
+    
+    // Handle series-level IDs (AniList, TMDB, TVDB)
+    if (Object.keys(seriesEntry).length === 0 && !anidbEpisodeId) {
       if (!clearRequested) {
         return res.status(400).json({ error: 'at least one manual ID is required (or pass clear=true to delete existing mapping)' });
       }
-      for (const key of keys) delete manualIds[key];
+      for (const key of keys) {
+        if (manualIds[key]) {
+          // Only remove series-level IDs, preserve episode-level IDs
+          delete manualIds[key].anilist;
+          delete manualIds[key].tmdb;
+          delete manualIds[key].tvdb;
+          if (Object.keys(manualIds[key]).length === 0) delete manualIds[key];
+        }
+      }
+      // Also clear episode-specific entry if clearing all
+      if (filePath && manualIds[filePath]) delete manualIds[filePath];
       try {
         appendLog(`MANUAL_ID_CLEARED title=${normalizeManualIdKey(title)} aliases=${Math.max(0, keys.length - 1)} by=${req && req.session && req.session.username ? req.session.username : 'unknown'}`);
       } catch (e) {}
-    }
-    else {
-      for (const key of keys) manualIds[key] = entry;
+    } else {
+      // Save series-level IDs to all title keys
+      if (Object.keys(seriesEntry).length > 0) {
+        for (const key of keys) {
+          if (!manualIds[key]) manualIds[key] = {};
+          Object.assign(manualIds[key], seriesEntry);
+        }
+      }
+      
+      // Handle episode-level AniDB Episode ID (stored per file path)
+      if (anidbEpisodeId !== null && filePath) {
+        if (!manualIds[filePath]) manualIds[filePath] = {};
+        manualIds[filePath].anidbEpisode = anidbEpisodeId;
+      } else if (anidbEpisodeId === null && filePath && manualIds[filePath]) {
+        // Clear episode ID if explicitly set to null
+        delete manualIds[filePath].anidbEpisode;
+        if (Object.keys(manualIds[filePath]).length === 0) delete manualIds[filePath];
+      }
+      
       try {
-        appendLog(`MANUAL_ID_SAVED title=${normalizeManualIdKey(title)} anilist=${anilistId != null ? anilistId : '<none>'} tmdb=${tmdbId != null ? tmdbId : '<none>'} tvdb=${tvdbId != null ? tvdbId : '<none>'} anidbEpisode=${anidbEpisodeId != null ? anidbEpisodeId : '<none>'} aliases=${Math.max(0, keys.length - 1)} by=${req && req.session && req.session.username ? req.session.username : 'unknown'}`);
+        const episodeNote = filePath ? ` filePath=${filePath.split('/').pop()}` : '';
+        appendLog(`MANUAL_ID_SAVED title=${normalizeManualIdKey(title)} anilist=${anilistId != null ? anilistId : '<none>'} tmdb=${tmdbId != null ? tmdbId : '<none>'} tvdb=${tvdbId != null ? tvdbId : '<none>'} anidbEpisode=${anidbEpisodeId != null ? anidbEpisodeId : '<none>'}${episodeNote} aliases=${Math.max(0, keys.length - 1)} by=${req && req.session && req.session.username ? req.session.username : 'unknown'}`);
       } catch (e) {}
     }
 
