@@ -8317,6 +8317,27 @@ function normalizeApprovedSeriesSourceKey(value) {
   } catch (e) { return String(value || '').trim().toLowerCase(); }
 }
 
+function approvedSeriesSourceKeyVariants(value) {
+  const variants = new Set();
+  const base = normalizeApprovedSeriesSourceKey(value);
+  if (!base) return [];
+  variants.add(base);
+
+  // Strip drive prefix (e.g. c:/mnt/tor -> /mnt/tor)
+  const noDrive = base.replace(/^[a-z]:/i, '');
+  if (noDrive) variants.add(noDrive);
+
+  // Normalize WSL UNC style (//wsl$/ubuntu/mnt/tor -> /mnt/tor)
+  const wslUnc = base.replace(/^\/\/?wsl\$\/[^/]+/i, '');
+  if (wslUnc) variants.add(wslUnc);
+
+  // Keep only /mnt/... tail when available for cross-platform matching
+  const mntMatch = base.match(/\/mnt\/.+$/i);
+  if (mntMatch && mntMatch[0]) variants.add(mntMatch[0]);
+
+  return Array.from(variants).filter(Boolean);
+}
+
 function resolveApprovedSeriesSourcePreference(sourcePrefs, outputKey, displayPath) {
   try {
     if (!sourcePrefs || typeof sourcePrefs !== 'object') return { source: 'anilist', configured: false };
@@ -8325,21 +8346,22 @@ function resolveApprovedSeriesSourcePreference(sourcePrefs, outputKey, displayPa
       return { source: normalizeApprovedSeriesSource(exact), configured: true };
     }
 
-    const keyCandidates = [
+    const rawCandidates = [
       outputKey,
       normalizeOutputKey(displayPath || ''),
       displayPath || ''
-    ]
-      .filter(Boolean)
-      .map((v) => normalizeApprovedSeriesSourceKey(v))
-      .filter(Boolean);
+    ].filter(Boolean);
+
+    const keyCandidates = Array.from(new Set(rawCandidates.flatMap((v) => approvedSeriesSourceKeyVariants(v)).filter(Boolean)));
 
     if (!keyCandidates.length) return { source: 'anilist', configured: false };
 
     for (const prefKey of Object.keys(sourcePrefs)) {
-      const normalizedPrefKey = normalizeApprovedSeriesSourceKey(prefKey);
-      if (!normalizedPrefKey) continue;
-      if (keyCandidates.includes(normalizedPrefKey)) {
+      const prefVariants = approvedSeriesSourceKeyVariants(prefKey);
+      if (!prefVariants.length) continue;
+      const intersects = prefVariants.some((v) => keyCandidates.includes(v));
+      const suffixMatch = prefVariants.some((pv) => keyCandidates.some((kc) => (pv.length > 6 && kc.endsWith(pv)) || (kc.length > 6 && pv.endsWith(kc))));
+      if (intersects || suffixMatch) {
         return { source: normalizeApprovedSeriesSource(sourcePrefs[prefKey]), configured: true };
       }
     }
@@ -8356,9 +8378,23 @@ function setApprovedSeriesSourcePreference(username, outputKey, source, outputPa
       ? users[username].settings.approved_series_image_source_by_output
       : {};
     const normalizedSource = normalizeApprovedSeriesSource(source);
-    map[outputKey] = normalizedSource;
-    const aliasFromPath = normalizeOutputKey(outputPath || '');
-    if (aliasFromPath && aliasFromPath !== outputKey) map[aliasFromPath] = normalizedSource;
+    const candidateKeys = new Set();
+    const addKey = (k) => {
+      if (!k) return;
+      candidateKeys.add(k);
+      for (const variant of approvedSeriesSourceKeyVariants(k)) {
+        if (variant) candidateKeys.add(variant);
+      }
+    };
+
+    addKey(outputKey);
+    addKey(normalizeOutputKey(outputPath || ''));
+    addKey(outputPath || '');
+
+    for (const key of candidateKeys) {
+      if (!key) continue;
+      map[key] = normalizedSource;
+    }
     users[username].settings.approved_series_image_source_by_output = map;
     writeJson(usersFile, users);
     return true;
