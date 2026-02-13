@@ -8636,10 +8636,27 @@ function findAniDbAidForApprovedSeries(outputKey, seriesName) {
   } catch (e) { return null; }
 }
 
-async function findAniDbAidByTitle(seriesName) {
+async function findAniDbAidByTitle(seriesName, username) {
   try {
     const query = normalizeApprovedSeriesLookupTitle(seriesName);
     if (!query) return null;
+
+    const creds = getAniDBCredentials(username, serverSettings, users);
+    try {
+      const apiClient = getAniDBClient(
+        (creds && creds.anidb_username) ? creds.anidb_username : '',
+        (creds && creds.anidb_password) ? creds.anidb_password : ''
+      );
+      const anime = await apiClient.getAnimeInfoByTitle(query);
+      const apiAid = Number(anime && anime.aid ? anime.aid : NaN);
+      if (Number.isFinite(apiAid) && apiAid > 0) {
+        try { appendLog(`APPROVED_SERIES_ANIDB_TITLE_API_HIT series=${String(seriesName || '').slice(0,120)} aid=${apiAid}`); } catch (e) {}
+        return apiAid;
+      }
+    } catch (e) {
+      try { appendLog(`APPROVED_SERIES_ANIDB_TITLE_API_MISS series=${String(seriesName || '').slice(0,120)} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
+    }
+
     const encoded = encodeURIComponent(String(query).slice(0, 160));
     const page = await httpRequest({
       hostname: 'anidb.net',
@@ -8687,7 +8704,7 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
   try {
     let aid = findAniDbAidForApprovedSeries(outputKey, seriesName);
     if (!aid) {
-      aid = await findAniDbAidByTitle(seriesName);
+      aid = await findAniDbAidByTitle(seriesName, username);
       try {
         if (aid) appendLog(`APPROVED_SERIES_ANIDB_TITLE_FALLBACK_HIT series=${String(seriesName || '').slice(0,120)} aid=${aid}`);
         else appendLog(`APPROVED_SERIES_ANIDB_TITLE_FALLBACK_NONE series=${String(seriesName || '').slice(0,120)}`);
@@ -8699,21 +8716,22 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
     let summary = '';
 
     const creds = getAniDBCredentials(username, serverSettings, users);
-    if (creds && creds.hasCredentials && creds.anidb_username && creds.anidb_password) {
-      try {
-        const client = getAniDBClient(creds.anidb_username, creds.anidb_password);
-        const anime = await client.getAnimeInfo(aid);
-        if (anime && anime.raw) {
-          const raw = String(anime.raw);
-          const pictureMatch = raw.match(/<picture>([^<]+)<\/picture>/i) || raw.match(/<picname>([^<]+)<\/picname>/i);
-          if (pictureMatch && pictureMatch[1]) {
-            imageUrl = `https://cdn.anidb.net/images/main/${pictureMatch[1].trim()}`;
-          }
-          if (anime.description) summary = stripHtmlSummary(decodeHtmlEntities(anime.description));
+    try {
+      const client = getAniDBClient(
+        (creds && creds.anidb_username) ? creds.anidb_username : '',
+        (creds && creds.anidb_password) ? creds.anidb_password : ''
+      );
+      const anime = await client.getAnimeInfo(aid);
+      if (anime && anime.raw) {
+        const raw = String(anime.raw);
+        const pictureMatch = raw.match(/<picture>([^<]+)<\/picture>/i) || raw.match(/<picname>([^<]+)<\/picname>/i);
+        if (pictureMatch && pictureMatch[1]) {
+          imageUrl = `https://cdn.anidb.net/images/main/${pictureMatch[1].trim()}`;
         }
-      } catch (e) {
-        // Fall through to web-page parsing below.
+        if (anime.description) summary = stripHtmlSummary(decodeHtmlEntities(anime.description));
       }
+    } catch (e) {
+      // Fall through to web-page parsing below.
     }
 
     if (!imageUrl || !summary) {
