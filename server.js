@@ -8906,24 +8906,34 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
         (creds && creds.anidb_client_version) ? creds.anidb_client_version : 1
       );
       const anime = await client.getAnimeInfo(aid);
+      
+      let pictureFilename = null;
+      
       if (anime) {
-        // Try parsed picture field first (cleaner)
+        // Try parsed picture field first
         if (anime.picture) {
-          imageUrl = `https://cdn.anidb.net/images/main/${anime.picture.trim()}`;
-          try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_PARSED series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${anime.picture}`); } catch (e) {}
+          pictureFilename = anime.picture.trim();
+          try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_FROM_XML series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${pictureFilename}`); } catch (e) {}
         }
-        // Fallback to raw XML parsing if parsed field missing
-        else if (anime.raw) {
-          const raw = String(anime.raw);
-          const pictureMatch = raw.match(/<picture>([^<]+)<\/picture>/i) || raw.match(/<picname>([^<]+)<\/picname>/i) || raw.match(/<image>([^<]+)<\/image>/i);
-          if (pictureMatch && pictureMatch[1]) {
-            imageUrl = `https://cdn.anidb.net/images/main/${pictureMatch[1].trim()}`;
-            try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_RAW series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${pictureMatch[1]}`); } catch (e) {}
-          } else {
-            // Log XML sample when picture is missing
-            try { appendLog(`APPROVED_SERIES_ANIDB_NO_PICTURE_TAG series=${String(seriesName || '').slice(0,80)} aid=${aid} xml_sample=${raw.slice(0,200).replace(/\n/g, ' ')}`); } catch (e) {}
+        
+        // If no picture in XML, try scraping the website
+        if (!pictureFilename) {
+          try { appendLog(`APPROVED_SERIES_ANIDB_NO_XML_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aid} trying_web_scrape=true`); } catch (e) {}
+          pictureFilename = await client.scrapePictureFromWeb(aid);
+          if (pictureFilename) {
+            try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_FROM_WEB series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${pictureFilename}`); } catch (e) {}
           }
         }
+        
+        // Construct image URL from picture filename
+        if (pictureFilename) {
+          // Clean the filename - remove any URL prefix if present
+          const cleanFilename = pictureFilename.replace(/^.*\/images\/main\//, '');
+          // Try both CDN endpoints
+          imageUrl = `https://cdn.anidb.net/images/main/${cleanFilename}`;
+          try { appendLog(`APPROVED_SERIES_ANIDB_IMAGE_URL series=${String(seriesName || '').slice(0,80)} aid=${aid} url=${imageUrl.slice(0,120)}`); } catch (e) {}
+        }
+        
         if (anime.description) summary = stripHtmlSummary(decodeHtmlEntities(anime.description));
       }
     } catch (e) {
