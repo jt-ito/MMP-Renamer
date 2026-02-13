@@ -3320,6 +3320,14 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     try { return String(value || '').trim() } catch (e) { return String(value || '') }
   }
 
+  const normalizedTitle = normalizeKey(title)
+  const aliasTitleKey = Array.isArray(aliasTitles)
+    ? aliasTitles.map((value) => normalizeKey(value)).filter(Boolean).join('|')
+    : ''
+  const loadTargetKey = filePath
+    ? `path:${filePath}`
+    : `title:${normalizedTitle}::aliases:${aliasTitleKey}`
+
   // Track unsaved changes
   hasUnsavedChangesRef.current = (
     normalizeManualValue(values.anilist) !== normalizeManualValue(initialValues.anilist)
@@ -3328,8 +3336,6 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     || normalizeManualValue(values.anidbEpisode) !== normalizeManualValue(initialValues.anidbEpisode)
   )
 
-  // Memoize aliasTitles to prevent useEffect re-running on every render
-  // Stable stringified version of aliasTitles to prevent re-renders from array reference changes
   useEffect(() => {
     let active = true
     if (!isOpen || !title) {
@@ -3338,8 +3344,8 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       return undefined
     }
     
-    // Create a unique key that includes file path for episode-level IDs
-    const cacheKey = filePath || normalizeKey(title)
+    // Create a stable key for current target. When filePath exists, ignore title churn.
+    const cacheKey = loadTargetKey
     
     // Skip reload if we already loaded data for this specific item (prevents flickering)
     if (loadedForRef.current === cacheKey) {
@@ -3350,7 +3356,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     // Load data immediately from cache if available to prevent flash
     if (manualIdsCache.current) {
       const map = manualIdsCache.current
-      const titleKey = normalizeKey(title)
+      const titleKey = normalizedTitle
       let seriesEntry = (titleKey && map[titleKey]) ? map[titleKey] : null
       if (!seriesEntry && Array.isArray(aliasTitles)) {
         for (const alias of aliasTitles) {
@@ -3385,7 +3391,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         const map = (r && r.data && r.data.manualIds) ? r.data.manualIds : {}
         manualIdsCache.current = map
         
-        const titleKey = normalizeKey(title)
+        const titleKey = normalizedTitle
         let seriesEntry = (titleKey && map[titleKey]) ? map[titleKey] : null
         if (!seriesEntry && Array.isArray(aliasTitles)) {
           for (const alias of aliasTitles) {
@@ -3427,7 +3433,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       }
     })()
     return () => { active = false }
-  }, [isOpen, title, filePath])
+  }, [isOpen, loadTargetKey])
 
   const hasChanges = (
     normalizeManualValue(values.anilist) !== normalizeManualValue(initialValues.anilist)
@@ -3447,6 +3453,10 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       tmdb: String(values.tmdb || '').trim() || null,
       tvdb: String(values.tvdb || '').trim() || null,
       anidbEpisode: String(values.anidbEpisode || '').trim() || null
+    }
+    if (nextPayload.anidbEpisode && !filePath) {
+      pushToast && pushToast('Manual IDs', 'Cannot save AniDB Episode ID without a file path')
+      return
     }
     if (!nextPayload.anilist && !nextPayload.tmdb && !nextPayload.tvdb && !nextPayload.anidbEpisode) {
       pushToast && pushToast('Manual IDs', 'Enter at least one ID before saving')

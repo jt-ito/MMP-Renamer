@@ -9435,6 +9435,10 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
     const tvdbId = normalizeManualIdValue(req.body.tvdb);
     const anidbEpisodeId = normalizeAniDbEpisodeId(req.body.anidbEpisode);
 
+    if (anidbEpisodeId !== null && !filePath) {
+      return res.status(400).json({ error: 'filePath is required when setting anidbEpisode' });
+    }
+
     // Series-level IDs go in the series entry
     if (anilistId !== null) seriesEntry.anilist = anilistId;
     if (tmdbId !== null) seriesEntry.tmdb = tmdbId;
@@ -9695,6 +9699,12 @@ app.get('/api/logs/recent', requireAuth, requireAdmin, (req, res) => {
         // Parse query parameters: filter mode and line count
         const filterMode = req.query.filter || 'dashboard' // 'dashboard' (default) | 'approved_series'
         const lineCount = parseInt(req.query.lines, 10) || 200
+        const isApprovedSeriesLog = (line) => {
+          const text = String(line || '').trim()
+          if (!text) return false
+          const content = text.replace(/^\S+\s+/, '')
+          return content.includes('APPROVED_SERIES_')
+        }
         
         // Split into lines and filter based on mode
         let lines = String(sb || '').split('\n')
@@ -9702,16 +9712,10 @@ app.get('/api/logs/recent', requireAuth, requireAdmin, (req, res) => {
         // Apply filtering based on filter mode
         if (filterMode === 'dashboard') {
           // Dashboard mode: exclude APPROVED_SERIES_* logs to reduce noise
-          lines = lines.filter(line => {
-            const logContent = line.includes(' ') ? line.substring(line.indexOf(' ') + 1) : line
-            return !logContent.startsWith('APPROVED_SERIES_')
-          })
+          lines = lines.filter(line => !isApprovedSeriesLog(line))
         } else if (filterMode === 'approved_series') {
           // Approved Series mode: show only APPROVED_SERIES_* logs for debugging artwork fetching
-          lines = lines.filter(line => {
-            const logContent = line.includes(' ') ? line.substring(line.indexOf(' ') + 1) : line
-            return logContent.startsWith('APPROVED_SERIES_')
-          })
+          lines = lines.filter(line => isApprovedSeriesLog(line))
         }
         // For any other filter mode or no filter, show all logs
         
