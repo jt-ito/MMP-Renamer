@@ -110,7 +110,7 @@ export default function ApprovedSeries({ pushToast }) {
   useEffect(() => {
     if (!activeOutput || !Array.isArray(activeOutput.series)) return
     const source = activeOutput.source || 'anilist'
-    if (!['anilist', 'tmdb'].includes(source)) return
+    if (!['anilist', 'tmdb', 'anidb'].includes(source)) return
     const cards = Array.from(document.querySelectorAll('.approved-series-card[data-series-key]'))
     if (!cards.length) return
 
@@ -191,6 +191,7 @@ export default function ApprovedSeries({ pushToast }) {
                   >
                     <option value="anilist">AniList</option>
                     <option value="tmdb">TMDB</option>
+                    <option value="anidb">AniDB</option>
                   </select>
                   <span className="small-muted">Images auto-fetch and cache while you scroll.</span>
                 </div>

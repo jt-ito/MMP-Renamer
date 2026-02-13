@@ -3304,11 +3304,17 @@ function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
 }
 
 function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pushToast }) {
-  const [values, setValues] = useState({ anilist: '', tmdb: '', tvdb: '', anidbEpisode: '' })
+  const EMPTY_MANUAL_VALUES = { anilist: '', tmdb: '', tvdb: '', anidbEpisode: '' }
+  const [values, setValues] = useState(EMPTY_MANUAL_VALUES)
+  const [initialValues, setInitialValues] = useState(EMPTY_MANUAL_VALUES)
   const [loading, setLoading] = useState(false)
 
   const normalizeKey = (value) => {
     try { return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ') } catch (e) { return String(value || '').trim().toLowerCase() }
+  }
+
+  const normalizeManualValue = (value) => {
+    try { return String(value || '').trim() } catch (e) { return String(value || '') }
   }
 
   useEffect(() => {
@@ -3331,14 +3337,19 @@ function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pu
           }
         }
         if (!active) return
-        setValues({
+        const nextLoadedValues = {
           anilist: entry && entry.anilist ? String(entry.anilist) : '',
           tmdb: entry && entry.tmdb ? String(entry.tmdb) : '',
           tvdb: entry && entry.tvdb ? String(entry.tvdb) : '',
           anidbEpisode: entry && entry.anidbEpisode ? String(entry.anidbEpisode) : ''
-        })
+        }
+        setValues(nextLoadedValues)
+        setInitialValues(nextLoadedValues)
       } catch (e) {
-        if (active) setValues({ anilist: '', tmdb: '', tvdb: '', anidbEpisode: '' })
+        if (active) {
+          setValues(EMPTY_MANUAL_VALUES)
+          setInitialValues(EMPTY_MANUAL_VALUES)
+        }
       } finally {
         if (active) setLoading(false)
       }
@@ -3346,23 +3357,51 @@ function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pu
     return () => { active = false }
   }, [isOpen, title, JSON.stringify(aliasTitles || [])])
 
+  const hasChanges = (
+    normalizeManualValue(values.anilist) !== normalizeManualValue(initialValues.anilist)
+    || normalizeManualValue(values.tmdb) !== normalizeManualValue(initialValues.tmdb)
+    || normalizeManualValue(values.tvdb) !== normalizeManualValue(initialValues.tvdb)
+    || normalizeManualValue(values.anidbEpisode) !== normalizeManualValue(initialValues.anidbEpisode)
+  )
+
   const handleSave = async () => {
     if (!title) return
+    if (!hasChanges) {
+      pushToast && pushToast('Manual IDs', 'No changes to save')
+      return
+    }
+    const nextPayload = {
+      anilist: String(values.anilist || '').trim() || null,
+      tmdb: String(values.tmdb || '').trim() || null,
+      tvdb: String(values.tvdb || '').trim() || null,
+      anidbEpisode: String(values.anidbEpisode || '').trim() || null
+    }
+    if (!nextPayload.anilist && !nextPayload.tmdb && !nextPayload.tvdb && !nextPayload.anidbEpisode) {
+      pushToast && pushToast('Manual IDs', 'Enter at least one ID before saving')
+      return
+    }
     setLoading(true)
     try {
       await axios.post(API('/manual-ids'), {
         title,
         aliasTitles,
-        anilist: values.anilist || null,
-        tmdb: values.tmdb || null,
-        tvdb: values.tvdb || null,
-        anidbEpisode: values.anidbEpisode || null
+        anilist: nextPayload.anilist,
+        tmdb: nextPayload.tmdb,
+        tvdb: nextPayload.tvdb,
+        anidbEpisode: nextPayload.anidbEpisode
+      })
+      setInitialValues({
+        anilist: nextPayload.anilist || '',
+        tmdb: nextPayload.tmdb || '',
+        tvdb: nextPayload.tvdb || '',
+        anidbEpisode: nextPayload.anidbEpisode || ''
       })
       pushToast && pushToast('Manual IDs', 'Saved manual provider IDs')
       onSaved && onSaved()
       onToggle && onToggle(false)
     } catch (e) {
-      pushToast && pushToast('Manual IDs', 'Failed to save manual IDs')
+      const msg = e && e.response && e.response.data && e.response.data.error ? e.response.data.error : 'Failed to save manual IDs'
+      pushToast && pushToast('Manual IDs', msg)
     } finally {
       setLoading(false)
     }
@@ -3419,7 +3458,21 @@ function ManualIdInputs({ title, aliasTitles = [], isOpen, onToggle, onSaved, pu
           </div>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button type="button" className="btn-ghost" onClick={() => onToggle && onToggle(false)} disabled={loading}>Cancel</button>
-            <button type="button" className="btn-cta" onClick={handleSave} disabled={loading}>Save IDs</button>
+            <button
+              type="button"
+              className="btn-cta"
+              onClick={handleSave}
+              disabled={loading}
+              style={hasChanges ? {
+                filter: 'brightness(1.18) saturate(1.15)',
+                boxShadow: '0 10px 22px rgba(53, 94, 59, 0.40)',
+                transition: 'filter 160ms ease, box-shadow 160ms ease'
+              } : {
+                transition: 'filter 160ms ease, box-shadow 160ms ease'
+              }}
+            >
+              Save IDs
+            </button>
           </div>
         </div>
       ) : null}

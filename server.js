@@ -10,6 +10,7 @@ const tvdb = require('./lib/tvdb')
 const chokidar = require('chokidar')
 const { lookupMetadataWithAniDB, getAniDBCredentials } = require('./lib/meta-providers')
 const { getAniDBUDPClient } = require('./lib/anidb-udp')
+const { getAniDBClient } = require('./lib/anidb')
 const bcrypt = require('bcryptjs')
 const cookieParser = require('cookie-parser')
 const cookieSession = require('cookie-session')
@@ -468,6 +469,10 @@ let approvedSeriesImages = {};
 try { approvedSeriesImages = JSON.parse(fs.readFileSync(approvedSeriesImagesFile, 'utf8') || '{}') } catch (e) { approvedSeriesImages = {} }
 const approvedSeriesImageFetchLocks = new Map();
 const APPROVED_SERIES_FETCH_COOLDOWN_MS = 3000;
+const APPROVED_SERIES_BACKGROUND_INTERVAL_MS = 25000;
+const APPROVED_SERIES_BACKGROUND_BATCH_SIZE = 3;
+let approvedSeriesBackgroundTimer = null;
+let approvedSeriesBackgroundInFlight = false;
 
 // Load optional series aliases to control canonical folder names for tricky titles
 const CONFIG_DIR = path.resolve(__dirname, 'config');
@@ -8197,6 +8202,12 @@ function normalizeOutputKey(value) {
   }
 }
 
+function normalizeApprovedSeriesSource(value) {
+  const source = String(value || '').trim().toLowerCase();
+  if (source === 'anilist' || source === 'tmdb' || source === 'anidb') return source;
+  return 'anilist';
+}
+
 function getApprovedSeriesSourcePreferences(username) {
   try {
     if (!username || !users || !users[username]) return {};
@@ -8215,7 +8226,7 @@ function setApprovedSeriesSourcePreference(username, outputKey, source) {
     const map = users[username].settings.approved_series_image_source_by_output && typeof users[username].settings.approved_series_image_source_by_output === 'object'
       ? users[username].settings.approved_series_image_source_by_output
       : {};
-    map[outputKey] = source;
+    map[outputKey] = normalizeApprovedSeriesSource(source);
     users[username].settings.approved_series_image_source_by_output = map;
     writeJson(usersFile, users);
     return true;
@@ -8261,6 +8272,217 @@ async function fetchAniListSeriesArtwork(title) {
     };
   } catch (e) {
     return null;
+  }
+}
+
+function decodeHtmlEntities(input) {
+  try {
+    return String(input || '')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&nbsp;/g, ' ')
+      .trim();
+  } catch (e) { return String(input || ''); }
+}
+
+function getSeriesNameForApprovedEntry(entry, targetPath) {
+  try {
+    const info = deriveAppliedSeriesInfo(targetPath);
+    return (info.seriesName || entry.seriesTitleEnglish || entry.seriesTitle || entry.title || 'Unknown Series').trim();
+  } catch (e) {
+    return (entry && (entry.seriesTitleEnglish || entry.seriesTitle || entry.title)) ? String(entry.seriesTitleEnglish || entry.seriesTitle || entry.title).trim() : 'Unknown Series';
+  }
+}
+
+function findAniDbAidForApprovedSeries(outputKey, seriesName) {
+  try {
+    const normalizedOutputKey = normalizeOutputKey(outputKey);
+    const normalizedSeries = normalizeForCache(seriesName);
+    if (!normalizedOutputKey || !normalizedSeries) return null;
+    let best = null;
+
+    for (const cacheKey of Object.keys(enrichCache || {})) {
+      const entry = enrichCache[cacheKey];
+      if (!entry || entry.applied !== true || !entry.appliedTo) continue;
+      const targets = Array.isArray(entry.appliedTo) ? entry.appliedTo : [entry.appliedTo];
+      for (const target of targets) {
+        if (!target) continue;
+        const info = deriveAppliedSeriesInfo(target);
+        const bucketKey = normalizeOutputKey(info.outputRoot || path.dirname(path.dirname(target)));
+        if (!bucketKey || bucketKey !== normalizedOutputKey) continue;
+
+        const candidateName = getSeriesNameForApprovedEntry(entry, target);
+        if (normalizeForCache(candidateName) !== normalizedSeries) continue;
+
+        const providerRaw = (entry.provider && entry.provider.raw && typeof entry.provider.raw === 'object')
+          ? entry.provider.raw
+          : (entry.raw && typeof entry.raw === 'object' ? entry.raw : null);
+        const aidCandidates = [
+          providerRaw && providerRaw.aid,
+          providerRaw && providerRaw.animeId,
+          providerRaw && providerRaw.anidbId,
+          entry && entry.aid,
+          entry && entry.anidbId
+        ];
+        let aid = null;
+        for (const candidate of aidCandidates) {
+          if (candidate == null) continue;
+          const parsed = Number(String(candidate).trim());
+          if (Number.isFinite(parsed) && parsed > 0) { aid = parsed; break; }
+        }
+        if (!aid) continue;
+
+        const appliedAt = Number(entry.appliedAt || 0);
+        if (!best || appliedAt > best.appliedAt) {
+          best = { aid, appliedAt };
+        }
+      }
+    }
+
+    return best ? best.aid : null;
+  } catch (e) { return null; }
+}
+
+function extractAniDbPageImageUrl(html) {
+  try {
+    const content = String(html || '');
+    const absolute = content.match(/https?:\/\/cdn\.anidb\.net\/images\/main\/[^"'\s>]+/i);
+    if (absolute && absolute[0]) return absolute[0];
+    const relative = content.match(/(?:src|data-src)=["'](\/images\/main\/[^"'\s>]+)["']/i);
+    if (relative && relative[1]) return `https://cdn.anidb.net${relative[1]}`;
+    const protocolLess = content.match(/(?:src|data-src)=["'](\/\/cdn\.anidb\.net\/images\/main\/[^"'\s>]+)["']/i);
+    if (protocolLess && protocolLess[1]) return `https:${protocolLess[1]}`;
+  } catch (e) { /* ignore */ }
+  return null;
+}
+
+function extractAniDbPageSummary(html) {
+  try {
+    const content = String(html || '');
+    const meta1 = content.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["'][^>]*>/i);
+    const meta2 = content.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["'][^>]*>/i);
+    const summaryRaw = (meta1 && meta1[1]) || (meta2 && meta2[1]) || '';
+    const decoded = decodeHtmlEntities(summaryRaw);
+    return stripHtmlSummary(decoded);
+  } catch (e) { return ''; }
+}
+
+async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
+  try {
+    const aid = findAniDbAidForApprovedSeries(outputKey, seriesName);
+    if (!aid) return null;
+
+    let imageUrl = null;
+    let summary = '';
+
+    const creds = getAniDBCredentials(username, serverSettings, users);
+    if (creds && creds.hasCredentials && creds.anidb_username && creds.anidb_password) {
+      try {
+        const client = getAniDBClient(creds.anidb_username, creds.anidb_password);
+        const anime = await client.getAnimeInfo(aid);
+        if (anime && anime.raw) {
+          const raw = String(anime.raw);
+          const pictureMatch = raw.match(/<picture>([^<]+)<\/picture>/i) || raw.match(/<picname>([^<]+)<\/picname>/i);
+          if (pictureMatch && pictureMatch[1]) {
+            imageUrl = `https://cdn.anidb.net/images/main/${pictureMatch[1].trim()}`;
+          }
+          if (anime.description) summary = stripHtmlSummary(decodeHtmlEntities(anime.description));
+        }
+      } catch (e) {
+        // Fall through to web-page parsing below.
+      }
+    }
+
+    if (!imageUrl || !summary) {
+      const page = await httpRequest({
+        hostname: 'anidb.net',
+        path: `/anime/${aid}`,
+        method: 'GET',
+        headers: {
+          'Accept': 'text/html,application/xhtml+xml',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
+        }
+      }, null, 10000);
+      if (page && page.statusCode === 200) {
+        if (!imageUrl) imageUrl = extractAniDbPageImageUrl(page.body);
+        if (!summary) summary = extractAniDbPageSummary(page.body);
+      }
+    }
+
+    if (!imageUrl) return null;
+    return {
+      id: aid,
+      name: String(seriesName || '').trim(),
+      imageUrl,
+      summary: summary || '',
+      fetchedAt: Date.now(),
+      provider: 'anidb'
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+async function fetchApprovedSeriesArtwork({ username, outputKey, source, seriesName }) {
+  const selectedSource = normalizeApprovedSeriesSource(source);
+  if (selectedSource === 'anilist') {
+    return fetchAniListSeriesArtwork(seriesName);
+  }
+  if (selectedSource === 'anidb') {
+    return fetchAniDbSeriesArtwork(seriesName, outputKey, username);
+  }
+  return null;
+}
+
+async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, seriesName, allowCooldown = true }) {
+  const selectedSource = normalizeApprovedSeriesSource(source);
+  const normalizedOutputKey = normalizeOutputKey(outputKey);
+  const cleanSeriesName = String(seriesName || '').trim();
+  const seriesKey = cleanSeriesName ? (normalizeForCache(cleanSeriesName) || cleanSeriesName.toLowerCase()) : '';
+  if (!normalizedOutputKey) return { ok: false, error: 'outputKey is required' };
+  if (!cleanSeriesName || !seriesKey) return { ok: false, error: 'seriesName is required' };
+  if (!['anilist', 'tmdb', 'anidb'].includes(selectedSource)) return { ok: false, error: 'invalid source' };
+
+  const cacheKey = `${normalizedOutputKey}::${seriesKey}`;
+  const existing = approvedSeriesImages && approvedSeriesImages[cacheKey] ? approvedSeriesImages[cacheKey] : null;
+  if (existing && existing.imageUrl && existing.provider === selectedSource) {
+    return { ok: true, cached: true, fetched: false, source: selectedSource };
+  }
+
+  const lockKey = `${username || 'anon'}::${normalizedOutputKey}::${seriesKey}`;
+  const now = Date.now();
+  const lockInfo = approvedSeriesImageFetchLocks.get(lockKey) || null;
+  if (lockInfo && lockInfo.inFlight) {
+    return { ok: true, skipped: true, fetched: false, reason: 'in-flight', source: selectedSource };
+  }
+  if (allowCooldown && lockInfo && lockInfo.lastFetchedAt && (now - lockInfo.lastFetchedAt) < APPROVED_SERIES_FETCH_COOLDOWN_MS) {
+    return { ok: true, skipped: true, fetched: false, reason: 'cooldown', source: selectedSource };
+  }
+
+  approvedSeriesImageFetchLocks.set(lockKey, { inFlight: true, lastFetchedAt: lockInfo && lockInfo.lastFetchedAt ? lockInfo.lastFetchedAt : 0 });
+  try {
+    const lookedUp = await fetchApprovedSeriesArtwork({ username, outputKey: normalizedOutputKey, source: selectedSource, seriesName: cleanSeriesName });
+    approvedSeriesImageFetchLocks.set(lockKey, { inFlight: false, lastFetchedAt: Date.now() });
+
+    if (!lookedUp || !lookedUp.imageUrl) {
+      return { ok: true, fetched: false, skipped: true, source: selectedSource, reason: 'no-image' };
+    }
+
+    approvedSeriesImages[cacheKey] = {
+      provider: selectedSource,
+      imageUrl: lookedUp.imageUrl,
+      summary: lookedUp.summary || (existing && existing.summary) || '',
+      mediaId: lookedUp.id || null,
+      fetchedAt: lookedUp.fetchedAt || Date.now()
+    };
+    try { writeJson(approvedSeriesImagesFile, approvedSeriesImages); } catch (e) {}
+    return { ok: true, fetched: true, source: selectedSource };
+  } catch (err) {
+    approvedSeriesImageFetchLocks.set(lockKey, { inFlight: false, lastFetchedAt: Date.now() });
+    throw err;
   }
 }
 
@@ -8318,7 +8540,7 @@ function buildApprovedSeriesPayload(username) {
       outputMap.set(key, {
         key,
         path: displayPath || key,
-        source: (sourcePrefs && sourcePrefs[key]) ? String(sourcePrefs[key]) : 'anilist',
+        source: normalizeApprovedSeriesSource((sourcePrefs && sourcePrefs[key]) ? String(sourcePrefs[key]) : 'anilist'),
         seriesMap: new Map()
       });
     }
@@ -8351,7 +8573,7 @@ function buildApprovedSeriesPayload(username) {
       const bucket = getOutputBucketForPath(target);
       if (!bucket) continue;
       const info = deriveAppliedSeriesInfo(target);
-      const seriesName = (info.seriesName || entry.seriesTitleEnglish || entry.seriesTitle || entry.title || 'Unknown Series').trim();
+      const seriesName = getSeriesNameForApprovedEntry(entry, target);
       const seriesKey = normalizeForCache(seriesName) || seriesName.toLowerCase();
       const map = bucket.seriesMap;
       if (!map.has(seriesKey)) {
@@ -8402,6 +8624,63 @@ function buildApprovedSeriesPayload(username) {
   return { outputs, totalSeries };
 }
 
+async function runApprovedSeriesBackgroundFetchCycle() {
+  if (approvedSeriesBackgroundInFlight) return;
+  approvedSeriesBackgroundInFlight = true;
+  try {
+    let fetched = 0;
+    const usernames = Object.keys(users || {});
+    for (const username of usernames) {
+      if (fetched >= APPROVED_SERIES_BACKGROUND_BATCH_SIZE) break;
+      const payload = buildApprovedSeriesPayload(username);
+      const outputs = Array.isArray(payload.outputs) ? payload.outputs : [];
+      for (const output of outputs) {
+        if (fetched >= APPROVED_SERIES_BACKGROUND_BATCH_SIZE) break;
+        const source = normalizeApprovedSeriesSource(output.source || 'anilist');
+        if (source === 'tmdb') continue;
+        const seriesList = Array.isArray(output.series) ? output.series : [];
+        for (const series of seriesList) {
+          if (fetched >= APPROVED_SERIES_BACKGROUND_BATCH_SIZE) break;
+          const seriesName = series && series.name ? String(series.name).trim() : '';
+          if (!seriesName) continue;
+          try {
+            const result = await fetchAndCacheApprovedSeriesImage({
+              username,
+              outputKey: output.key,
+              source,
+              seriesName,
+              allowCooldown: true
+            });
+            if (result && result.fetched) fetched += 1;
+          } catch (e) {
+            // best-effort background processing
+          }
+        }
+      }
+    }
+    if (fetched > 0) {
+      try { appendLog(`APPROVED_SERIES_BACKGROUND_FETCH fetched=${fetched}`); } catch (e) {}
+    }
+  } catch (e) {
+    try { appendLog(`APPROVED_SERIES_BACKGROUND_FETCH_FAIL err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
+  } finally {
+    approvedSeriesBackgroundInFlight = false;
+  }
+}
+
+function startApprovedSeriesBackgroundWorker() {
+  try {
+    if (approvedSeriesBackgroundTimer) return;
+    approvedSeriesBackgroundTimer = setInterval(() => {
+      runApprovedSeriesBackgroundFetchCycle();
+    }, APPROVED_SERIES_BACKGROUND_INTERVAL_MS);
+    setTimeout(() => { runApprovedSeriesBackgroundFetchCycle(); }, 5000);
+    appendLog(`APPROVED_SERIES_BACKGROUND_WORKER_STARTED intervalMs=${APPROVED_SERIES_BACKGROUND_INTERVAL_MS}`);
+  } catch (e) {
+    try { appendLog(`APPROVED_SERIES_BACKGROUND_WORKER_START_FAIL err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
+  }
+}
+
 app.get('/api/approved-series', requireAuth, (req, res) => {
   try {
     const username = req.session && req.session.username ? req.session.username : null;
@@ -8416,10 +8695,9 @@ app.post('/api/approved-series/source', requireAuth, (req, res) => {
   try {
     const username = req.session && req.session.username ? req.session.username : null;
     const outputKey = normalizeOutputKey(req && req.body ? req.body.outputKey : '');
-    const sourceRaw = req && req.body ? String(req.body.source || '').trim().toLowerCase() : '';
-    const source = sourceRaw || 'anilist';
+    const source = normalizeApprovedSeriesSource(req && req.body ? req.body.source : 'anilist');
     if (!outputKey) return res.status(400).json({ error: 'outputKey is required' });
-    if (!['anilist', 'tmdb'].includes(source)) return res.status(400).json({ error: 'invalid source' });
+    if (!['anilist', 'tmdb', 'anidb'].includes(source)) return res.status(400).json({ error: 'invalid source' });
     const ok = setApprovedSeriesSourcePreference(username, outputKey, source);
     if (!ok) return res.status(500).json({ error: 'failed to save preference' });
     return res.json({ ok: true });
@@ -8439,15 +8717,10 @@ app.post('/api/approved-series/fetch-images', requireAuth, async (req, res) => {
     if (!output) return res.status(404).json({ error: 'output not found' });
 
     const sourcePrefs = getApprovedSeriesSourcePreferences(username);
-    const sourceRaw = req && req.body && req.body.source ? String(req.body.source).trim().toLowerCase() : '';
-    const selectedSource = sourceRaw || (sourcePrefs && sourcePrefs[outputKey]) || 'anilist';
-    if (!['anilist', 'tmdb'].includes(selectedSource)) return res.status(400).json({ error: 'invalid source' });
+    const selectedSource = normalizeApprovedSeriesSource((req && req.body && req.body.source) || (sourcePrefs && sourcePrefs[outputKey]) || 'anilist');
+    if (!['anilist', 'tmdb', 'anidb'].includes(selectedSource)) return res.status(400).json({ error: 'invalid source' });
 
     setApprovedSeriesSourcePreference(username, outputKey, selectedSource);
-
-    if (selectedSource !== 'anilist') {
-      return res.json({ ok: true, fetched: 0, skipped: output.seriesCount, source: selectedSource, note: 'Only AniList fetching is currently implemented' });
-    }
 
     let fetched = 0;
     let skipped = 0;
@@ -8455,23 +8728,10 @@ app.post('/api/approved-series/fetch-images', requireAuth, async (req, res) => {
     for (const series of seriesList) {
       const seriesName = series && series.name ? String(series.name) : '';
       if (!seriesName) { skipped++; continue; }
-      const seriesKey = normalizeForCache(seriesName) || seriesName.toLowerCase();
-      const cacheKey = `${outputKey}::${seriesKey}`;
-      const existing = approvedSeriesImages[cacheKey];
-      if (existing && existing.imageUrl && existing.provider === 'anilist') { skipped++; continue; }
-      const lookedUp = await fetchAniListSeriesArtwork(seriesName);
-      if (!lookedUp || !lookedUp.imageUrl) { skipped++; continue; }
-      approvedSeriesImages[cacheKey] = {
-        provider: 'anilist',
-        imageUrl: lookedUp.imageUrl,
-        summary: lookedUp.summary || (existing && existing.summary) || '',
-        mediaId: lookedUp.id || null,
-        fetchedAt: lookedUp.fetchedAt || Date.now()
-      };
-      fetched++;
+      const result = await fetchAndCacheApprovedSeriesImage({ username, outputKey, source: selectedSource, seriesName, allowCooldown: true });
+      if (result && result.fetched) fetched++;
+      else skipped++;
     }
-
-    try { writeJson(approvedSeriesImagesFile, approvedSeriesImages); } catch (e) {}
     return res.json({ ok: true, fetched, skipped, source: selectedSource });
   } catch (e) {
     return res.status(500).json({ error: e && e.message ? e.message : String(e) });
@@ -8483,57 +8743,16 @@ app.post('/api/approved-series/fetch-image', requireAuth, async (req, res) => {
     const username = req.session && req.session.username ? req.session.username : null;
     const outputKey = normalizeOutputKey(req && req.body ? req.body.outputKey : '');
     const seriesName = req && req.body && req.body.seriesName ? String(req.body.seriesName).trim() : '';
-    const seriesKey = seriesName ? (normalizeForCache(seriesName) || seriesName.toLowerCase()) : '';
     if (!outputKey) return res.status(400).json({ error: 'outputKey is required' });
-    if (!seriesName || !seriesKey) return res.status(400).json({ error: 'seriesName is required' });
+    if (!seriesName) return res.status(400).json({ error: 'seriesName is required' });
 
     const sourcePrefs = getApprovedSeriesSourcePreferences(username);
-    const sourceRaw = req && req.body && req.body.source ? String(req.body.source).trim().toLowerCase() : '';
-    const selectedSource = sourceRaw || (sourcePrefs && sourcePrefs[outputKey]) || 'anilist';
-    if (!['anilist', 'tmdb'].includes(selectedSource)) return res.status(400).json({ error: 'invalid source' });
+    const selectedSource = normalizeApprovedSeriesSource((req && req.body && req.body.source) || (sourcePrefs && sourcePrefs[outputKey]) || 'anilist');
+    if (!['anilist', 'tmdb', 'anidb'].includes(selectedSource)) return res.status(400).json({ error: 'invalid source' });
     setApprovedSeriesSourcePreference(username, outputKey, selectedSource);
 
-    const cacheKey = `${outputKey}::${seriesKey}`;
-    const existing = approvedSeriesImages && approvedSeriesImages[cacheKey] ? approvedSeriesImages[cacheKey] : null;
-    if (existing && existing.imageUrl && existing.provider === selectedSource) {
-      return res.json({ ok: true, cached: true, fetched: false, source: selectedSource });
-    }
-
-    const lockKey = `${username || 'anon'}::${outputKey}::${seriesKey}`;
-    const now = Date.now();
-    const lockInfo = approvedSeriesImageFetchLocks.get(lockKey) || null;
-    if (lockInfo && lockInfo.inFlight) {
-      return res.json({ ok: true, skipped: true, reason: 'in-flight', source: selectedSource });
-    }
-    if (lockInfo && lockInfo.lastFetchedAt && (now - lockInfo.lastFetchedAt) < APPROVED_SERIES_FETCH_COOLDOWN_MS) {
-      return res.json({ ok: true, skipped: true, reason: 'cooldown', source: selectedSource });
-    }
-
-    approvedSeriesImageFetchLocks.set(lockKey, { inFlight: true, lastFetchedAt: lockInfo && lockInfo.lastFetchedAt ? lockInfo.lastFetchedAt : 0 });
-    try {
-      if (selectedSource !== 'anilist') {
-        return res.json({ ok: true, fetched: false, skipped: true, source: selectedSource, note: 'Only AniList fetching is currently implemented' });
-      }
-
-      const lookedUp = await fetchAniListSeriesArtwork(seriesName);
-      approvedSeriesImageFetchLocks.set(lockKey, { inFlight: false, lastFetchedAt: Date.now() });
-      if (!lookedUp || !lookedUp.imageUrl) {
-        return res.json({ ok: true, fetched: false, skipped: true, source: selectedSource, reason: 'no-image' });
-      }
-
-      approvedSeriesImages[cacheKey] = {
-        provider: 'anilist',
-        imageUrl: lookedUp.imageUrl,
-        summary: lookedUp.summary || (existing && existing.summary) || '',
-        mediaId: lookedUp.id || null,
-        fetchedAt: lookedUp.fetchedAt || Date.now()
-      };
-      try { writeJson(approvedSeriesImagesFile, approvedSeriesImages); } catch (e) {}
-      return res.json({ ok: true, fetched: true, source: selectedSource });
-    } catch (fetchErr) {
-      approvedSeriesImageFetchLocks.set(lockKey, { inFlight: false, lastFetchedAt: Date.now() });
-      throw fetchErr;
-    }
+    const result = await fetchAndCacheApprovedSeriesImage({ username, outputKey, source: selectedSource, seriesName, allowCooldown: true });
+    return res.json(result);
   } catch (e) {
     return res.status(500).json({ error: e && e.message ? e.message : String(e) });
   }
@@ -8570,12 +8789,24 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
     if (tvdbId !== null) entry.tvdb = tvdbId;
     if (anidbEpisodeId !== null) entry.anidbEpisode = anidbEpisodeId;
 
+    const rawClear = req && req.body ? req.body.clear : null;
+    const clearRequested = rawClear === true || rawClear === 'true' || rawClear === 1 || rawClear === '1';
+
     manualIds = manualIds || {};
     if (Object.keys(entry).length === 0) {
+      if (!clearRequested) {
+        return res.status(400).json({ error: 'at least one manual ID is required (or pass clear=true to delete existing mapping)' });
+      }
       for (const key of keys) delete manualIds[key];
+      try {
+        appendLog(`MANUAL_ID_CLEARED title=${normalizeManualIdKey(title)} aliases=${Math.max(0, keys.length - 1)} by=${req && req.session && req.session.username ? req.session.username : 'unknown'}`);
+      } catch (e) {}
     }
     else {
       for (const key of keys) manualIds[key] = entry;
+      try {
+        appendLog(`MANUAL_ID_SAVED title=${normalizeManualIdKey(title)} anilist=${anilistId != null ? anilistId : '<none>'} tmdb=${tmdbId != null ? tmdbId : '<none>'} tvdb=${tvdbId != null ? tvdbId : '<none>'} anidbEpisode=${anidbEpisodeId != null ? anidbEpisodeId : '<none>'} aliases=${Math.max(0, keys.length - 1)} by=${req && req.session && req.session.username ? req.session.username : 'unknown'}`);
+      } catch (e) {}
     }
 
     try { writeJson(manualIdsFile, manualIds); } catch (e) {}
@@ -8907,6 +9138,8 @@ if (require.main === module) {
     console.log(`Server listening on ${PORT}`);
     // Initialize folder watchers for all users with scan_input_path
     initializeAllWatchers();
+    // Run approved-series image caching in the background regardless of UI route activity.
+    startApprovedSeriesBackgroundWorker();
   });
 }
 
