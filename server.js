@@ -3886,6 +3886,17 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
     tmdbApiKey: tmdbKey
   });
 
+  // Check for manual AniDB episode ID override
+  try {
+    const manualAnidbEpisodeId = getManualId(seriesLookupTitle, 'anidbEpisode');
+    if (manualAnidbEpisodeId) {
+      metaLookupOpts.manualAnidbEpisodeId = manualAnidbEpisodeId;
+      appendLog(`MANUAL_ANIDB_EPISODE_ID title=${seriesLookupTitle} eid=${manualAnidbEpisodeId}`);
+    }
+  } catch (manualIdErr) {
+    console.error('[Server] Failed to check manual AniDB episode ID:', manualIdErr);
+  }
+
   let sanitizedOrder = Array.isArray(providerOrder) ? providerOrder.filter(id => METADATA_PROVIDER_IDS.includes(id)) : [];
   // If skipAnimeProviders is enabled, filter out anidb and anilist from the provider order
   if (opts.skipAnimeProviders) {
@@ -5962,7 +5973,7 @@ app.get('/api/manual-ids', requireAuth, (req, res) => {
 // Save manual provider ID for a series title
 app.post('/api/manual-ids', requireAuth, (req, res) => {
   try {
-    const { title, anilist, tmdb, tvdb } = req.body;
+    const { title, anilist, tmdb, tvdb, anidbEpisode } = req.body;
     if (!title || typeof title !== 'string') {
       return res.status(400).json({ error: 'title is required' });
     }
@@ -5983,7 +5994,15 @@ app.post('/api/manual-ids', requireAuth, (req, res) => {
     if (tvdb != null && String(tvdb).trim()) manualIds[normalizedTitle].tvdb = String(tvdb).trim();
     else delete manualIds[normalizedTitle].tvdb;
 
-    if (!manualIds[normalizedTitle].anilist && !manualIds[normalizedTitle].tmdb && !manualIds[normalizedTitle].tvdb) {
+    if (anidbEpisode != null && String(anidbEpisode).trim()) {
+      const normalized = normalizeAniDbEpisodeId(anidbEpisode);
+      if (normalized) manualIds[normalizedTitle].anidbEpisode = normalized;
+      else delete manualIds[normalizedTitle].anidbEpisode;
+    } else {
+      delete manualIds[normalizedTitle].anidbEpisode;
+    }
+
+    if (!manualIds[normalizedTitle].anilist && !manualIds[normalizedTitle].tmdb && !manualIds[normalizedTitle].tvdb && !manualIds[normalizedTitle].anidbEpisode) {
       delete manualIds[normalizedTitle];
     }
 
@@ -5991,7 +6010,7 @@ app.post('/api/manual-ids', requireAuth, (req, res) => {
     loadManualIds();
 
     try {
-      appendLog(`MANUAL_ID_SAVED title=${normalizedTitle} anilist=${anilist||'<none>'} tmdb=${tmdb||'<none>'} tvdb=${tvdb||'<none>'} by=${req.session.username}`);
+      appendLog(`MANUAL_ID_SAVED title=${normalizedTitle} anilist=${anilist||'<none>'} tmdb=${tmdb||'<none>'} tvdb=${tvdb||'<none>'} anidbEpisode=${anidbEpisode||'<none>'} by=${req.session.username}`);
     } catch (e) {}
 
     return res.json({ ok: true, manualIds });
