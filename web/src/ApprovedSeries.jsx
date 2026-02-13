@@ -43,12 +43,12 @@ export default function ApprovedSeries({ pushToast }) {
   const activeOutput = useMemo(() => outputs.find((o) => o.key === activeOutputKey) || null, [outputs, activeOutputKey])
 
   const setOutputSource = async (outputKey, source) => {
-    const currentOutput = outputs.find((o) => o.key === outputKey) || null
     setSavingSource((prev) => ({ ...prev, [outputKey]: true }))
     try {
-      await axios.post(API('/approved-series/source'), { outputKey, outputPath: currentOutput ? currentOutput.path : '', source })
-      setOutputs((prev) => prev.map((o) => o.key === outputKey ? { ...o, source, sourceConfigured: true } : o))
-      pushToast && pushToast('Approved Series', 'Saved image source preference')
+      const resp = await axios.post(API('/approved-series/source'), { outputKey, source })
+      const savedSource = resp && resp.data && resp.data.source ? resp.data.source : source
+      setOutputs((prev) => prev.map((o) => o.key === outputKey ? { ...o, source: savedSource, sourceConfigured: true } : o))
+      pushToast && pushToast('Approved Series', `Saved image source: ${savedSource}`)
       return true
     } catch (e) {
       pushToast && pushToast('Approved Series', 'Failed to save image source')
@@ -96,7 +96,7 @@ export default function ApprovedSeries({ pushToast }) {
     }
   }
 
-  const enqueueAutoFetch = (outputKey, source, outputPath, seriesName, cardKey) => {
+  const enqueueAutoFetch = (outputKey, source, seriesName, cardKey) => {
     if (!outputKey || !seriesName || !cardKey) return
     if (queuedRef.current.has(cardKey) || inFlightRef.current.has(cardKey)) return
     queuedRef.current.add(cardKey)
@@ -115,8 +115,6 @@ export default function ApprovedSeries({ pushToast }) {
       try {
         await axios.post(API('/approved-series/fetch-image'), {
           outputKey: okey,
-          source,
-          outputPath,
           seriesName: sname
         })
         setOutputs((prev) => prev.map((out) => {
@@ -166,7 +164,7 @@ export default function ApprovedSeries({ pushToast }) {
         const outputKey = el.getAttribute('data-output-key') || ''
         const cardKey = el.getAttribute('data-series-key') || ''
         if (!seriesName || !outputKey || !cardKey) continue
-        enqueueAutoFetch(outputKey, source, activeOutput.path || '', seriesName, cardKey)
+        enqueueAutoFetch(outputKey, source, seriesName, cardKey)
       }
     }, { root: null, rootMargin: '280px 0px 280px 0px', threshold: 0.2 })
 
