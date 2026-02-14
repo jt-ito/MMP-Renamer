@@ -6020,54 +6020,7 @@ app.get('/api/manual-ids', requireAuth, (req, res) => {
   }
 });
 
-// Save manual provider ID for a series title
-app.post('/api/manual-ids', requireAuth, (req, res) => {
-  try {
-    const { title, anilist, tmdb, tvdb, anidbEpisode } = req.body;
-    if (!title || typeof title !== 'string') {
-      return res.status(400).json({ error: 'title is required' });
-    }
 
-    const normalizedTitle = normalizeManualIdKey(title);
-    if (!normalizedTitle) {
-      return res.status(400).json({ error: 'title cannot be empty' });
-    }
-
-    if (!manualIds[normalizedTitle]) manualIds[normalizedTitle] = {};
-
-    if (anilist != null && String(anilist).trim()) manualIds[normalizedTitle].anilist = String(anilist).trim();
-    else delete manualIds[normalizedTitle].anilist;
-
-    if (tmdb != null && String(tmdb).trim()) manualIds[normalizedTitle].tmdb = String(tmdb).trim();
-    else delete manualIds[normalizedTitle].tmdb;
-
-    if (tvdb != null && String(tvdb).trim()) manualIds[normalizedTitle].tvdb = String(tvdb).trim();
-    else delete manualIds[normalizedTitle].tvdb;
-
-    if (anidbEpisode != null && String(anidbEpisode).trim()) {
-      const normalized = normalizeAniDbEpisodeId(anidbEpisode);
-      if (normalized) manualIds[normalizedTitle].anidbEpisode = normalized;
-      else delete manualIds[normalizedTitle].anidbEpisode;
-    } else {
-      delete manualIds[normalizedTitle].anidbEpisode;
-    }
-
-    if (!manualIds[normalizedTitle].anilist && !manualIds[normalizedTitle].tmdb && !manualIds[normalizedTitle].tvdb && !manualIds[normalizedTitle].anidbEpisode) {
-      delete manualIds[normalizedTitle];
-    }
-
-    fs.writeFileSync(manualIdsFile, JSON.stringify(manualIds, null, 2), 'utf8');
-    loadManualIds();
-
-    try {
-      appendLog(`MANUAL_ID_SAVED title=${normalizedTitle} anilist=${anilist||'<none>'} tmdb=${tmdb||'<none>'} tvdb=${tvdb||'<none>'} anidbEpisode=${anidbEpisode||'<none>'} by=${req.session.username}`);
-    } catch (e) {}
-
-    return res.json({ ok: true, manualIds });
-  } catch (e) {
-    return res.status(500).json({ error: e.message });
-  }
-});
 
 // Admin endpoint: force next scan to be full by clearing scan cache
 app.post('/api/scan/force', requireAdmin, (req, res) => {
