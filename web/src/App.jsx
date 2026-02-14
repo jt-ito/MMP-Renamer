@@ -3333,9 +3333,16 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
 
   useEffect(() => {
     if (!isOpen) return
+    const isDirty = (
+      normalizeManualValue(values.anilist) !== normalizeManualValue(initialValues.anilist)
+      || normalizeManualValue(values.tmdb) !== normalizeManualValue(initialValues.tmdb)
+      || normalizeManualValue(values.tvdb) !== normalizeManualValue(initialValues.tvdb)
+      || normalizeManualValue(values.anidbEpisode) !== normalizeManualValue(initialValues.anidbEpisode)
+    )
     manualIdDraftCache.set(loadTargetKey, {
       values: { ...values },
-      initialValues: { ...initialValues }
+      initialValues: { ...initialValues },
+      isDirty
     })
   }, [isOpen, loadTargetKey, values, initialValues])
 
@@ -3364,7 +3371,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
 
     const draft = manualIdDraftCache.get(cacheKey)
     if (draft && draft.values) {
-      userEditingRef.current = false
+      userEditingRef.current = !!draft.isDirty
       setValues(draft.values)
       setInitialValues(draft.initialValues || EMPTY_MANUAL_VALUES)
       loadedForRef.current = cacheKey
@@ -3475,7 +3482,8 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       const next = { ...prev, [field]: value }
       manualIdDraftCache.set(loadTargetKey, {
         values: next,
-        initialValues: { ...initialValues }
+        initialValues: { ...initialValues },
+        isDirty: true
       })
       return next
     })
