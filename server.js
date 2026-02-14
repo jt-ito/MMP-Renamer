@@ -5890,26 +5890,7 @@ app.get('/api/debug/session', requireAuth, (req, res) => {
     return res.status(500).json({ error: e && e.message ? e.message : String(e) });
   }
 });
-// Logs endpoint for UI debugging
-app.get('/api/logs/recent', requireAuth, (req, res) => {
-  try {
-    const lines = req.query && req.query.lines ? parseInt(req.query.lines, 10) : 500;
-    const filter = req.query && req.query.filter ? String(req.query.filter).toLowerCase() : '';
-    if (!fs.existsSync(logsFile)) {
-      return res.json({ logs: '', lines: 0 });
-    }
-    const content = fs.readFileSync(logsFile, 'utf8');
-    const allLines = content.split('\n').filter(Boolean);
-    let filtered = allLines;
-    if (filter) {
-      filtered = allLines.filter(line => line.toLowerCase().includes(filter));
-    }
-    const recent = filtered.slice(-lines).reverse().join('\n');
-    return res.json({ logs: recent, lines: filtered.length, total: allLines.length });
-  } catch (e) {
-    return res.status(500).json({ error: e.message });
-  }
-});
+
 
 // Simple login endpoint used by the web client. Sets req.session.username on success.
 app.post('/api/login', (req, res) => {
