@@ -259,6 +259,22 @@ function normalizeAniDbEpisodeId(value) {
   } catch (e) { return null; }
 }
 
+function normalizeManualPathKey(value) {
+  try {
+    let out = String(value || '').trim();
+    if (!out) return '';
+    try { out = decodeURIComponent(out); } catch (e) {}
+    out = out.replace(/\\+/g, '/').replace(/\/+/g, '/').trim();
+    return out;
+  } catch (e) { return String(value || '').trim(); }
+}
+
+function toLooseManualPath(value) {
+  try {
+    return normalizeManualPathKey(value).toLowerCase();
+  } catch (e) { return String(value || '').trim().toLowerCase(); }
+}
+
 function loadManualIds() {
   try {
     ensureFile(manualIdsFile, {});
@@ -272,14 +288,54 @@ function loadManualIds() {
 
 function getManualId(title, provider, filePath = null) {
   try {
-    // For AniDB Episode IDs, check file path first (episode-specific)
-    if (provider === 'anidbEpisode' && filePath) {
-      const pathEntry = manualIds && manualIds[filePath];
-      if (pathEntry && pathEntry.anidbEpisode) {
-        return pathEntry.anidbEpisode;
+    // For AniDB Episode IDs, check file path only (episode-specific)
+    if (provider === 'anidbEpisode') {
+      if (!filePath) {
+        try { appendLog('MANUAL_ID_LOOKUP_EP_SKIP reason=no-filePath'); } catch (e) {}
+        return null;
       }
+
+      const candidates = [];
+      const pushCandidate = (value) => {
+        if (!value) return;
+        if (!candidates.includes(value)) candidates.push(value);
+      };
+
+      const rawPath = String(filePath || '').trim();
+      const normalizedPath = normalizeManualPathKey(rawPath);
+      pushCandidate(rawPath);
+      pushCandidate(normalizedPath);
+      try { pushCandidate(canonicalize(rawPath)); } catch (e) {}
+      try { pushCandidate(canonicalize(normalizedPath)); } catch (e) {}
+
+      for (const key of candidates) {
+        const entry = manualIds && manualIds[key];
+        if (entry && entry.anidbEpisode) {
+          try {
+            appendLog(`MANUAL_ID_LOOKUP_EP_HIT key=${key} req=${normalizedPath} eid=${entry.anidbEpisode}`);
+          } catch (e) {}
+          return entry.anidbEpisode;
+        }
+      }
+
+      const reqLoose = toLooseManualPath(normalizedPath);
+      if (reqLoose && manualIds && typeof manualIds === 'object') {
+        for (const key of Object.keys(manualIds)) {
+          if (!manualIds[key] || manualIds[key].anidbEpisode == null) continue;
+          if (toLooseManualPath(key) === reqLoose) {
+            try {
+              appendLog(`MANUAL_ID_LOOKUP_EP_HIT_LOOSE key=${key} req=${normalizedPath} eid=${manualIds[key].anidbEpisode}`);
+            } catch (e) {}
+            return manualIds[key].anidbEpisode;
+          }
+        }
+      }
+
+      try {
+        const episodeKeyCount = Object.keys(manualIds || {}).filter((k) => manualIds[k] && manualIds[k].anidbEpisode != null).length;
+        appendLog(`MANUAL_ID_LOOKUP_EP_MISS req=${normalizedPath} candidates=${candidates.length} storedEpisodeKeys=${episodeKeyCount}`);
+      } catch (e) {}
       // Don't fall back to title-based lookup for episode IDs
-      // Episode IDs are file-specific, not series-wide
       return null;
     }
     
@@ -9422,6 +9478,10 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
     if (!title) return res.status(400).json({ error: 'title is required' });
     const aliasTitles = (req && req.body && Array.isArray(req.body.aliasTitles)) ? req.body.aliasTitles : [];
     const filePath = req && req.body ? req.body.filePath : null;
+    const normalizedFilePath = filePath ? normalizeManualPathKey(filePath) : null;
+    let canonicalFilePath = null;
+    try { canonicalFilePath = normalizedFilePath ? canonicalize(normalizedFilePath) : null; } catch (e) { canonicalFilePath = normalizedFilePath; }
+    const filePathKeys = Array.from(new Set([filePath, normalizedFilePath, canonicalFilePath].filter(Boolean)));
     
     const keys = [title, ...aliasTitles]
       .map((value) => normalizeManualIdKey(value))
@@ -9464,7 +9524,9 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
         }
       }
       // Also clear episode-specific entry if clearing all
-      if (filePath && manualIds[filePath]) delete manualIds[filePath];
+      for (const pathKey of filePathKeys) {
+        if (manualIds[pathKey]) delete manualIds[pathKey];
+      }
       try {
         appendLog(`MANUAL_ID_CLEARED title=${normalizeManualIdKey(title)} aliases=${Math.max(0, keys.length - 1)} by=${req && req.session && req.session.username ? req.session.username : 'unknown'}`);
       } catch (e) {}
@@ -9478,9 +9540,11 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
       }
       
       // Handle episode-level AniDB Episode ID (stored per file path)
-      if (anidbEpisodeId !== null && filePath) {
-        if (!manualIds[filePath]) manualIds[filePath] = {};
-        manualIds[filePath].anidbEpisode = anidbEpisodeId;
+      if (anidbEpisodeId !== null && filePathKeys.length) {
+        for (const pathKey of filePathKeys) {
+          if (!manualIds[pathKey]) manualIds[pathKey] = {};
+          manualIds[pathKey].anidbEpisode = anidbEpisodeId;
+        }
         
         // Clean up old episode IDs that were stored at title keys (migration cleanup)
         // Episode IDs should only be stored at file paths, not title keys
@@ -9492,15 +9556,19 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
             }
           }
         }
-      } else if (anidbEpisodeId === null && filePath && manualIds[filePath]) {
+      } else if (anidbEpisodeId === null && filePathKeys.length) {
         // Clear episode ID if explicitly set to null
-        delete manualIds[filePath].anidbEpisode;
-        if (Object.keys(manualIds[filePath]).length === 0) delete manualIds[filePath];
+        for (const pathKey of filePathKeys) {
+          if (!manualIds[pathKey]) continue;
+          delete manualIds[pathKey].anidbEpisode;
+          if (Object.keys(manualIds[pathKey]).length === 0) delete manualIds[pathKey];
+        }
       }
       
       try {
-        const episodeNote = filePath ? ` filePath=${filePath.split('/').pop()}` : '';
-        appendLog(`MANUAL_ID_SAVED title=${normalizeManualIdKey(title)} anilist=${anilistId != null ? anilistId : '<none>'} tmdb=${tmdbId != null ? tmdbId : '<none>'} tvdb=${tvdbId != null ? tvdbId : '<none>'} anidbEpisode=${anidbEpisodeId != null ? anidbEpisodeId : '<none>'}${episodeNote} aliases=${Math.max(0, keys.length - 1)} by=${req && req.session && req.session.username ? req.session.username : 'unknown'}`);
+        const episodeNote = normalizedFilePath ? ` filePath=${normalizedFilePath}` : '';
+        const canonicalNote = canonicalFilePath ? ` canonicalFilePath=${canonicalFilePath}` : '';
+        appendLog(`MANUAL_ID_SAVED title=${normalizeManualIdKey(title)} anilist=${anilistId != null ? anilistId : '<none>'} tmdb=${tmdbId != null ? tmdbId : '<none>'} tvdb=${tvdbId != null ? tvdbId : '<none>'} anidbEpisode=${anidbEpisodeId != null ? anidbEpisodeId : '<none>'}${episodeNote}${canonicalNote} filePathKeys=${filePathKeys.length} aliases=${Math.max(0, keys.length - 1)} by=${req && req.session && req.session.username ? req.session.username : 'unknown'}`);
       } catch (e) {}
     }
 
