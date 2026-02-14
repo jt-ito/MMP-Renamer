@@ -3323,12 +3323,20 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     try { return String(value || '').trim() } catch (e) { return String(value || '') }
   }
 
+  const normalizePathKey = (value) => {
+    try {
+      let out = String(value || '').trim()
+      try { out = decodeURIComponent(out) } catch (e) {}
+      return out.replace(/\\+/g, '/').replace(/\/+/g, '/')
+    } catch(e) { return String(value || '') }
+  }
+
   const normalizedTitle = normalizeKey(title)
   const aliasTitleKey = Array.isArray(aliasTitles)
     ? aliasTitles.map((value) => normalizeKey(value)).filter(Boolean).join('|')
     : ''
   const loadTargetKey = filePath
-    ? `path:${filePath}`
+    ? `path:${normalizePathKey(filePath)}`
     : `title:${normalizedTitle}::aliases:${aliasTitleKey}`
 
   useEffect(() => {
