@@ -3312,6 +3312,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
   const [loading, setLoading] = useState(false)
   const loadedForRef = useRef(null)
   const hasUnsavedChangesRef = useRef(false)
+  const userEditingRef = useRef(false)
   const manualIdsCache = useRef(null)
 
   const normalizeKey = (value) => {
@@ -3352,6 +3353,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       // Reset when panel closes
       if (!isOpen) {
         loadedForRef.current = null
+        userEditingRef.current = false
         manualIdDraftCache.delete(loadTargetKey)
       }
       return undefined
@@ -3362,6 +3364,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
 
     const draft = manualIdDraftCache.get(cacheKey)
     if (draft && draft.values) {
+      userEditingRef.current = false
       setValues(draft.values)
       setInitialValues(draft.initialValues || EMPTY_MANUAL_VALUES)
       loadedForRef.current = cacheKey
@@ -3398,6 +3401,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         tvdb: seriesEntry?.tvdb ? String(seriesEntry.tvdb) : '',
         anidbEpisode: episodeEntry?.anidbEpisode ? String(episodeEntry.anidbEpisode) : ''
       }
+      userEditingRef.current = false
       setValues(cachedValues)
       setInitialValues(cachedValues)
     }
@@ -3428,7 +3432,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         const episodeEntry = (filePath && map[filePath]) ? map[filePath] : null
         
         // Don't overwrite user's changes if they've started editing
-        if (!active || hasUnsavedChangesRef.current) {
+        if (!active || hasUnsavedChangesRef.current || userEditingRef.current) {
           console.log('[ManualIdInputs] Skipping value update - user has unsaved changes')
           if (active) loadedForRef.current = cacheKey
           return
@@ -3440,11 +3444,13 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
           tvdb: seriesEntry?.tvdb ? String(seriesEntry.tvdb) : '',
           anidbEpisode: episodeEntry?.anidbEpisode ? String(episodeEntry.anidbEpisode) : ''
         }
+        userEditingRef.current = false
         setValues(nextLoadedValues)
         setInitialValues(nextLoadedValues)
         loadedForRef.current = cacheKey
       } catch (e) {
         if (active) {
+          userEditingRef.current = false
           setValues(EMPTY_MANUAL_VALUES)
           setInitialValues(EMPTY_MANUAL_VALUES)
           loadedForRef.current = cacheKey
@@ -3462,6 +3468,11 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     || normalizeManualValue(values.tvdb) !== normalizeManualValue(initialValues.tvdb)
     || normalizeManualValue(values.anidbEpisode) !== normalizeManualValue(initialValues.anidbEpisode)
   )
+
+  const handleValueChange = (field, value) => {
+    userEditingRef.current = true
+    setValues(prev => ({ ...prev, [field]: value }))
+  }
 
   const handleSave = async () => {
     if (!title) return
@@ -3500,6 +3511,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         tvdb: nextPayload.tvdb || '',
         anidbEpisode: nextPayload.anidbEpisode || ''
       })
+      userEditingRef.current = false
       pushToast && pushToast('Manual IDs', 'Saved manual provider IDs')
       // Clear cache to force reload next time
       manualIdsCache.current = null
@@ -3544,25 +3556,25 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
               className="form-input"
               placeholder="AniList ID"
               value={values.anilist}
-              onChange={(e) => setValues(prev => ({ ...prev, anilist: e.target.value }))}
+              onChange={(e) => handleValueChange('anilist', e.target.value)}
             />
             <input
               className="form-input"
               placeholder="TMDB ID"
               value={values.tmdb}
-              onChange={(e) => setValues(prev => ({ ...prev, tmdb: e.target.value }))}
+              onChange={(e) => handleValueChange('tmdb', e.target.value)}
             />
             <input
               className="form-input"
               placeholder="TVDB ID"
               value={values.tvdb}
-              onChange={(e) => setValues(prev => ({ ...prev, tvdb: e.target.value }))}
+              onChange={(e) => handleValueChange('tvdb', e.target.value)}
             />
             <input
               className="form-input"
               placeholder="AniDB Episode ID"
               value={values.anidbEpisode}
-              onChange={(e) => setValues(prev => ({ ...prev, anidbEpisode: e.target.value }))}
+              onChange={(e) => handleValueChange('anidbEpisode', e.target.value)}
             />
           </div>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
