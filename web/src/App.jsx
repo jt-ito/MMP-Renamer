@@ -3528,10 +3528,19 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       })
       userEditingRef.current = false
       pushToast && pushToast('Manual IDs', 'Saved manual provider IDs')
-      // Clear cache to force reload next time
+      // Update draft cache with clean saved values to prevent flickering/clearing on reload
+      // This ensures if the component remounts (e.g. during list refresh), it restores these values immediately
+      // instead of showing empty fields while fetching
+      manualIdDraftCache.set(loadTargetKey, {
+        values: { ...nextPayload },
+        initialValues: { ...nextPayload },
+        isDirty: false
+      })
+
+      // Reset loaded ref to ensure we use the draft data
       manualIdsCache.current = null
       loadedForRef.current = null
-      manualIdDraftCache.delete(loadTargetKey)
+      
       // Trigger callback to force rescan with new manual IDs
       if (onSaved) await onSaved()
       onToggle && onToggle(false)
