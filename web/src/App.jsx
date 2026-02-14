@@ -3303,6 +3303,8 @@ function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
   )
 }
 
+const manualIdDraftCache = new Map()
+
 function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, onSaved, pushToast }) {
   const EMPTY_MANUAL_VALUES = { anilist: '', tmdb: '', tvdb: '', anidbEpisode: '' }
   const [values, setValues] = useState(EMPTY_MANUAL_VALUES)
@@ -3328,6 +3330,14 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     ? `path:${filePath}`
     : `title:${normalizedTitle}::aliases:${aliasTitleKey}`
 
+  useEffect(() => {
+    if (!isOpen) return
+    manualIdDraftCache.set(loadTargetKey, {
+      values: { ...values },
+      initialValues: { ...initialValues }
+    })
+  }, [isOpen, loadTargetKey, values, initialValues])
+
   // Track unsaved changes
   hasUnsavedChangesRef.current = (
     normalizeManualValue(values.anilist) !== normalizeManualValue(initialValues.anilist)
@@ -3340,12 +3350,23 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     let active = true
     if (!isOpen || !title) {
       // Reset when panel closes
-      if (!isOpen) loadedForRef.current = null
+      if (!isOpen) {
+        loadedForRef.current = null
+        manualIdDraftCache.delete(loadTargetKey)
+      }
       return undefined
     }
     
     // Create a stable key for current target. When filePath exists, ignore title churn.
     const cacheKey = loadTargetKey
+
+    const draft = manualIdDraftCache.get(cacheKey)
+    if (draft && draft.values) {
+      setValues(draft.values)
+      setInitialValues(draft.initialValues || EMPTY_MANUAL_VALUES)
+      loadedForRef.current = cacheKey
+      return undefined
+    }
     
     // Skip reload if we already loaded data for this specific item (prevents flickering)
     if (loadedForRef.current === cacheKey) {
@@ -3483,6 +3504,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       // Clear cache to force reload next time
       manualIdsCache.current = null
       loadedForRef.current = null
+      manualIdDraftCache.delete(loadTargetKey)
       // Trigger callback to force rescan with new manual IDs
       if (onSaved) await onSaved()
       onToggle && onToggle(false)
