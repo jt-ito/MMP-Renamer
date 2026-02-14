@@ -3528,13 +3528,21 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       })
       userEditingRef.current = false
       pushToast && pushToast('Manual IDs', 'Saved manual provider IDs')
-      // Update draft cache with clean saved values to prevent flickering/clearing on reload
-      // This ensures if the component remounts (e.g. during list refresh), it restores these values immediately
-      // instead of showing empty fields while fetching
+      // Normalize payload for cache (ensure no nulls)
+      const cachedPayload = {
+        anilist: nextPayload.anilist || '',
+        tmdb: nextPayload.tmdb || '',
+        tvdb: nextPayload.tvdb || '',
+        anidbEpisode: nextPayload.anidbEpisode || ''
+      }
+
+      // Update draft cache. Mark isDirty: true to prevent 'useEffect' API fetch from overwriting 
+      // with potentially stale data (race condition). 'hasChanges' will still return false (clean UI)
+      // because values match initialValues.
       manualIdDraftCache.set(loadTargetKey, {
-        values: { ...nextPayload },
-        initialValues: { ...nextPayload },
-        isDirty: false
+        values: { ...cachedPayload },
+        initialValues: { ...cachedPayload },
+        isDirty: true
       })
 
       // Reset loaded ref to ensure we use the draft data
