@@ -3471,7 +3471,14 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
 
   const handleValueChange = (field, value) => {
     userEditingRef.current = true
-    setValues(prev => ({ ...prev, [field]: value }))
+    setValues(prev => {
+      const next = { ...prev, [field]: value }
+      manualIdDraftCache.set(loadTargetKey, {
+        values: next,
+        initialValues: { ...initialValues }
+      })
+      return next
+    })
   }
 
   const handleSave = async () => {
@@ -3827,6 +3834,11 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
   
   const getItemSize = (index) => {
     return rowHeights.current[index] || DEFAULT_ROW_HEIGHT
+  }
+
+  const getItemKey = (index) => {
+    const item = items[index]
+    return item && item.canonicalPath ? item.canonicalPath : `row-${index}`
   }
 
   const setItemSize = (index, size) => {
@@ -4192,7 +4204,7 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
 
   return (
     <div ref={containerRef} style={{ flex: 1, minHeight: 0 }}>
-      <List ref={listRef} height={listHeight} itemCount={items.length} itemSize={getItemSize} width={'100%'} onItemsRendered={onItemsRendered}>
+      <List ref={listRef} height={listHeight} itemCount={items.length} itemSize={getItemSize} itemKey={getItemKey} width={'100%'} onItemsRendered={onItemsRendered}>
       {Row}
     </List>
     </div>
