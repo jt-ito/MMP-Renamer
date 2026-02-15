@@ -3315,6 +3315,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
   const hasUnsavedChangesRef = useRef(false)
   const userEditingRef = useRef(false)
   const manualIdsCache = useRef(null)
+  const hasLocalTypedValuesRef = useRef(false)
 
   const normalizeKey = (value) => {
     try { return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ') } catch (e) { return String(value || '').trim().toLowerCase() }
@@ -3362,6 +3363,12 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     || normalizeManualValue(values.tvdb) !== normalizeManualValue(initialValues.tvdb)
     || normalizeManualValue(values.anidbEpisode) !== normalizeManualValue(initialValues.anidbEpisode)
   )
+  hasLocalTypedValuesRef.current = (
+    normalizeManualValue(values.anilist) !== ''
+    || normalizeManualValue(values.tmdb) !== ''
+    || normalizeManualValue(values.tvdb) !== ''
+    || normalizeManualValue(values.anidbEpisode) !== ''
+  )
 
   useEffect(() => {
     let active = true
@@ -3378,6 +3385,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     
     // Create a stable key for current target. When filePath exists, ignore title churn.
     const cacheKey = loadTargetKey
+    const hasLocalTypedValues = hasLocalTypedValuesRef.current
 
     if (manualIdTouchedKeys.has(cacheKey)) {
       userEditingRef.current = true
@@ -3434,7 +3442,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         tvdb: seriesEntry?.tvdb ? String(seriesEntry.tvdb) : '',
         anidbEpisode: episodeEntry?.anidbEpisode ? String(episodeEntry.anidbEpisode) : ''
       }
-      if (!manualIdTouchedKeys.has(cacheKey)) {
+      if (!manualIdTouchedKeys.has(cacheKey) && !hasLocalTypedValues) {
         userEditingRef.current = false
         setValues(cachedValues)
         setInitialValues(cachedValues)
@@ -3469,7 +3477,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         const latestDraft = manualIdDraftCache.get(cacheKey)
 
         // Don't overwrite user's changes if they've started editing
-        if (!active || hasUnsavedChangesRef.current || userEditingRef.current || (latestDraft && latestDraft.isDirty) || manualIdTouchedKeys.has(cacheKey)) {
+        if (!active || hasUnsavedChangesRef.current || userEditingRef.current || (latestDraft && latestDraft.isDirty) || manualIdTouchedKeys.has(cacheKey) || hasLocalTypedValues) {
           console.log('[ManualIdInputs] Skipping value update - user has unsaved changes')
           if (active) loadedForRef.current = cacheKey
           return
