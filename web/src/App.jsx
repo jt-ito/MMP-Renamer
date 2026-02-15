@@ -1965,8 +1965,30 @@ export default function App() {
     })
   }
 
-  async function fetchLogs() { try { const r = await axios.get(API('/logs/recent')); setLogs(r.data.logs) } catch(e){} }
+  async function fetchLogs() {
+    try {
+      const r = await axios.get(API('/logs/recent'))
+      const serverLogs = (r && r.data && r.data.logs) ? String(r.data.logs) : ''
+      setLogs(mergeManualIdDebugLogs(serverLogs))
+    } catch(e) {
+      setLogs(mergeManualIdDebugLogs(''))
+    }
+  }
   useEffect(() => { fetchLogs(); const t = setInterval(fetchLogs, 3000); return () => clearInterval(t) }, [])
+
+  useEffect(() => {
+    const onManualIdLog = (line) => {
+      setLogs(prev => {
+        const next = `${line}${prev ? `\n${prev}` : ''}`
+        const lines = next.split('\n')
+        return lines.slice(0, 1200).join('\n')
+      })
+    }
+    manualIdLogSubscriber = onManualIdLog
+    return () => {
+      if (manualIdLogSubscriber === onManualIdLog) manualIdLogSubscriber = null
+    }
+  }, [])
 
   const [route, setRoute] = useState(window.location.hash || '#/')
   useEffect(() => { const onHash = () => setRoute(window.location.hash || '#/'); window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash) }, [])
@@ -3305,19 +3327,39 @@ function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
 
 const manualIdDraftCache = new Map()
 const manualIdTouchedKeys = new Set()
+const manualIdClientLogs = []
+let manualIdLogSubscriber = null
 
-function isManualIdDebugEnabled() {
+function pushManualIdClientLog(event, payload = {}) {
   try {
-    return localStorage.getItem('debugManualIds') === '1' || !!window.__DEBUG_MANUAL_IDS__
+    const ts = new Date().toISOString()
+    let data = ''
+    try {
+      data = JSON.stringify(payload)
+    } catch (e) {
+      data = String(payload || '')
+    }
+    const line = `${ts} [MANUAL_ID_DEBUG] ${event}${data ? ` ${data}` : ''}`
+    manualIdClientLogs.unshift(line)
+    if (manualIdClientLogs.length > 500) manualIdClientLogs.length = 500
+    if (typeof manualIdLogSubscriber === 'function') manualIdLogSubscriber(line)
+  } catch (e) {}
+}
+
+function mergeManualIdDebugLogs(serverLogs = '') {
+  try {
+    const base = String(serverLogs || '')
+    if (!manualIdClientLogs.length) return base
+    const local = manualIdClientLogs.join('\n')
+    return local + (base ? `\n${base}` : '')
   } catch (e) {
-    return false
+    return String(serverLogs || '')
   }
 }
 
 function manualIdDebugLog(event, payload = {}) {
   try {
-    if (!isManualIdDebugEnabled()) return
-    if (console && console.debug) console.debug('[ManualIdInputs]', event, payload)
+    pushManualIdClientLog(event, payload)
   } catch (e) {}
 }
 
