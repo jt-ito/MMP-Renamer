@@ -582,6 +582,22 @@ select.form-input:focus {
 .actions button:hover { background: var(--bg-600); transform: translateY(-1px) }
 .actions button:active { transform: translateY(1px) }
 
+.row-match-btn {
+  padding:10px 14px;
+  font-size:14px;
+  border-radius:12px;
+  background:var(--bg-700);
+  color:var(--accent);
+  border:1px solid var(--bg-600);
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+}
+.row-match-btn:hover { background: var(--bg-600); transform: translateY(-1px) }
+.row-match-btn:active { transform: translateY(1px) }
+.row-match-btn:disabled { opacity: 0.55; cursor: not-allowed; filter: none; transform: none }
+
 .logs { background: var(--bg-800); padding:12px; border-radius:var(--radius); border:1px solid var(--bg-600) }
 .logs h3 { margin-top:0; color:var(--accent) }
 .logs pre { max-height:420px; overflow:auto; background:transparent; color:var(--muted); padding:8px; border-radius:6px; border:1px dashed var(--bg-600) }
@@ -695,6 +711,7 @@ button.folder-option:hover {
 	.row .title { font-size:14px }
 	.row .path { font-size:11px }
 	.actions button { padding:6px 8px }
+  .row-match-btn { padding:6px 8px }
 
 	/* Make primary actions easier to tap */
 	.btn-save, .btn-ghost, .btn-cta { padding:10px 12px; min-width:56px }
@@ -951,9 +968,21 @@ button.folder-option:hover {
 	box-shadow: 0 10px 24px rgba(188,204,220,0.38);
 }
 
+.light .row-match-btn {
+  background: rgba(217,234,253,0.78);
+  border-color: rgba(154,166,178,0.45);
+  color: var(--accent);
+  box-shadow: 0 10px 24px rgba(188,204,220,0.38);
+}
+
 .light .actions button:hover {
 	background: rgba(188,204,220,0.85);
 	border-color: rgba(154,166,178,0.65);
+}
+
+.light .row-match-btn:hover {
+  background: rgba(188,204,220,0.85);
+  border-color: rgba(154,166,178,0.65);
 }
 
 .light .actions button.btn-apply {

@@ -3583,9 +3583,8 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     <div style={{ marginTop: 8 }}>
       <button
         type="button"
-        className="btn-ghost"
+        className="row-match-btn"
         onClick={(e) => { e.stopPropagation(); onToggle && onToggle(!isOpen) }}
-        style={{ fontSize: 12, padding: '6px 10px' }}
       >
         {isOpen ? 'Hide Manual Provider IDs' : 'Set Manual Provider IDs'}
       </button>
@@ -3618,19 +3617,12 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
             />
           </div>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button type="button" className="btn-ghost" onClick={() => onToggle && onToggle(false)} disabled={loading}>Cancel</button>
+            <button type="button" className="row-match-btn" onClick={() => onToggle && onToggle(false)} disabled={loading}>Cancel</button>
             <button
               type="button"
-              className="btn-cta"
+              className="row-match-btn"
               onClick={handleSave}
               disabled={loading}
-              style={hasChanges ? {
-                filter: 'brightness(1.18) saturate(1.15)',
-                boxShadow: '0 10px 22px rgba(53, 94, 59, 0.40)',
-                transition: 'filter 160ms ease, box-shadow 160ms ease'
-              } : {
-                transition: 'filter 160ms ease, box-shadow 160ms ease'
-              }}
             >
               Save IDs
             </button>
@@ -3748,9 +3740,8 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
     <div style={{ marginTop: 6 }}>
       <button
         type="button"
-        className="btn-ghost"
+        className="row-match-btn"
         onClick={(e) => { e.stopPropagation(); onToggle && onToggle(!isOpen) }}
-        style={{ fontSize: 12, padding: '6px 10px' }}
       >
         {isOpen ? 'Hide Custom Metadata' : 'Set Custom Metadata'}
       </button>
@@ -3816,8 +3807,8 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
             />
           ) : null}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button type="button" className="btn-ghost" onClick={() => onToggle && onToggle(false)} disabled={loading}>Cancel</button>
-            <button type="button" className="btn-cta" onClick={handleSave} disabled={loading}>Save Metadata</button>
+            <button type="button" className="row-match-btn" onClick={() => onToggle && onToggle(false)} disabled={loading}>Cancel</button>
+            <button type="button" className="row-match-btn" onClick={handleSave} disabled={loading}>Save Metadata</button>
           </div>
         </div>
       ) : null}

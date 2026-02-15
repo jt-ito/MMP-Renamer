@@ -252,8 +252,8 @@ export default function ApprovedSeries({ pushToast }) {
             <p className="small-muted">Browse approved series by output folder and cache artwork/summary metadata.</p>
           </div>
           <div style={{display:'flex',gap:8}}>
-            <button className="btn-ghost" onClick={() => setShowLogs(!showLogs)}>{showLogs ? 'Hide Logs' : 'Show Logs'}</button>
-            <button className="btn-ghost" onClick={load}>Refresh</button>
+            <button className="row-match-btn" onClick={() => setShowLogs(!showLogs)}>{showLogs ? 'Hide Logs' : 'Show Logs'}</button>
+            <button className="row-match-btn" onClick={load}>Refresh</button>
           </div>
         </div>
 
@@ -271,7 +271,7 @@ export default function ApprovedSeries({ pushToast }) {
               <strong style={{fontSize:14}}>
                 Logs {activeOutput ? `for ${activeOutput.path}` : '(all outputs)'}
               </strong>
-              <button className="btn-ghost" onClick={fetchLogs} style={{padding:'4px 8px',fontSize:12}}>Refresh</button>
+              <button className="row-match-btn" onClick={fetchLogs}>Refresh</button>
             </div>
             <div style={{
               height: '300px',
