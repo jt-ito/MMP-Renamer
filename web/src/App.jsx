@@ -3304,6 +3304,7 @@ function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
 }
 
 const manualIdDraftCache = new Map()
+const manualIdTouchedKeys = new Set()
 
 function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, onSaved, pushToast, inActions = false }) {
   const EMPTY_MANUAL_VALUES = { anilist: '', tmdb: '', tvdb: '', anidbEpisode: '' }
@@ -3370,12 +3371,19 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         loadedForRef.current = null
         userEditingRef.current = false
         manualIdDraftCache.delete(loadTargetKey)
+        manualIdTouchedKeys.delete(loadTargetKey)
       }
       return undefined
     }
     
     // Create a stable key for current target. When filePath exists, ignore title churn.
     const cacheKey = loadTargetKey
+
+    if (manualIdTouchedKeys.has(cacheKey)) {
+      userEditingRef.current = true
+      loadedForRef.current = cacheKey
+      return undefined
+    }
 
     // If we have a dirty draft for this key, always use it and never reload over it.
     const dirtyDraft = manualIdDraftCache.get(cacheKey)
@@ -3426,9 +3434,11 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         tvdb: seriesEntry?.tvdb ? String(seriesEntry.tvdb) : '',
         anidbEpisode: episodeEntry?.anidbEpisode ? String(episodeEntry.anidbEpisode) : ''
       }
-      userEditingRef.current = false
-      setValues(cachedValues)
-      setInitialValues(cachedValues)
+      if (!manualIdTouchedKeys.has(cacheKey)) {
+        userEditingRef.current = false
+        setValues(cachedValues)
+        setInitialValues(cachedValues)
+      }
     }
 
     // Mark as loaded BEFORE async call to prevent race condition where user types
@@ -3459,7 +3469,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         const latestDraft = manualIdDraftCache.get(cacheKey)
 
         // Don't overwrite user's changes if they've started editing
-        if (!active || hasUnsavedChangesRef.current || userEditingRef.current || (latestDraft && latestDraft.isDirty)) {
+        if (!active || hasUnsavedChangesRef.current || userEditingRef.current || (latestDraft && latestDraft.isDirty) || manualIdTouchedKeys.has(cacheKey)) {
           console.log('[ManualIdInputs] Skipping value update - user has unsaved changes')
           if (active) loadedForRef.current = cacheKey
           return
@@ -3501,6 +3511,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
 
   const handleValueChange = (field, value) => {
     userEditingRef.current = true
+    manualIdTouchedKeys.add(loadTargetKey)
     setValues(prev => {
       const next = { ...prev, [field]: value }
       manualIdDraftCache.set(loadTargetKey, {
@@ -3567,6 +3578,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         initialValues: { ...cachedPayload },
         isDirty: true
       })
+      manualIdTouchedKeys.delete(loadTargetKey)
 
       // Reset loaded ref to ensure we use the draft data
       manualIdsCache.current = null
