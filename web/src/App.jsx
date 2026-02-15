@@ -3306,6 +3306,21 @@ function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
 const manualIdDraftCache = new Map()
 const manualIdTouchedKeys = new Set()
 
+function isManualIdDebugEnabled() {
+  try {
+    return localStorage.getItem('debugManualIds') === '1' || !!window.__DEBUG_MANUAL_IDS__
+  } catch (e) {
+    return false
+  }
+}
+
+function manualIdDebugLog(event, payload = {}) {
+  try {
+    if (!isManualIdDebugEnabled()) return
+    if (console && console.debug) console.debug('[ManualIdInputs]', event, payload)
+  } catch (e) {}
+}
+
 function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, onSaved, pushToast, inActions = false }) {
   const EMPTY_MANUAL_VALUES = { anilist: '', tmdb: '', tvdb: '', anidbEpisode: '' }
   const [values, setValues] = useState(EMPTY_MANUAL_VALUES)
@@ -3355,6 +3370,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       initialValues: { ...initialValues },
       isDirty
     })
+    manualIdDebugLog('draft:sync', { key: loadTargetKey, isDirty, values })
   }, [isOpen, loadTargetKey, values, initialValues])
 
   // Track unsaved changes
@@ -3375,15 +3391,14 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
 
   useEffect(() => {
     let active = true
+    manualIdDebugLog('effect:start', { key: loadTargetKey, isOpen, filePath, title })
     if (!isOpen || !loadTargetKey) {
-      // Reset when panel closes
+      // Reset transient refs when panel closes, but preserve draft/touched state
+      // so transient close/remount events cannot wipe in-progress typing.
       if (!isOpen) {
         loadedForRef.current = null
         userEditingRef.current = false
-        if (loadedForRef.current) {
-          manualIdDraftCache.delete(loadedForRef.current)
-          manualIdTouchedKeys.delete(loadedForRef.current)
-        }
+        manualIdDebugLog('effect:closed', { key: loadTargetKey })
       }
       return undefined
     }
@@ -3395,6 +3410,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     if (manualIdTouchedKeys.has(cacheKey)) {
       userEditingRef.current = true
       loadedForRef.current = cacheKey
+      manualIdDebugLog('hydrate:skip-touched', { key: cacheKey })
       return undefined
     }
 
@@ -3405,6 +3421,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       setValues(dirtyDraft.values)
       setInitialValues(dirtyDraft.initialValues || EMPTY_MANUAL_VALUES)
       loadedForRef.current = cacheKey
+      manualIdDebugLog('hydrate:dirty-draft', { key: cacheKey, values: dirtyDraft.values })
       return undefined
     }
 
@@ -3414,12 +3431,14 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       setValues(draft.values)
       setInitialValues(draft.initialValues || EMPTY_MANUAL_VALUES)
       loadedForRef.current = cacheKey
+      manualIdDebugLog('hydrate:draft', { key: cacheKey, isDirty: !!draft.isDirty, values: draft.values })
       return undefined
     }
     
     // Skip reload if we already loaded data for this specific item (prevents flickering)
     if (loadedForRef.current === cacheKey) {
       console.log('[ManualIdInputs] Skipping reload - already loaded')
+      manualIdDebugLog('hydrate:skip-loaded', { key: cacheKey })
       return undefined
     }
 
@@ -3451,6 +3470,13 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         userEditingRef.current = false
         setValues(cachedValues)
         setInitialValues(cachedValues)
+        manualIdDebugLog('hydrate:cache', { key: cacheKey, cachedValues })
+      } else {
+        manualIdDebugLog('hydrate:cache-skipped', {
+          key: cacheKey,
+          touched: manualIdTouchedKeys.has(cacheKey),
+          hasLocalTypedValues
+        })
       }
     }
 
@@ -3458,11 +3484,13 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     // while API call is in flight, then API response overwrites their input
     loadedForRef.current = cacheKey
     setLoading(true)
+    manualIdDebugLog('fetch:start', { key: cacheKey })
     ;(async () => {
       try {
         const r = await axios.get(API('/manual-ids'))
         const map = (r && r.data && r.data.manualIds) ? r.data.manualIds : {}
         manualIdsCache.current = map
+        manualIdDebugLog('fetch:ok', { key: cacheKey, mapSize: Object.keys(map || {}).length })
         
         const titleKey = normalizedTitle
         let seriesEntry = (titleKey && map[titleKey]) ? map[titleKey] : null
@@ -3484,6 +3512,15 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         // Don't overwrite user's changes if they've started editing
         if (!active || hasUnsavedChangesRef.current || userEditingRef.current || (latestDraft && latestDraft.isDirty) || manualIdTouchedKeys.has(cacheKey) || hasLocalTypedValues) {
           console.log('[ManualIdInputs] Skipping value update - user has unsaved changes')
+          manualIdDebugLog('fetch:skip-overwrite', {
+            key: cacheKey,
+            active,
+            hasUnsaved: hasUnsavedChangesRef.current,
+            editing: userEditingRef.current,
+            dirtyDraft: !!(latestDraft && latestDraft.isDirty),
+            touched: manualIdTouchedKeys.has(cacheKey),
+            hasLocalTypedValues
+          })
           if (active) loadedForRef.current = cacheKey
           return
         }
@@ -3498,21 +3535,28 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         setValues(nextLoadedValues)
         setInitialValues(nextLoadedValues)
         loadedForRef.current = cacheKey
+        manualIdDebugLog('fetch:apply', { key: cacheKey, nextLoadedValues })
       } catch (e) {
+        manualIdDebugLog('fetch:error', { key: cacheKey, error: String(e) })
         if (active) {
           // Keep current values on fetch errors so in-progress typing is never lost.
           // This prevents random input clearing when /manual-ids fails transiently.
           if (hasUnsavedChangesRef.current || userEditingRef.current) {
             loadedForRef.current = cacheKey
+            manualIdDebugLog('fetch:error-preserve-edit', { key: cacheKey })
             return
           }
           loadedForRef.current = cacheKey
         }
       } finally {
         if (active) setLoading(false)
+        manualIdDebugLog('fetch:done', { key: cacheKey })
       }
     })()
-    return () => { active = false }
+    return () => {
+      active = false
+      manualIdDebugLog('effect:cleanup', { key: cacheKey })
+    }
   }, [isOpen, loadTargetKey])
 
   const hasChanges = (
@@ -3532,6 +3576,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       initialValues: { ...initialValuesRef.current },
       isDirty: true
     })
+    manualIdDebugLog('input:change', { key: loadTargetKey, field, value, next })
     setValues(next)
   }
 
@@ -3556,6 +3601,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       return
     }
     setLoading(true)
+    manualIdDebugLog('save:start', { key: loadTargetKey, values })
     try {
       await axios.post(API('/manual-ids'), {
         title,
@@ -3591,6 +3637,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         isDirty: true
       })
       manualIdTouchedKeys.delete(loadTargetKey)
+      manualIdDebugLog('save:success', { key: loadTargetKey, cachedPayload })
 
       // Reset loaded ref to ensure we use the draft data
       manualIdsCache.current = null
@@ -3602,6 +3649,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     } catch (e) {
       const msg = e && e.response && e.response.data && e.response.data.error ? e.response.data.error : 'Failed to save manual IDs'
       pushToast && pushToast('Manual IDs', msg)
+      manualIdDebugLog('save:error', { key: loadTargetKey, error: msg })
     } finally {
       setLoading(false)
     }
@@ -3974,7 +4022,11 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
   const isManualOpen = !!(it && manualIdOpen[it.canonicalPath])
   const toggleManualOpen = (next) => {
     if (!it || !it.canonicalPath) return
-    setManualIdOpen(prev => ({ ...prev, [it.canonicalPath]: typeof next === 'boolean' ? next : !prev[it.canonicalPath] }))
+    setManualIdOpen(prev => {
+      const nextState = typeof next === 'boolean' ? next : !prev[it.canonicalPath]
+      manualIdDebugLog('panel:toggle', { path: it.canonicalPath, from: !!prev[it.canonicalPath], to: !!nextState })
+      return { ...prev, [it.canonicalPath]: nextState }
+    })
     setManualIdsTick(t => t + 1)
   }
   const isCustomOpen = !!(it && customMetaOpen[it.canonicalPath])
