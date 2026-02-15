@@ -3305,7 +3305,7 @@ function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
 
 const manualIdDraftCache = new Map()
 
-function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, onSaved, pushToast }) {
+function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, onSaved, pushToast, inActions = false }) {
   const EMPTY_MANUAL_VALUES = { anilist: '', tmdb: '', tvdb: '', anidbEpisode: '' }
   const [values, setValues] = useState(EMPTY_MANUAL_VALUES)
   const [initialValues, setInitialValues] = useState(EMPTY_MANUAL_VALUES)
@@ -3580,7 +3580,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
   }
 
   return (
-    <div style={{ marginTop: 8 }}>
+    <div style={{ marginTop: inActions ? 0 : 8 }}>
       <button
         type="button"
         className="row-match-btn"
@@ -4195,17 +4195,15 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
           >
             {loading ? <Spinner/> : <><IconCopy/> <span>Hide</span></>}
           </button>
-        </div>
-        <div style={{ paddingLeft: selectMode ? 36 : 0 }}>
           <ManualIdInputs
             title={manualIdTitle}
             aliasTitles={manualIdAliasTitles}
             filePath={it?.canonicalPath}
             isOpen={isManualOpen}
             onToggle={toggleManualOpen}
+            inActions={true}
             onSaved={async () => {
               setManualIdsTick(t => t + 1)
-              // Force rescan to apply new manual IDs immediately (clears cache)
               if (it && enrichOne) {
                 try {
                   await enrichOne(it, true)
