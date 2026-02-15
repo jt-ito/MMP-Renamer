@@ -3364,7 +3364,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
 
   useEffect(() => {
     let active = true
-    if (!isOpen || !title) {
+    if (!isOpen || (!filePath && !title)) {
       // Reset when panel closes
       if (!isOpen) {
         loadedForRef.current = null
@@ -3376,6 +3376,16 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     
     // Create a stable key for current target. When filePath exists, ignore title churn.
     const cacheKey = loadTargetKey
+
+    // If we have a dirty draft for this key, always use it and never reload over it.
+    const dirtyDraft = manualIdDraftCache.get(cacheKey)
+    if (dirtyDraft && dirtyDraft.values && dirtyDraft.isDirty) {
+      userEditingRef.current = true
+      setValues(dirtyDraft.values)
+      setInitialValues(dirtyDraft.initialValues || EMPTY_MANUAL_VALUES)
+      loadedForRef.current = cacheKey
+      return undefined
+    }
 
     const draft = manualIdDraftCache.get(cacheKey)
     if (draft && draft.values) {
@@ -3445,9 +3455,11 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         
         // Check for episode-specific AniDB Episode ID
         const episodeEntry = (filePath && map[filePath]) ? map[filePath] : null
-        
+
+        const latestDraft = manualIdDraftCache.get(cacheKey)
+
         // Don't overwrite user's changes if they've started editing
-        if (!active || hasUnsavedChangesRef.current || userEditingRef.current) {
+        if (!active || hasUnsavedChangesRef.current || userEditingRef.current || (latestDraft && latestDraft.isDirty)) {
           console.log('[ManualIdInputs] Skipping value update - user has unsaved changes')
           if (active) loadedForRef.current = cacheKey
           return
