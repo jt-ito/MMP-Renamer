@@ -3465,9 +3465,12 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         loadedForRef.current = cacheKey
       } catch (e) {
         if (active) {
-          userEditingRef.current = false
-          setValues(EMPTY_MANUAL_VALUES)
-          setInitialValues(EMPTY_MANUAL_VALUES)
+          // Keep current values on fetch errors so in-progress typing is never lost.
+          // This prevents random input clearing when /manual-ids fails transiently.
+          if (hasUnsavedChangesRef.current || userEditingRef.current) {
+            loadedForRef.current = cacheKey
+            return
+          }
           loadedForRef.current = cacheKey
         }
       } finally {
