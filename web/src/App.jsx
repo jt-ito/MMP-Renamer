@@ -3311,6 +3311,8 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
   const [values, setValues] = useState(EMPTY_MANUAL_VALUES)
   const [initialValues, setInitialValues] = useState(EMPTY_MANUAL_VALUES)
   const [loading, setLoading] = useState(false)
+  const valuesRef = useRef(EMPTY_MANUAL_VALUES)
+  const initialValuesRef = useRef(EMPTY_MANUAL_VALUES)
   const loadedForRef = useRef(null)
   const hasUnsavedChangesRef = useRef(false)
   const userEditingRef = useRef(false)
@@ -3369,6 +3371,8 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     || normalizeManualValue(values.tvdb) !== ''
     || normalizeManualValue(values.anidbEpisode) !== ''
   )
+  valuesRef.current = values
+  initialValuesRef.current = initialValues
 
   useEffect(() => {
     let active = true
@@ -3520,15 +3524,13 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
   const handleValueChange = (field, value) => {
     userEditingRef.current = true
     manualIdTouchedKeys.add(loadTargetKey)
-    setValues(prev => {
-      const next = { ...prev, [field]: value }
-      manualIdDraftCache.set(loadTargetKey, {
-        values: next,
-        initialValues: { ...initialValues },
-        isDirty: true
-      })
-      return next
+    const next = { ...valuesRef.current, [field]: value }
+    manualIdDraftCache.set(loadTargetKey, {
+      values: next,
+      initialValues: { ...initialValuesRef.current },
+      isDirty: true
     })
+    setValues(next)
   }
 
   const handleSave = async () => {
