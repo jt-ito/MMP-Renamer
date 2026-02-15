@@ -3339,12 +3339,11 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
   const aliasTitleKey = Array.isArray(aliasTitles)
     ? aliasTitles.map((value) => normalizeKey(value)).filter(Boolean).join('|')
     : ''
-  const loadTargetKey = filePath
-    ? `path:${normalizePathKey(filePath)}`
-    : `title:${normalizedTitle}::aliases:${aliasTitleKey}`
+  const normalizedFilePath = normalizePathKey(filePath)
+  const loadTargetKey = normalizedFilePath ? `path:${normalizedFilePath}` : null
 
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen || !loadTargetKey) return
     const isDirty = (
       normalizeManualValue(values.anilist) !== normalizeManualValue(initialValues.anilist)
       || normalizeManualValue(values.tmdb) !== normalizeManualValue(initialValues.tmdb)
@@ -3376,13 +3375,15 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
 
   useEffect(() => {
     let active = true
-    if (!isOpen || (!filePath && !title)) {
+    if (!isOpen || !loadTargetKey) {
       // Reset when panel closes
       if (!isOpen) {
         loadedForRef.current = null
         userEditingRef.current = false
-        manualIdDraftCache.delete(loadTargetKey)
-        manualIdTouchedKeys.delete(loadTargetKey)
+        if (loadedForRef.current) {
+          manualIdDraftCache.delete(loadedForRef.current)
+          manualIdTouchedKeys.delete(loadedForRef.current)
+        }
       }
       return undefined
     }
@@ -3522,6 +3523,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
   )
 
   const handleValueChange = (field, value) => {
+    if (!loadTargetKey) return
     userEditingRef.current = true
     manualIdTouchedKeys.add(loadTargetKey)
     const next = { ...valuesRef.current, [field]: value }
