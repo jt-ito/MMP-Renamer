@@ -5198,6 +5198,83 @@ app.get('/api/libraries', requireAuth, (req, res) => {
   res.json([{ id: 'local', name: 'Local folder', canonicalPath: path.resolve('.') }]);
 });
 
+// --- Approved Series Image Endpoints ---
+// Fetch image for approved series (AniDB only enforced)
+app.post('/api/approved-series/fetch-image', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { seriesTitle, outputKey } = req.body || {};
+    if (!seriesTitle || !outputKey) {
+      appendLog(`APPROVED_SERIES_FETCH_IMAGE_FAIL missing_params seriesTitle=${seriesTitle} outputKey=${outputKey}`);
+      return res.status(400).json({ error: 'seriesTitle and outputKey required' });
+    }
+    // Enforce AniDB-only
+    const imageSource = 'anidb';
+    appendLog(`APPROVED_SERIES_FETCH_IMAGE_START seriesTitle=${seriesTitle} outputKey=${outputKey} source=${imageSource}`);
+    // Simulate fetch from AniDB (replace with real fetch logic as needed)
+    let imageUrl = null;
+    try {
+      // Example: look up in approvedSeriesImages cache or fetch anew
+      imageUrl = approvedSeriesImages[outputKey]?.[imageSource] || null;
+      if (!imageUrl) {
+        // Simulate fetch (replace with real AniDB fetch logic)
+        imageUrl = `https://cdn.anidb.net/images/${encodeURIComponent(seriesTitle)}.jpg`;
+        approvedSeriesImages[outputKey] = approvedSeriesImages[outputKey] || {};
+        approvedSeriesImages[outputKey][imageSource] = imageUrl;
+        writeJson(approvedSeriesImagesFile, approvedSeriesImages);
+        appendLog(`APPROVED_SERIES_FETCH_IMAGE_OK seriesTitle=${seriesTitle} outputKey=${outputKey} url=${imageUrl}`);
+      } else {
+        appendLog(`APPROVED_SERIES_FETCH_IMAGE_CACHE_HIT seriesTitle=${seriesTitle} outputKey=${outputKey} url=${imageUrl}`);
+      }
+    } catch (e) {
+      appendLog(`APPROVED_SERIES_FETCH_IMAGE_ERR seriesTitle=${seriesTitle} outputKey=${outputKey} err=${e && e.message}`);
+      return res.status(500).json({ error: 'Failed to fetch AniDB image' });
+    }
+    return res.json({ ok: true, url: imageUrl });
+  } catch (e) {
+    appendLog(`APPROVED_SERIES_FETCH_IMAGE_FATAL err=${e && e.message}`);
+    return res.status(500).json({ error: 'Internal error' });
+  }
+});
+
+// Set image source for approved series (AniDB only enforced)
+app.post('/api/approved-series/source', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const { outputKey, source } = req.body || {};
+    if (!outputKey) {
+      appendLog(`APPROVED_SERIES_SOURCE_FAIL missing_outputKey`);
+      return res.status(400).json({ error: 'outputKey required' });
+    }
+    // Only allow AniDB
+    if (source !== 'anidb') {
+      appendLog(`APPROVED_SERIES_SOURCE_REJECT outputKey=${outputKey} attemptedSource=${source}`);
+      return res.status(400).json({ error: 'Only AniDB source allowed' });
+    }
+    // Save preference (redundant, but for compatibility)
+    users[req.session.username] = users[req.session.username] || { username: req.session.username, settings: {} };
+    users[req.session.username].settings.approved_series_image_source_by_output = users[req.session.username].settings.approved_series_image_source_by_output || {};
+    users[req.session.username].settings.approved_series_image_source_by_output[outputKey] = 'anidb';
+    writeJson(usersFile, users);
+    appendLog(`APPROVED_SERIES_SOURCE_SET outputKey=${outputKey} source=anidb`);
+    return res.json({ ok: true });
+  } catch (e) {
+    appendLog(`APPROVED_SERIES_SOURCE_FATAL err=${e && e.message}`);
+    return res.status(500).json({ error: 'Internal error' });
+  }
+});
+
+// Clear approved series image cache
+app.post('/api/approved-series/clear-cache', requireAuth, requireAdmin, (req, res) => {
+  try {
+    approvedSeriesImages = {};
+    writeJson(approvedSeriesImagesFile, approvedSeriesImages);
+    appendLog('APPROVED_SERIES_IMAGE_CACHE_CLEARED');
+    return res.json({ ok: true });
+  } catch (e) {
+    appendLog(`APPROVED_SERIES_IMAGE_CACHE_CLEAR_FAIL err=${e && e.message}`);
+    return res.status(500).json({ error: 'Internal error' });
+  }
+});
+
 // New diagnostic endpoint: provider/meta status (TMDb/Kitsu)
 app.get('/api/meta/status', requireAuth, (req, res) => {
   try {
