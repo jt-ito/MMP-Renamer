@@ -8912,12 +8912,13 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
       } catch (e) {}
     }
     if (!aid) {
-      try { appendLog(`APPROVED_SERIES_ANIDB_NO_AID series=${String(seriesName || '').slice(0,80)}`); } catch (e) {}
+      try { appendLog(`APPROVED_SERIES_ANIDB_NO_AID series="${String(seriesName || '').slice(0,80)}" outputKey="${outputKey}" user="${username}"`); } catch (e) {}
       return null;
     }
 
     let imageUrl = null;
     let summary = '';
+    try { appendLog(`APPROVED_SERIES_ANIDB_FETCH_START series="${String(seriesName || '').slice(0,80)}" aid=${aid} outputKey="${outputKey}" user="${username}"`); } catch (e) {}
 
     // Fetch AniDB HTTP API XML directly (Jellyfin style)
     try {
@@ -8929,42 +8930,33 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
       );
       const animeXml = await client.getAnimeInfoXml(aid); // New: fetch raw XML
       if (animeXml) {
+        try { appendLog(`APPROVED_SERIES_ANIDB_XML_FETCHED series="${String(seriesName || '').slice(0,80)}" aid=${aid} xml_length=${animeXml.length}`); } catch (e) {}
         // Parse <picture> element from XML
         const pictureMatch = animeXml.match(/<picture>([^<]+)<\/picture>/i);
         if (pictureMatch && pictureMatch[1]) {
           const cleanFilename = pictureMatch[1].trim();
           imageUrl = `https://cdn.anidb.net/images/main/${cleanFilename}`;
-          try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_OK series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${cleanFilename}`); } catch (e) {}
+          try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_OK series="${String(seriesName || '').slice(0,80)}" aid=${aid} picture="${cleanFilename}" imageUrl="${imageUrl}"`); } catch (e) {}
         } else {
-          try { appendLog(`APPROVED_SERIES_ANIDB_NO_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aid} reason=no_picture_in_xml`); } catch (e) {}
+          try { appendLog(`APPROVED_SERIES_ANIDB_NO_PICTURE series="${String(seriesName || '').slice(0,80)}" aid=${aid} reason="no_picture_in_xml"`); } catch (e) {}
         }
         // Optionally parse <description> element
         const descMatch = animeXml.match(/<description>([^<]+)<\/description>/i);
         if (descMatch && descMatch[1]) {
           summary = stripHtmlSummary(decodeHtmlEntities(descMatch[1]));
         }
+      } else {
+        try { appendLog(`APPROVED_SERIES_ANIDB_XML_EMPTY series="${String(seriesName || '').slice(0,80)}" aid=${aid}`); } catch (e) {}
       }
     } catch (e) {
-      try { appendLog(`APPROVED_SERIES_ANIDB_CLIENT_ERR series=${String(seriesName || '').slice(0,80)} aid=${aid} err=${e.message}`); } catch (ee) {}
+      try { appendLog(`APPROVED_SERIES_ANIDB_CLIENT_ERR series="${String(seriesName || '').slice(0,80)}" aid=${aid} err="${e.message}"`); } catch (ee) {}
     }
 
     if (!imageUrl) {
-      try { appendLog(`APPROVED_SERIES_ANIDB_NO_IMAGE series=${String(seriesName || '').slice(0,80)} aid=${aid} trying_anilist_fallback=true`); } catch (e) {}
-      
-      // AniDB doesn't have image - try AniList as fallback (Jellyfin strategy)
-      const anilistResult = await fetchAniListSeriesArtworkByNameAndAniDbId(seriesName, aid);
-      if (anilistResult && anilistResult.imageUrl) {
-        try { appendLog(`APPROVED_SERIES_ANIDB_FALLBACK_SUCCESS series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
-        return {
-          ...anilistResult,
-          provider: 'anilist-fallback-from-anidb'
-        };
-      }
-      
-      try { appendLog(`APPROVED_SERIES_ANIDB_FALLBACK_FAILED series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
+      try { appendLog(`APPROVED_SERIES_ANIDB_NO_IMAGE series="${String(seriesName || '').slice(0,80)}" aid=${aid} fallback=none outputKey="${outputKey}" user="${username}"`); } catch (e) {}
       return null;
     }
-    try { appendLog(`APPROVED_SERIES_ANIDB_FETCH_OK series=${String(seriesName || '').slice(0,80)} aid=${aid} imageUrl=${imageUrl.slice(0,100)}`); } catch (e) {}
+    try { appendLog(`APPROVED_SERIES_ANIDB_FETCH_OK series="${String(seriesName || '').slice(0,80)}" aid=${aid} imageUrl="${imageUrl}" outputKey="${outputKey}" user="${username}"`); } catch (e) {}
     return {
       id: aid,
       name: String(seriesName || '').trim(),
