@@ -152,21 +152,15 @@ export default function ApprovedSeries({ pushToast }) {
       const r = await axios.get(API('/logs/recent?lines=500&filter=approved_series'))
       const allLogs = r.data.logs || ''
       
-      // Filter logs by current output path if activeOutput is set
-      if (activeOutput && activeOutput.path) {
-        const outputPath = activeOutput.path
-        const lines = allLogs.split('\n')
-        const filtered = lines.filter(line => {
-          // Include lines that mention the current output path
-          // The logs typically include "output=" or "key=" with the path
-          return line.includes(`output=${outputPath}`) || 
-                 line.includes(`key=${outputPath}`) ||
-                 line.includes(`output=/${outputPath}`) ||
-                 line.includes(outputPath)
-        })
-        setLogs(filtered.join('\n'))
+      // Filter logs by output key if activeOutput is set
+      if (activeOutput && activeOutput.key) {
+        const outputKey = activeOutput.key;
+        const lines = allLogs.split('\n');
+        // Show any log mentioning the output key (not just exact path matches)
+        const filtered = lines.filter(line => line.includes(outputKey));
+        setLogs(filtered.join('\n'));
       } else {
-        setLogs(allLogs)
+        setLogs(allLogs);
       }
     } catch (e) {
       // silent

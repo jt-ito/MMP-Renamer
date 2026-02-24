@@ -9058,17 +9058,22 @@ async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, s
     return { ok: true, skipped: true, fetched: false, reason: 'cooldown', source: selectedSource };
   }
 
-  try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_START series=${cleanSeriesName.slice(0,80)} source=${selectedSource} output=${normalizedOutputKey.slice(0,80)}`); } catch (e) {}
+  try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_ATTEMPT series=${cleanSeriesName.slice(0,80)} source=${selectedSource} output=${normalizedOutputKey.slice(0,80)}`); } catch (e) {}
   approvedSeriesImageFetchLocks.set(lockKey, { inFlight: true, lastFetchedAt: lockInfo && lockInfo.lastFetchedAt ? lockInfo.lastFetchedAt : 0 });
   try {
     const lookedUp = await fetchApprovedSeriesArtwork({ username, outputKey: normalizedOutputKey, source: selectedSource, seriesName: cleanSeriesName });
     approvedSeriesImageFetchLocks.set(lockKey, { inFlight: false, lastFetchedAt: Date.now() });
 
     if (!lookedUp || !lookedUp.imageUrl) {
-      try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_NO_IMAGE series=${cleanSeriesName.slice(0,80)} source=${selectedSource}`); } catch (e) {}
+      try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_RESULT series=${cleanSeriesName.slice(0,80)} source=${selectedSource} result=none`); } catch (e) {}
+      // Log fallback if source is not AniList and fallback occurs
+      if (selectedSource !== 'anilist') {
+        try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_FALLBACK series=${cleanSeriesName.slice(0,80)} source=${selectedSource} fallback=anilist`); } catch (e) {}
+      }
       return { ok: true, fetched: false, skipped: true, source: selectedSource, reason: 'no-image' };
     }
 
+    try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_RESULT series=${cleanSeriesName.slice(0,80)} source=${selectedSource} result=success imageUrl=${lookedUp.imageUrl.slice(0,100)}`); } catch (e) {}
     approvedSeriesImages[cacheKey] = {
       provider: selectedSource,
       imageUrl: lookedUp.imageUrl,
@@ -9077,7 +9082,6 @@ async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, s
       fetchedAt: lookedUp.fetchedAt || Date.now()
     };
     try { writeJson(approvedSeriesImagesFile, approvedSeriesImages); } catch (e) {}
-    try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_SUCCESS series=${cleanSeriesName.slice(0,80)} source=${selectedSource} imageUrl=${lookedUp.imageUrl.slice(0,100)}`); } catch (e) {}
     return { ok: true, fetched: true, source: selectedSource };
   } catch (err) {
     approvedSeriesImageFetchLocks.set(lockKey, { inFlight: false, lastFetchedAt: Date.now() });
