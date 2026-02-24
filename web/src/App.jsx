@@ -656,9 +656,10 @@ export default function App() {
     
     let filtered = itemsToFilter.slice()
     
-    // Always filter out hidden and applied items
+    // Always filter out hidden and applied items using global enrichCache
     filtered = filtered.filter(it => {
       const norm = getNorm(it)
+      // Use global approval: hide if enrichCache marks as hidden/applied, regardless of library/output
       return !norm || (!norm.hidden && !norm.applied)
     })
     

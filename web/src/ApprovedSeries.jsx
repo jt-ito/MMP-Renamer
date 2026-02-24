@@ -100,47 +100,51 @@ export default function ApprovedSeries({ pushToast }) {
   }
 
   const enqueueAutoFetch = (outputKey, source, seriesName, cardKey) => {
-    if (!outputKey || !seriesName || !cardKey) return
-    if (queuedRef.current.has(cardKey) || inFlightRef.current.has(cardKey)) return
-    queuedRef.current.add(cardKey)
-    setAutoFetching((prev) => ({ ...prev, [cardKey]: true }))
-    if (queueTimerRef.current) return
+    if (!outputKey || !seriesName || !cardKey) return;
+    if (queuedRef.current.has(cardKey) || inFlightRef.current.has(cardKey)) return;
+    queuedRef.current.add(cardKey);
+    setAutoFetching((prev) => ({ ...prev, [cardKey]: true }));
+    if (queueTimerRef.current) return;
     queueTimerRef.current = setInterval(async () => {
-      const nextKey = queuedRef.current.values().next().value
+      const nextKey = queuedRef.current.values().next().value;
       if (!nextKey) {
-        clearInterval(queueTimerRef.current)
-        queueTimerRef.current = null
-        return
+        clearInterval(queueTimerRef.current);
+        queueTimerRef.current = null;
+        return;
       }
-      const [okey, sname] = nextKey.split('::')
-      queuedRef.current.delete(nextKey)
-      inFlightRef.current.add(nextKey)
+      const [okey, sname] = nextKey.split('::');
+      queuedRef.current.delete(nextKey);
+      inFlightRef.current.add(nextKey);
       try {
+        // Use the source from the current active output
+        const activeOutput = outputs.find((o) => o.key === okey);
+        const source = activeOutput && activeOutput.source ? activeOutput.source : 'anilist';
         await axios.post(API('/approved-series/fetch-image'), {
           outputKey: okey,
-          seriesName: sname
-        })
+          seriesName: sname,
+          source
+        });
         setOutputs((prev) => prev.map((out) => {
-          if (out.key !== okey || !Array.isArray(out.series)) return out
+          if (out.key !== okey || !Array.isArray(out.series)) return out;
           return {
             ...out,
             series: out.series.map((item) => {
-              if ((item && item.name ? item.name : '') !== sname) return item
-              return { ...item, _autoFetched: true }
+              if ((item && item.name ? item.name : '') !== sname) return item;
+              return { ...item, _autoFetched: true };
             })
-          }
-        }))
+          };
+        }));
       } catch (e) {
         // Keep silent for background fetch to avoid toast spam
       } finally {
-        inFlightRef.current.delete(nextKey)
+        inFlightRef.current.delete(nextKey);
         setAutoFetching((prev) => {
-          const next = { ...prev }
-          delete next[nextKey]
-          return next
-        })
+          const next = { ...prev };
+          delete next[nextKey];
+          return next;
+        });
       }
-    }, AUTO_FETCH_INTERVAL_MS)
+    }, AUTO_FETCH_INTERVAL_MS);
   }
 
   const fetchLogs = async () => {
