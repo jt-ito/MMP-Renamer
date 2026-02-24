@@ -5198,83 +5198,6 @@ app.get('/api/libraries', requireAuth, (req, res) => {
   res.json([{ id: 'local', name: 'Local folder', canonicalPath: path.resolve('.') }]);
 });
 
-// --- Approved Series Image Endpoints ---
-// Fetch image for approved series (AniDB only enforced)
-app.post('/api/approved-series/fetch-image', requireAuth, requireAdmin, async (req, res) => {
-  try {
-    const { seriesTitle, outputKey } = req.body || {};
-    if (!seriesTitle || !outputKey) {
-      appendLog(`APPROVED_SERIES_FETCH_IMAGE_FAIL missing_params seriesTitle=${seriesTitle} outputKey=${outputKey}`);
-      return res.status(400).json({ error: 'seriesTitle and outputKey required' });
-    }
-    // Enforce AniDB-only
-    const imageSource = 'anidb';
-    appendLog(`APPROVED_SERIES_FETCH_IMAGE_START seriesTitle=${seriesTitle} outputKey=${outputKey} source=${imageSource}`);
-    // Simulate fetch from AniDB (replace with real fetch logic as needed)
-    let imageUrl = null;
-    try {
-      // Example: look up in approvedSeriesImages cache or fetch anew
-      imageUrl = approvedSeriesImages[outputKey]?.[imageSource] || null;
-      if (!imageUrl) {
-        // Simulate fetch (replace with real AniDB fetch logic)
-        imageUrl = `https://cdn.anidb.net/images/${encodeURIComponent(seriesTitle)}.jpg`;
-        approvedSeriesImages[outputKey] = approvedSeriesImages[outputKey] || {};
-        approvedSeriesImages[outputKey][imageSource] = imageUrl;
-        writeJson(approvedSeriesImagesFile, approvedSeriesImages);
-        appendLog(`APPROVED_SERIES_FETCH_IMAGE_OK seriesTitle=${seriesTitle} outputKey=${outputKey} url=${imageUrl}`);
-      } else {
-        appendLog(`APPROVED_SERIES_FETCH_IMAGE_CACHE_HIT seriesTitle=${seriesTitle} outputKey=${outputKey} url=${imageUrl}`);
-      }
-    } catch (e) {
-      appendLog(`APPROVED_SERIES_FETCH_IMAGE_ERR seriesTitle=${seriesTitle} outputKey=${outputKey} err=${e && e.message}`);
-      return res.status(500).json({ error: 'Failed to fetch AniDB image' });
-    }
-    return res.json({ ok: true, url: imageUrl });
-  } catch (e) {
-    appendLog(`APPROVED_SERIES_FETCH_IMAGE_FATAL err=${e && e.message}`);
-    return res.status(500).json({ error: 'Internal error' });
-  }
-});
-
-// Set image source for approved series (AniDB only enforced)
-app.post('/api/approved-series/source', requireAuth, requireAdmin, (req, res) => {
-  try {
-    const { outputKey, source } = req.body || {};
-    if (!outputKey) {
-      appendLog(`APPROVED_SERIES_SOURCE_FAIL missing_outputKey`);
-      return res.status(400).json({ error: 'outputKey required' });
-    }
-    // Only allow AniDB
-    if (source !== 'anidb') {
-      appendLog(`APPROVED_SERIES_SOURCE_REJECT outputKey=${outputKey} attemptedSource=${source}`);
-      return res.status(400).json({ error: 'Only AniDB source allowed' });
-    }
-    // Save preference (redundant, but for compatibility)
-    users[req.session.username] = users[req.session.username] || { username: req.session.username, settings: {} };
-    users[req.session.username].settings.approved_series_image_source_by_output = users[req.session.username].settings.approved_series_image_source_by_output || {};
-    users[req.session.username].settings.approved_series_image_source_by_output[outputKey] = 'anidb';
-    writeJson(usersFile, users);
-    appendLog(`APPROVED_SERIES_SOURCE_SET outputKey=${outputKey} source=anidb`);
-    return res.json({ ok: true });
-  } catch (e) {
-    appendLog(`APPROVED_SERIES_SOURCE_FATAL err=${e && e.message}`);
-    return res.status(500).json({ error: 'Internal error' });
-  }
-});
-
-// Clear approved series image cache
-app.post('/api/approved-series/clear-cache', requireAuth, requireAdmin, (req, res) => {
-  try {
-    approvedSeriesImages = {};
-    writeJson(approvedSeriesImagesFile, approvedSeriesImages);
-    appendLog('APPROVED_SERIES_IMAGE_CACHE_CLEARED');
-    return res.json({ ok: true });
-  } catch (e) {
-    appendLog(`APPROVED_SERIES_IMAGE_CACHE_CLEAR_FAIL err=${e && e.message}`);
-    return res.status(500).json({ error: 'Internal error' });
-  }
-});
-
 // New diagnostic endpoint: provider/meta status (TMDb/Kitsu)
 app.get('/api/meta/status', requireAuth, (req, res) => {
   try {
@@ -8989,15 +8912,14 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
       } catch (e) {}
     }
     if (!aid) {
-      try { appendLog(`APPROVED_SERIES_ANIDB_NO_AID series="${String(seriesName || '').slice(0,80)}" outputKey="${outputKey}" user="${username}"`); } catch (e) {}
+      try { appendLog(`APPROVED_SERIES_ANIDB_NO_AID series=${String(seriesName || '').slice(0,80)}`); } catch (e) {}
       return null;
     }
 
     let imageUrl = null;
     let summary = '';
-    try { appendLog(`APPROVED_SERIES_ANIDB_FETCH_START series="${String(seriesName || '').slice(0,80)}" aid=${aid} outputKey="${outputKey}" user="${username}"`); } catch (e) {}
 
-    // Fetch AniDB HTTP API XML directly (Jellyfin style)
+    const creds = getAniDBCredentials(username, serverSettings, users);
     try {
       const client = getAniDBClient(
         (creds && creds.anidb_username) ? creds.anidb_username : '',
@@ -9005,35 +8927,46 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
         (creds && creds.anidb_client_name) ? creds.anidb_client_name : 'mmprename',
         (creds && creds.anidb_client_version) ? creds.anidb_client_version : 1
       );
-      const animeXml = await client.getAnimeInfoXml(aid); // New: fetch raw XML
-      if (animeXml) {
-        try { appendLog(`APPROVED_SERIES_ANIDB_XML_FETCHED series="${String(seriesName || '').slice(0,80)}" aid=${aid} xml_length=${animeXml.length}`); } catch (e) {}
-        // Parse <picture> element from XML
-        const pictureMatch = animeXml.match(/<picture>([^<]+)<\/picture>/i);
-        if (pictureMatch && pictureMatch[1]) {
-          const cleanFilename = pictureMatch[1].trim();
+      const anime = await client.getAnimeInfo(aid);
+      
+      if (anime) {
+        // AniDB HTTP API returns a picture filename (like "12345.jpg")
+        // We construct the full CDN URL from it
+        if (anime.picture && anime.picture.trim()) {
+          const cleanFilename = anime.picture.trim();
           imageUrl = `https://cdn.anidb.net/images/main/${cleanFilename}`;
-          try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_OK series="${String(seriesName || '').slice(0,80)}" aid=${aid} picture="${cleanFilename}" imageUrl="${imageUrl}"`); } catch (e) {}
+          try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_OK series=${String(seriesName || '').slice(0,80)} aid=${aid} restricted=${!!anime.restricted} picture=${cleanFilename}`); } catch (e) {}
         } else {
-          try { appendLog(`APPROVED_SERIES_ANIDB_NO_PICTURE series="${String(seriesName || '').slice(0,80)}" aid=${aid} reason="no_picture_in_xml"`); } catch (e) {}
+          // No picture in API response - common for adult/restricted content
+          const reason = anime.restricted ? 'restricted_content' : 'no_picture_in_api';
+          try { appendLog(`APPROVED_SERIES_ANIDB_NO_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aid} restricted=${!!anime.restricted} reason=${reason}`); } catch (e) {}
         }
-        // Optionally parse <description> element
-        const descMatch = animeXml.match(/<description>([^<]+)<\/description>/i);
-        if (descMatch && descMatch[1]) {
-          summary = stripHtmlSummary(decodeHtmlEntities(descMatch[1]));
+        
+        if (anime.description) {
+          summary = stripHtmlSummary(decodeHtmlEntities(anime.description));
         }
-      } else {
-        try { appendLog(`APPROVED_SERIES_ANIDB_XML_EMPTY series="${String(seriesName || '').slice(0,80)}" aid=${aid}`); } catch (e) {}
       }
     } catch (e) {
-      try { appendLog(`APPROVED_SERIES_ANIDB_CLIENT_ERR series="${String(seriesName || '').slice(0,80)}" aid=${aid} err="${e.message}"`); } catch (ee) {}
+      try { appendLog(`APPROVED_SERIES_ANIDB_CLIENT_ERR series=${String(seriesName || '').slice(0,80)} aid=${aid} err=${e.message}`); } catch (ee) {}
     }
 
     if (!imageUrl) {
-      try { appendLog(`APPROVED_SERIES_ANIDB_NO_IMAGE series="${String(seriesName || '').slice(0,80)}" aid=${aid} fallback=none outputKey="${outputKey}" user="${username}"`); } catch (e) {}
+      try { appendLog(`APPROVED_SERIES_ANIDB_NO_IMAGE series=${String(seriesName || '').slice(0,80)} aid=${aid} trying_anilist_fallback=true`); } catch (e) {}
+      
+      // AniDB doesn't have image - try AniList as fallback (Jellyfin strategy)
+      const anilistResult = await fetchAniListSeriesArtworkByNameAndAniDbId(seriesName, aid);
+      if (anilistResult && anilistResult.imageUrl) {
+        try { appendLog(`APPROVED_SERIES_ANIDB_FALLBACK_SUCCESS series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
+        return {
+          ...anilistResult,
+          provider: 'anilist-fallback-from-anidb'
+        };
+      }
+      
+      try { appendLog(`APPROVED_SERIES_ANIDB_FALLBACK_FAILED series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
       return null;
     }
-    try { appendLog(`APPROVED_SERIES_ANIDB_FETCH_OK series="${String(seriesName || '').slice(0,80)}" aid=${aid} imageUrl="${imageUrl}" outputKey="${outputKey}" user="${username}"`); } catch (e) {}
+    try { appendLog(`APPROVED_SERIES_ANIDB_FETCH_OK series=${String(seriesName || '').slice(0,80)} aid=${aid} imageUrl=${imageUrl.slice(0,100)}`); } catch (e) {}
     return {
       id: aid,
       name: String(seriesName || '').trim(),

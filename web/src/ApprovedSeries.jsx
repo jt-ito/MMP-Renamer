@@ -52,9 +52,6 @@ export default function ApprovedSeries({ pushToast }) {
       const savedSource = resp && resp.data && resp.data.source ? resp.data.source : source
       setOutputs((prev) => prev.map((o) => o.key === outputKey ? { ...o, source: savedSource, sourceConfigured: true } : o))
       pushToast && pushToast('Approved Series', `Saved image source: ${savedSource}`)
-      // Clear cache and reload series data for this output
-      await axios.post(API('/approved-series/clear-cache'), { outputKey })
-      await load()
       return true
     } catch (e) {
       pushToast && pushToast('Approved Series', 'Failed to save image source')
@@ -127,8 +124,16 @@ export default function ApprovedSeries({ pushToast }) {
           seriesName: sname,
           source
         });
-        // After fetching, reload the series data for this output
-        await load()
+        setOutputs((prev) => prev.map((out) => {
+          if (out.key !== okey || !Array.isArray(out.series)) return out;
+          return {
+            ...out,
+            series: out.series.map((item) => {
+              if ((item && item.name ? item.name : '') !== sname) return item;
+              return { ...item, _autoFetched: true };
+            })
+          };
+        }));
       } catch (e) {
         // Keep silent for background fetch to avoid toast spam
       } finally {
@@ -172,8 +177,6 @@ export default function ApprovedSeries({ pushToast }) {
         logsTimerRef.current = null
       }
     }
-    // Always fetch logs when (re)mounting or changing output
-    fetchLogs()
     return () => {
       if (logsTimerRef.current) {
         clearInterval(logsTimerRef.current)
