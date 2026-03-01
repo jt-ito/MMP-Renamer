@@ -46,6 +46,8 @@ export default function ApprovedSeries({ pushToast }) {
   const inFlightRef = useRef(new Set())
   const queueTimerRef = useRef(null)
   const logsTimerRef = useRef(null)
+  const logLinesRef = useRef([])  // accumulated log lines — never shrinks during a session
+  const logScrollRef = useRef(null)  // ref to the scrolling <div> for auto-scroll
 
   const AUTO_FETCH_INTERVAL_MS = 1200
 
@@ -181,11 +183,48 @@ export default function ApprovedSeries({ pushToast }) {
     try {
       const outputParam = activeOutput && activeOutput.key ? `&outputKey=${encodeURIComponent(activeOutput.key)}` : ''
       const r = await axios.get(API(`/logs/recent?lines=500&filter=approved_series${outputParam}`))
-      setLogs(r.data.logs || '')
+      const newContent = (r && r.data && r.data.logs) ? r.data.logs : ''
+      const newLines = newContent ? newContent.split('\n').filter(l => l.trim()) : []
+      const accumulated = logLinesRef.current
+      if (accumulated.length === 0) {
+        logLinesRef.current = newLines
+      } else {
+        // Server returns a sliding tail window — find our last line to avoid duplicates.
+        const last = accumulated[accumulated.length - 1]
+        const idx = newLines.lastIndexOf(last)
+        if (idx >= 0 && idx < newLines.length - 1) {
+          // Append only truly new lines after the last one we already display
+          logLinesRef.current = [...accumulated, ...newLines.slice(idx + 1)]
+        } else if (idx === -1 && newLines.length > 0) {
+          // No overlap (e.g. log file was cleared) — replace with fresh set
+          logLinesRef.current = newLines
+        }
+        // idx === newLines.length - 1 means no new lines yet — do nothing
+      }
+      const joined = logLinesRef.current.join('\n')
+      setLogs(joined)
+      // Auto-scroll to bottom only if user hasn't scrolled up
+      const el = logScrollRef.current
+      if (el) {
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+        if (atBottom) el.scrollTop = el.scrollHeight
+      }
     } catch (e) {
       // silent
     }
   }
+
+  const clearLogView = () => {
+    logLinesRef.current = []
+    setLogs('')
+  }
+
+  // When the selected output tab changes, discard accumulated log lines so the
+  // view starts fresh for the new scope instead of mixing logs from both outputs.
+  useEffect(() => {
+    logLinesRef.current = []
+    setLogs('')
+  }, [activeOutputKey])
 
   useEffect(() => {
     if (showLogs) {
@@ -289,18 +328,24 @@ export default function ApprovedSeries({ pushToast }) {
               <strong style={{fontSize:14}}>
                 Logs {activeOutput ? `for ${activeOutput.path}` : '(all outputs)'}
               </strong>
-              <button className="row-match-btn" onClick={fetchLogs}>Refresh</button>
+              <div style={{display:'flex',gap:6}}>
+                <button className="row-match-btn" onClick={clearLogView}>Clear</button>
+                <button className="row-match-btn" onClick={fetchLogs}>Refresh</button>
+              </div>
             </div>
-            <div style={{
-              height: '300px',
-              overflow: 'auto',
-              background: '#1a1a1a',
-              border: '1px solid #444',
-              borderRadius: 3,
-              padding: 8,
-              width: '100%',
-              boxSizing: 'border-box'
-            }}>
+            <div
+              ref={logScrollRef}
+              style={{
+                height: '300px',
+                overflow: 'auto',
+                background: '#1a1a1a',
+                border: '1px solid #444',
+                borderRadius: 3,
+                padding: 8,
+                width: '100%',
+                boxSizing: 'border-box'
+              }}
+            >
               <pre style={{
                 margin: 0,
                 fontSize: 11,
