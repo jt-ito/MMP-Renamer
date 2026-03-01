@@ -8847,8 +8847,10 @@ async function findAniDbAidByTitle(seriesName, username) {
       const anime = await apiClient.getAnimeInfoByTitle(query);
       const apiAid = Number(anime && anime.aid ? anime.aid : NaN);
       if (Number.isFinite(apiAid) && apiAid > 0) {
-        try { appendLog(`APPROVED_SERIES_ANIDB_TITLE_API_HIT series=${String(seriesName || '').slice(0,120)} aid=${apiAid}`); } catch (e) {}
-        return apiAid;
+        try { appendLog(`APPROVED_SERIES_ANIDB_TITLE_API_HIT series=${String(seriesName || '').slice(0,120)} aid=${apiAid} hasPicture=${!!(anime && anime.picture)}`); } catch (e) {}
+        // Return the full anime object so callers can reuse the picture/description
+        // without making a second API call
+        return { aid: apiAid, anime };
       }
     } catch (e) {
       try { appendLog(`APPROVED_SERIES_ANIDB_TITLE_API_MISS series=${String(seriesName || '').slice(0,120)} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
@@ -8935,8 +8937,19 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
   try {
     await new Promise(resolve => setTimeout(resolve, 2500));
     let aid = findAniDbAidForApprovedSeries(outputKey, seriesName);
+    // animeFromTitleLookup holds the parsed anime object if findAniDbAidByTitle already
+    // fetched it via the title API — we reuse it to avoid making a redundant second call.
+    let animeFromTitleLookup = null;
     if (!aid) {
-      aid = await findAniDbAidByTitle(seriesName, username);
+      const titleResult = await findAniDbAidByTitle(seriesName, username);
+      // findAniDbAidByTitle now returns { aid, anime } when found via API, or a bare number
+      // from older code paths (AniList link / web scrape), or null.
+      if (titleResult && typeof titleResult === 'object' && titleResult.aid) {
+        aid = titleResult.aid;
+        animeFromTitleLookup = titleResult.anime || null;
+      } else if (typeof titleResult === 'number') {
+        aid = titleResult;
+      }
       try {
         if (aid) appendLog(`APPROVED_SERIES_ANIDB_TITLE_FALLBACK_HIT series=${String(seriesName || '').slice(0,120)} aid=${aid}`);
         else appendLog(`APPROVED_SERIES_ANIDB_TITLE_FALLBACK_NONE series=${String(seriesName || '').slice(0,120)}`);
@@ -8952,13 +8965,18 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
 
     const creds = getAniDBCredentials(username, serverSettings, users);
     try {
-      const client = getAniDBClient(
-        (creds && creds.anidb_username) ? creds.anidb_username : '',
-        (creds && creds.anidb_password) ? creds.anidb_password : '',
-        (creds && creds.anidb_client_name) ? creds.anidb_client_name : 'mmprename',
-        (creds && creds.anidb_client_version) ? creds.anidb_client_version : 1
-      );
-      const anime = await client.getAnimeInfo(aid);
+      // Reuse the anime object from the title lookup if we already have it,
+      // otherwise fetch by AID (avoids a redundant HTTP API call).
+      let anime = animeFromTitleLookup;
+      if (!anime) {
+        const client = getAniDBClient(
+          (creds && creds.anidb_username) ? creds.anidb_username : '',
+          (creds && creds.anidb_password) ? creds.anidb_password : '',
+          (creds && creds.anidb_client_name) ? creds.anidb_client_name : 'mmprename',
+          (creds && creds.anidb_client_version) ? creds.anidb_client_version : 1
+        );
+        anime = await client.getAnimeInfo(aid);
+      }
       
       if (anime) {
         // AniDB HTTP API returns a picture filename (like "12345.jpg")
@@ -8968,9 +8986,11 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
           imageUrl = `https://cdn.anidb.net/images/main/${cleanFilename}`;
           try { appendLog(`APPROVED_SERIES_ANIDB_PICTURE_OK series=${String(seriesName || '').slice(0,80)} aid=${aid} restricted=${!!anime.restricted} picture=${cleanFilename}`); } catch (e) {}
         } else {
-          // No picture in API response - common for adult/restricted content
+          // No picture in API response — log the raw XML (truncated) so we can diagnose
+          // whether the field is absent, malformed, or in a different format.
           const reason = anime.restricted ? 'restricted_content' : 'no_picture_in_api';
-          try { appendLog(`APPROVED_SERIES_ANIDB_NO_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aid} restricted=${!!anime.restricted} reason=${reason}`); } catch (e) {}
+          const rawSnippet = String(anime.raw || '').slice(0, 800).replace(/\n/g, ' ');
+          try { appendLog(`APPROVED_SERIES_ANIDB_NO_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aid} restricted=${!!anime.restricted} reason=${reason} raw=${rawSnippet}`); } catch (e) {}
         }
         
         if (anime.description) {
@@ -8981,9 +9001,29 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
       try { appendLog(`APPROVED_SERIES_ANIDB_CLIENT_ERR series=${String(seriesName || '').slice(0,80)} aid=${aid} err=${e.message}`); } catch (ee) {}
     }
 
+    if (!imageUrl && creds && creds.anidb_username && creds.anidb_password) {
+      // HTTP API returned no picture — try the authenticated UDP API before scraping.
+      // The UDP API uses the user's actual login credentials and returns picture data
+      // for series the anonymous HTTP API omits.
+      try { appendLog(`APPROVED_SERIES_ANIDB_UDP_LOOKUP series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
+      try {
+        const udpClient = getAniDBClient(creds.anidb_username, creds.anidb_password,
+          creds.anidb_client_name || 'mmprename', creds.anidb_client_version || 1);
+        const udpInfo = await udpClient.getAnimeInfoByAidUdp(aid);
+        if (udpInfo && udpInfo.picture && udpInfo.picture.trim()) {
+          const cleanFilename = udpInfo.picture.trim();
+          imageUrl = `https://cdn.anidb.net/images/main/${cleanFilename}`;
+          try { appendLog(`APPROVED_SERIES_ANIDB_UDP_PICTURE_OK series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${cleanFilename}`); } catch (e) {}
+        } else {
+          try { appendLog(`APPROVED_SERIES_ANIDB_UDP_NO_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aid} raw=${String(udpInfo && udpInfo.raw || '').slice(0,200)}`); } catch (e) {}
+        }
+      } catch (udpErr) {
+        try { appendLog(`APPROVED_SERIES_ANIDB_UDP_ERR series=${String(seriesName || '').slice(0,80)} aid=${aid} err=${udpErr.message}`); } catch (e) {}
+      }
+    }
+
     if (!imageUrl) {
-      // The AniDB HTTP API sometimes omits the picture field even when the series has artwork.
-      // Scrape the AniDB anime page directly to get the CDN image URL before falling back to AniList.
+      // UDP also returned nothing — scrape the AniDB anime page as a last resort before AniList.
       try { appendLog(`APPROVED_SERIES_ANIDB_PAGE_SCRAPE series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
       try {
         const pageResp = await httpRequest({
