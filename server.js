@@ -8982,6 +8982,37 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
     }
 
     if (!imageUrl) {
+      // The AniDB HTTP API sometimes omits the picture field even when the series has artwork.
+      // Scrape the AniDB anime page directly to get the CDN image URL before falling back to AniList.
+      try { appendLog(`APPROVED_SERIES_ANIDB_PAGE_SCRAPE series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
+      try {
+        const pageResp = await httpRequest({
+          hostname: 'anidb.net',
+          path: `/anime/${aid}`,
+          method: 'GET',
+          headers: {
+            'Accept': 'text/html,application/xhtml+xml',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
+          }
+        }, null, 12000);
+        if (pageResp && pageResp.statusCode === 200 && pageResp.body) {
+          const scraped = extractAniDbPageImageUrl(pageResp.body);
+          if (scraped) {
+            imageUrl = scraped;
+            if (!summary) summary = extractAniDbPageSummary(pageResp.body) || '';
+            try { appendLog(`APPROVED_SERIES_ANIDB_PAGE_SCRAPE_OK series=${String(seriesName || '').slice(0,80)} aid=${aid} imageUrl=${imageUrl.slice(0,100)}`); } catch (e) {}
+          } else {
+            try { appendLog(`APPROVED_SERIES_ANIDB_PAGE_SCRAPE_NO_IMG series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
+          }
+        } else {
+          try { appendLog(`APPROVED_SERIES_ANIDB_PAGE_SCRAPE_HTTP_FAIL series=${String(seriesName || '').slice(0,80)} aid=${aid} status=${pageResp && pageResp.statusCode}`); } catch (e) {}
+        }
+      } catch (scrapeErr) {
+        try { appendLog(`APPROVED_SERIES_ANIDB_PAGE_SCRAPE_ERR series=${String(seriesName || '').slice(0,80)} aid=${aid} err=${scrapeErr.message}`); } catch (e) {}
+      }
+    }
+
+    if (!imageUrl) {
       try { appendLog(`APPROVED_SERIES_ANIDB_NO_IMAGE series=${String(seriesName || '').slice(0,80)} aid=${aid} trying_anilist_fallback=true`); } catch (e) {}
       
       // AniDB doesn't have image - try AniList as fallback (Jellyfin strategy)
