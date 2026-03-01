@@ -306,10 +306,12 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
   flex-direction: column;
   transition: transform 220ms ease, border-color 180ms ease, box-shadow 240ms ease, filter 220ms ease;
   transform-origin: center center;
-  will-change: transform;
+  /* contain: paint isolates repaint to this card and stops layout thrashing from siblings */
+  contain: paint style;
 }
 
 .approved-series-card:hover {
+  will-change: transform;
   transform: perspective(1100px) translateY(-6px) scale(1.03) rotateY(-5deg);
   border-color: rgba(96, 165, 250, 0.45);
   box-shadow: 0 18px 30px rgba(0, 0, 0, 0.42);
@@ -391,16 +393,9 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 }
 
 .approved-series-card:hover .approved-series-title {
-  height: auto;
-  max-height: 4.2em;
-  padding-bottom: 10px;
-  display: -webkit-box;
-  text-align: left;
-  white-space: normal;
-  text-overflow: clip;
-  line-clamp: 3;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+  /* Keep fixed height to avoid layout shift that jitters the whole grid row.
+     The overlay handles summary text on hover instead. */
+  opacity: 1;
 }
 
 .approved-source-prompt-backdrop {

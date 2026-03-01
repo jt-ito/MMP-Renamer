@@ -3,6 +3,34 @@ import axios from 'axios'
 
 const API = (p) => `/api${p}`
 
+// Memoized card — only re-renders when its own series data or isFetching flag changes,
+// not when any other card in the grid gets its image back.
+const SeriesCard = React.memo(function SeriesCard({ series, outputKey, isFetching }) {
+  const cardKey = `${outputKey}::${series.name}`
+  return (
+    <article
+      className="approved-series-card"
+      data-output-key={outputKey}
+      data-series-name={series.name}
+      data-series-key={cardKey}
+    >
+      <div className="approved-series-cover-wrap">
+        {series.imageUrl ? (
+          <img className="approved-series-cover" src={series.imageUrl} alt={series.name} loading="lazy" />
+        ) : (
+          <div className="approved-series-cover approved-series-cover-placeholder">
+            {isFetching ? 'Fetching…' : 'No image yet'}
+          </div>
+        )}
+        <div className="approved-series-overlay">
+          <p className="approved-series-summary">{series.summary || `${series.appliedCount || 0} approved items`}</p>
+        </div>
+      </div>
+      <h3 className="approved-series-title" title={series.name}>{series.name}</h3>
+    </article>
+  )
+})
+
 export default function ApprovedSeries({ pushToast }) {
   const [loading, setLoading] = useState(true)
   const [outputs, setOutputs] = useState([])
@@ -332,25 +360,12 @@ export default function ApprovedSeries({ pushToast }) {
 
                 <div className="approved-series-grid">
                   {activeOutput.series && activeOutput.series.length ? activeOutput.series.map((series) => (
-                    <article
-                      className="approved-series-card"
+                    <SeriesCard
                       key={`${activeOutput.key}:${series.key}`}
-                      data-output-key={activeOutput.key}
-                      data-series-name={series.name}
-                      data-series-key={`${activeOutput.key}::${series.name}`}
-                    >
-                      <div className="approved-series-cover-wrap">
-                        {series.imageUrl ? (
-                          <img className="approved-series-cover" src={series.imageUrl} alt={series.name} loading="lazy" />
-                        ) : (
-                          <div className="approved-series-cover approved-series-cover-placeholder">{autoFetching[`${activeOutput.key}::${series.name}`] ? 'Fetching…' : 'No image yet'}</div>
-                        )}
-                        <div className="approved-series-overlay">
-                          <p className="approved-series-summary">{series.summary || `${series.appliedCount || 0} approved items`}</p>
-                        </div>
-                      </div>
-                      <h3 className="approved-series-title" title={series.name}>{series.name}</h3>
-                    </article>
+                      series={series}
+                      outputKey={activeOutput.key}
+                      isFetching={!!autoFetching[`${activeOutput.key}::${series.name}`]}
+                    />
                   )) : (
                     <p className="small-muted">No approved series found for this output.</p>
                   )}

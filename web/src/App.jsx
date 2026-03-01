@@ -3385,10 +3385,8 @@ function mergeManualIdDebugLogs(serverLogs = '') {
   }
 }
 
-function manualIdDebugLog(event, payload = {}) {
-  try {
-    pushManualIdClientLog(event, payload)
-  } catch (e) {}
+function manualIdDebugLog(_event, _payload = {}) {
+  // debug logging disabled — was spamming logs for every mounted ManualIdInputs instance
 }
 
 function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, onSaved, pushToast, inActions = false }) {
