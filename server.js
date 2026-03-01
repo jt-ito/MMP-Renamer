@@ -554,6 +554,7 @@ let approvedSeriesImages = {};
 try { approvedSeriesImages = JSON.parse(fs.readFileSync(approvedSeriesImagesFile, 'utf8') || '{}') } catch (e) { approvedSeriesImages = {} }
 const approvedSeriesImageFetchLocks = new Map();
 const APPROVED_SERIES_FETCH_COOLDOWN_MS = 3000;
+const APPROVED_SERIES_NEGATIVE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days: don't retry series confirmed to have no image
 const APPROVED_SERIES_BACKGROUND_INTERVAL_MS = 25000;
 const APPROVED_SERIES_BACKGROUND_BATCH_SIZE = 3;
 let approvedSeriesBackgroundTimer = null;
@@ -9067,6 +9068,15 @@ async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, s
 
   const cacheKey = `${normalizedOutputKey}::${seriesKey}`;
   const existing = approvedSeriesImages && approvedSeriesImages[cacheKey] ? approvedSeriesImages[cacheKey] : null;
+
+  // Negative cache hit: a previous fetch confirmed this series has no image anywhere.
+  // Honour this for up to 7 days so we don't hammer APIs for series that will never have artwork.
+  if (existing && existing.provider === 'none' &&
+      existing.fetchedAt && (Date.now() - existing.fetchedAt) < APPROVED_SERIES_NEGATIVE_CACHE_TTL_MS) {
+    try { appendLog(`APPROVED_SERIES_IMAGE_CACHE_HIT series=${cleanSeriesName.slice(0,80)} source=${selectedSource} cached_provider=none reason=no_image`); } catch (e) {}
+    return { ok: true, cached: true, fetched: false, source: selectedSource, reason: 'no-image' };
+  }
+
   // A cached provider is compatible with the requested source when they match exactly,
   // OR when the source is 'anidb' and the cache holds an 'anilist-fallback-from-anidb' result
   // (AniDB's own API returned no picture, so AniList was used as a deliberate fallback).
@@ -9106,6 +9116,10 @@ async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, s
       if (selectedSource !== 'anilist') {
         try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_FALLBACK series=${cleanSeriesName.slice(0,80)} source=${selectedSource} fallback=anilist`); } catch (e) {}
       }
+      // Persist a negative cache entry so this series is not retried on every page load.
+      // The entry expires after APPROVED_SERIES_NEGATIVE_CACHE_TTL_MS (7 days).
+      approvedSeriesImages[cacheKey] = { provider: 'none', imageUrl: null, fetchedAt: Date.now() };
+      try { writeJson(approvedSeriesImagesFile, approvedSeriesImages); } catch (e) {}
       return { ok: true, fetched: false, skipped: true, source: selectedSource, reason: 'no-image' };
     }
 
