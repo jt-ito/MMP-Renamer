@@ -9034,7 +9034,11 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
       clientVer
     );
     appendLog(`APPROVED_SERIES_ANIDB_HTTP_FETCH series=${String(seriesName || '').slice(0,80)} aid=${aid} client=${clientName}`);
-    const anime = await client.getAnimeInfo(aid);
+    // Absolute deadline so a hung TCP connection never blocks the queue indefinitely
+    const _anidbTimeout = new Promise((_, rej) =>
+      setTimeout(() => rej(new Error('AniDB getAnimeInfo absolute timeout')), 25000)
+    );
+    const anime = await Promise.race([client.getAnimeInfo(aid), _anidbTimeout]);
     appendLog(`APPROVED_SERIES_ANIDB_HTTP_RESULT series=${String(seriesName || '').slice(0,80)} aid=${aid} got_anime=${!!anime} keys=${anime ? Object.keys(anime).join(',') : 'null'}`);
 
     // 4. Parse picture and cache the result
