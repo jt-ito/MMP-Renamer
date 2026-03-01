@@ -9067,11 +9067,17 @@ async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, s
 
   const cacheKey = `${normalizedOutputKey}::${seriesKey}`;
   const existing = approvedSeriesImages && approvedSeriesImages[cacheKey] ? approvedSeriesImages[cacheKey] : null;
-  if (existing && existing.imageUrl && existing.provider === selectedSource) {
-    try { appendLog(`APPROVED_SERIES_IMAGE_CACHE_HIT series=${cleanSeriesName.slice(0,80)} source=${selectedSource}`); } catch (e) {}
+  // A cached provider is compatible with the requested source when they match exactly,
+  // OR when the source is 'anidb' and the cache holds an 'anilist-fallback-from-anidb' result
+  // (AniDB's own API returned no picture, so AniList was used as a deliberate fallback).
+  const isCacheCompatible = (existing && existing.imageUrl) &&
+    (existing.provider === selectedSource ||
+     (selectedSource === 'anidb' && existing.provider === 'anilist-fallback-from-anidb'));
+  if (isCacheCompatible) {
+    try { appendLog(`APPROVED_SERIES_IMAGE_CACHE_HIT series=${cleanSeriesName.slice(0,80)} source=${selectedSource} cached_provider=${existing.provider}`); } catch (e) {}
     return { ok: true, cached: true, fetched: false, source: selectedSource, imageUrl: existing.imageUrl, summary: existing.summary || '' };
   }
-  if (existing && existing.provider !== selectedSource) {
+  if (existing && !isCacheCompatible && existing.imageUrl) {
     try { appendLog(`APPROVED_SERIES_IMAGE_CACHE_PROVIDER_MISMATCH series=${cleanSeriesName.slice(0,80)} cached=${existing.provider} requested=${selectedSource}`); } catch (e) {}
   }
 
@@ -9248,7 +9254,12 @@ function buildApprovedSeriesPayload(username) {
     .map((bucket) => {
       const series = Array.from(bucket.seriesMap.values())
         .map((item) => {
-          if (item && item.imageProvider && item.imageProvider !== bucket.source) {
+          // Treat 'anilist-fallback-from-anidb' as compatible with an 'anidb' source preference;
+          // AniDB's API had no picture so AniList was used as an intentional fallback.
+          const providerCompatible = !item || !item.imageProvider ||
+            item.imageProvider === bucket.source ||
+            (bucket.source === 'anidb' && item.imageProvider === 'anilist-fallback-from-anidb');
+          if (!providerCompatible) {
             return Object.assign({}, item, {
               imageUrl: null,
               imageFetchedAt: null,
@@ -9765,6 +9776,34 @@ app.get('/api/logs/recent', requireAuth, requireAdmin, (req, res) => {
         } else if (filterMode === 'approved_series') {
           // Approved Series mode: show only APPROVED_SERIES_* logs for debugging artwork fetching
           lines = lines.filter(line => isApprovedSeriesLog(line))
+          // If a specific outputKey was requested, scope to that output only.
+          // Use a two-pass approach: first collect series names seen in FETCH_ATTEMPT/SOURCE_RESOLVED
+          // lines for this output, then filter all lines to those that reference the output or
+          // one of its known series names.
+          const requestedOutputKey = req.query.outputKey ? String(req.query.outputKey).trim() : ''
+          if (requestedOutputKey) {
+            // Pass 1: extract series names from lines that contain the output key
+            const outputSeriesNames = new Set()
+            for (const line of lines) {
+              const content = line.replace(/^\S+\s+/, '')
+              // Lines that explicitly reference the output key (FETCH_ATTEMPT has output=, SOURCE_RESOLVED has key=)
+              if (content.includes(`output=${requestedOutputKey}`) || content.includes(`key=${requestedOutputKey}`)) {
+                // Extract the series name: appears as series=NAME followed by a space+word= key
+                const sm = content.match(/series=(.+?)(?:\s+(?:source|aid|output|reason|anidbId|cached|requested|result|imageUrl|provider|restricted|forceHash|force)\s*=)/)
+                if (sm && sm[1]) outputSeriesNames.add(sm[1].trim())
+              }
+            }
+            // Pass 2: keep lines that match the output key directly OR mention a known series for that output
+            lines = lines.filter(line => {
+              const content = line.replace(/^\S+\s+/, '')
+              if (content.includes(`output=${requestedOutputKey}`) || content.includes(`key=${requestedOutputKey}`)) return true
+              if (outputSeriesNames.size > 0) {
+                const sm = content.match(/series=(.+?)(?:\s+|$)/)
+                if (sm && sm[1] && outputSeriesNames.has(sm[1].trim())) return true
+              }
+              return false
+            })
+          }
         }
         // For any other filter mode or no filter, show all logs
         

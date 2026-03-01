@@ -151,7 +151,8 @@ export default function ApprovedSeries({ pushToast }) {
 
   const fetchLogs = async () => {
     try {
-      const r = await axios.get(API('/logs/recent?lines=500&filter=approved_series'))
+      const outputParam = activeOutput && activeOutput.key ? `&outputKey=${encodeURIComponent(activeOutput.key)}` : ''
+      const r = await axios.get(API(`/logs/recent?lines=500&filter=approved_series${outputParam}`))
       setLogs(r.data.logs || '')
     } catch (e) {
       // silent
