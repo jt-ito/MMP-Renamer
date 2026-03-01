@@ -9864,13 +9864,20 @@ app.get('/api/logs/recent', requireAuth, requireAdmin, (req, res) => {
                 if (sm && sm[1]) outputSeriesNames.add(sm[1].trim())
               }
             }
-            // Pass 2: keep lines that match the output key directly OR mention a known series for that output
+            // Pass 2: keep lines that match the output key directly OR mention a known series for that output.
+            // Build a sorted-longest-first list so partial-prefix names don't shadow longer ones.
+            const sortedNames = Array.from(outputSeriesNames).sort((a, b) => b.length - a.length)
             lines = lines.filter(line => {
               const content = line.replace(/^\S+\s+/, '')
               if (content.includes(`output=${requestedOutputKey}`) || content.includes(`key=${requestedOutputKey}`)) return true
-              if (outputSeriesNames.size > 0) {
-                const sm = content.match(/series=(.+?)(?:\s+|$)/)
-                if (sm && sm[1] && outputSeriesNames.has(sm[1].trim())) return true
+              if (sortedNames.length > 0) {
+                const idx = content.indexOf('series=')
+                if (idx !== -1) {
+                  const after = content.slice(idx + 'series='.length)
+                  for (const name of sortedNames) {
+                    if (after.startsWith(name) && (after.length === name.length || after[name.length] === ' ')) return true
+                  }
+                }
               }
               return false
             })
