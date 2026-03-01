@@ -1470,20 +1470,36 @@ async function fetchAniListById(id) {
   return { id: numericId, name, year, raw: media };
 }
 
-async function fetchTmdbById(id, apiKey, season, episode) {
+async function fetchTmdbById(id, apiKey, season, episode, mediaTypeHint = null) {
   if (!id || !apiKey) return null;
   const tmdbId = String(id).trim();
   if (!tmdbId) return null;
   const baseHeaders = { 'Accept': 'application/json' };
-  const tvPath = `/3/tv/${encodeURIComponent(tmdbId)}?api_key=${encodeURIComponent(apiKey)}&language=en-US`;
-  let res = await httpRequest({ hostname: 'api.themoviedb.org', path: tvPath, method: 'GET', headers: baseHeaders }, null, 8000);
-  let parsed = res && res.statusCode === 200 ? safeJsonParse(res.body) : null;
+  let parsed = null;
   let isMovie = false;
-  if (!parsed) {
+  if (mediaTypeHint === 'movie') {
+    // User explicitly said this is a movie — skip the TV probe
     const moviePath = `/3/movie/${encodeURIComponent(tmdbId)}?api_key=${encodeURIComponent(apiKey)}&language=en-US`;
-    res = await httpRequest({ hostname: 'api.themoviedb.org', path: moviePath, method: 'GET', headers: baseHeaders }, null, 8000);
+    const res = await httpRequest({ hostname: 'api.themoviedb.org', path: moviePath, method: 'GET', headers: baseHeaders }, null, 8000);
     parsed = res && res.statusCode === 200 ? safeJsonParse(res.body) : null;
     isMovie = true;
+  } else if (mediaTypeHint === 'tv') {
+    // User explicitly said this is a TV series — skip the movie probe
+    const tvPath = `/3/tv/${encodeURIComponent(tmdbId)}?api_key=${encodeURIComponent(apiKey)}&language=en-US`;
+    const res = await httpRequest({ hostname: 'api.themoviedb.org', path: tvPath, method: 'GET', headers: baseHeaders }, null, 8000);
+    parsed = res && res.statusCode === 200 ? safeJsonParse(res.body) : null;
+    isMovie = false;
+  } else {
+    // Auto-detect: try TV first, then movie
+    const tvPath = `/3/tv/${encodeURIComponent(tmdbId)}?api_key=${encodeURIComponent(apiKey)}&language=en-US`;
+    let res = await httpRequest({ hostname: 'api.themoviedb.org', path: tvPath, method: 'GET', headers: baseHeaders }, null, 8000);
+    parsed = res && res.statusCode === 200 ? safeJsonParse(res.body) : null;
+    if (!parsed) {
+      const moviePath = `/3/movie/${encodeURIComponent(tmdbId)}?api_key=${encodeURIComponent(apiKey)}&language=en-US`;
+      res = await httpRequest({ hostname: 'api.themoviedb.org', path: moviePath, method: 'GET', headers: baseHeaders }, null, 8000);
+      parsed = res && res.statusCode === 200 ? safeJsonParse(res.body) : null;
+      isMovie = true;
+    }
   }
   if (!parsed) return null;
 
@@ -1501,10 +1517,22 @@ async function fetchTmdbById(id, apiKey, season, episode) {
   return { id: tmdbId, name, year, raw, episode: episodePayload };
 }
 
-async function fetchTvdbById(id, creds, season, episode, log) {
+async function fetchTvdbById(id, creds, season, episode, log, mediaTypeHint = null) {
   if (!id || !creds) return null;
   const seriesId = String(id).trim();
   if (!seriesId) return null;
+  if (mediaTypeHint === 'movie') {
+    // User explicitly said this is a TVDB movie — use the movies endpoint
+    const movie = await tvdb.fetchMovieById(creds, seriesId, log);
+    if (!movie) return null;
+    return {
+      id: movie.id,
+      name: movie.name,
+      year: movie.year,
+      raw: { series: movie.raw, episode: null },
+      episodeTitle: null
+    };
+  }
   const seriesExtended = await tvdb.fetchSeriesExtended(creds, seriesId, log);
   const seriesName = seriesExtended && (seriesExtended.name || seriesExtended.seriesName) ? (seriesExtended.name || seriesExtended.seriesName) : null;
   const episodeData = (season != null && episode != null) ? await tvdb.fetchEpisodeBySeries(creds, seriesId, season, episode, log) : null;
@@ -1546,7 +1574,9 @@ async function metaLookup(title, apiKey, opts = {}) {
   // Manual provider ID overrides (skip AniDB when manual IDs are present)
   const manualAnilistId = getManualId(title, 'anilist')
   const manualTmdbId = getManualId(title, 'tmdb')
+  const manualTmdbType = getManualId(title, 'tmdbType') || null
   const manualTvdbId = getManualId(title, 'tvdb')
+  const manualTvdbType = getManualId(title, 'tvdbType') || null
   const manualAniDbEpisodeId = getManualId(title, 'anidbEpisode', opts.filePath || null)
   let manualAniDbEpisodeFetched = false
   let manualAniDbEpisodeData = null
@@ -3372,7 +3402,7 @@ async function metaLookup(title, apiKey, opts = {}) {
     try {
       if (manualTvdbId) {
         try { appendLog(`MANUAL_ID_TVDB_FETCH id=${manualTvdbId} title=${title}`) } catch (e) {}
-        const manual = await fetchTvdbById(manualTvdbId, tvdbCreds, opts && opts.season, opts && opts.episode, (line) => { try { appendLog(line) } catch (e) {} })
+        const manual = await fetchTvdbById(manualTvdbId, tvdbCreds, opts && opts.season, opts && opts.episode, (line) => { try { appendLog(line) } catch (e) {} }, manualTvdbType)
         if (manual) {
           const episodeObj = manual.episodeTitle ? { name: manual.episodeTitle, title: manual.episodeTitle, localized_name: manual.episodeTitle, source: 'tvdb', raw: manual.raw && manual.raw.episode ? manual.raw.episode : manual.raw } : null
           if (baseResult) {
@@ -3467,7 +3497,7 @@ async function metaLookup(title, apiKey, opts = {}) {
 
     if (manualTmdbId) {
       try { appendLog(`MANUAL_ID_TMDB_FETCH id=${manualTmdbId} title=${title}`) } catch (e) {}
-      const t = await fetchTmdbById(manualTmdbId, apiKey, opts && opts.season, opts && opts.episode)
+      const t = await fetchTmdbById(manualTmdbId, apiKey, opts && opts.season, opts && opts.episode, manualTmdbType)
       if (t) {
         const episodePayload = t.episode || null
         const hasEpisodeContext = (opts && opts.season != null && opts && opts.episode != null)
@@ -9039,7 +9069,7 @@ async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, s
   const existing = approvedSeriesImages && approvedSeriesImages[cacheKey] ? approvedSeriesImages[cacheKey] : null;
   if (existing && existing.imageUrl && existing.provider === selectedSource) {
     try { appendLog(`APPROVED_SERIES_IMAGE_CACHE_HIT series=${cleanSeriesName.slice(0,80)} source=${selectedSource}`); } catch (e) {}
-    return { ok: true, cached: true, fetched: false, source: selectedSource };
+    return { ok: true, cached: true, fetched: false, source: selectedSource, imageUrl: existing.imageUrl, summary: existing.summary || '' };
   }
   if (existing && existing.provider !== selectedSource) {
     try { appendLog(`APPROVED_SERIES_IMAGE_CACHE_PROVIDER_MISMATCH series=${cleanSeriesName.slice(0,80)} cached=${existing.provider} requested=${selectedSource}`); } catch (e) {}
@@ -9073,16 +9103,18 @@ async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, s
       return { ok: true, fetched: false, skipped: true, source: selectedSource, reason: 'no-image' };
     }
 
-    try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_RESULT series=${cleanSeriesName.slice(0,80)} source=${selectedSource} result=success imageUrl=${lookedUp.imageUrl.slice(0,100)}`); } catch (e) {}
+    const actualProvider = lookedUp.provider || selectedSource;
+    try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_RESULT series=${cleanSeriesName.slice(0,80)} source=${selectedSource} provider=${actualProvider} result=success imageUrl=${lookedUp.imageUrl.slice(0,100)}`); } catch (e) {}
+    const cachedSummary = lookedUp.summary || (existing && existing.summary) || '';
     approvedSeriesImages[cacheKey] = {
-      provider: selectedSource,
+      provider: actualProvider,
       imageUrl: lookedUp.imageUrl,
-      summary: lookedUp.summary || (existing && existing.summary) || '',
+      summary: cachedSummary,
       mediaId: lookedUp.id || null,
       fetchedAt: lookedUp.fetchedAt || Date.now()
     };
     try { writeJson(approvedSeriesImagesFile, approvedSeriesImages); } catch (e) {}
-    return { ok: true, fetched: true, source: selectedSource };
+    return { ok: true, fetched: true, source: selectedSource, imageUrl: lookedUp.imageUrl, summary: cachedSummary };
   } catch (err) {
     approvedSeriesImageFetchLocks.set(lockKey, { inFlight: false, lastFetchedAt: Date.now() });
     try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_EXCEPTION series=${cleanSeriesName.slice(0,80)} source=${selectedSource} err=${err.message}`); } catch (e) {}
@@ -9441,6 +9473,11 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
     if (anilistId !== null) seriesEntry.anilist = anilistId;
     if (tmdbId !== null) seriesEntry.tmdb = tmdbId;
     if (tvdbId !== null) seriesEntry.tvdb = tvdbId;
+    // Media type hints for TMDB and TVDB (distinguishes movie vs TV/series endpoints)
+    const tmdbType = req.body.tmdbType === 'movie' ? 'movie' : (req.body.tmdbType === 'tv' ? 'tv' : null);
+    const tvdbType = req.body.tvdbType === 'movie' ? 'movie' : (req.body.tvdbType === 'series' ? 'series' : null);
+    if (tmdbType !== null) seriesEntry.tmdbType = tmdbType;
+    if (tvdbType !== null) seriesEntry.tvdbType = tvdbType;
 
     const rawClear = req && req.body ? req.body.clear : null;
     const clearRequested = rawClear === true || rawClear === 'true' || rawClear === 1 || rawClear === '1';
@@ -9457,7 +9494,9 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
           // Only remove series-level IDs, preserve episode-level IDs
           delete manualIds[key].anilist;
           delete manualIds[key].tmdb;
+          delete manualIds[key].tmdbType;
           delete manualIds[key].tvdb;
+          delete manualIds[key].tvdbType;
           if (Object.keys(manualIds[key]).length === 0) delete manualIds[key];
         }
       }
@@ -9474,6 +9513,10 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
         for (const key of keys) {
           if (!manualIds[key]) manualIds[key] = {};
           Object.assign(manualIds[key], seriesEntry);
+          // If type hints were not sent, clear any previously stored ones so stale
+          // values don't persist after the user unchecks the checkbox.
+          if (tmdbType === null) delete manualIds[key].tmdbType;
+          if (tvdbType === null) delete manualIds[key].tvdbType;
         }
       }
       

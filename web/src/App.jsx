@@ -1607,26 +1607,53 @@ export default function App() {
   async function refreshEnrichForPaths(paths = []) {
     if (!Array.isArray(paths) || !paths.length) return
     const uniquePaths = Array.from(new Set(paths.filter(Boolean)))
-    for (const p of uniquePaths) {
+
+    // Fetch all paths in parallel instead of sequentially
+    const results = await Promise.all(uniquePaths.map(async (p) => {
       try {
         const er = await axios.get(API('/enrich'), { params: { path: p } })
-        if (!er.data) continue
-        if (er.data.missing) {
-          setEnrichCache(prev => { const n = { ...prev }; delete n[p]; return n })
-          setItems(prev => prev.filter(it => it.canonicalPath !== p))
-          setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
-        } else if ( er.data.cached || er.data.enrichment ) {
-          const enriched = normalizeEnrichResponse(er.data.enrichment || er.data)
-          setEnrichCache(prev => ({ ...prev, [p]: enriched }))
-          if (enriched && (enriched.hidden || enriched.applied)) {
-            setItems(prev => prev.filter(it => it.canonicalPath !== p))
-            setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
-          } else {
-            setItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
-            setAllItems(prev => mergeItemsUnique(prev, [{ id: p, canonicalPath: p }], true))
-          }
+        return { p, data: er.data || null }
+      } catch (e) {
+        return { p, data: null }
+      }
+    }))
+
+    // Accumulate all changes, then apply in a single batch of state updates
+    const cacheUpdates = {}
+    const deletedFromCache = new Set()
+    const removeFromItems = new Set()
+    const upsertPaths = []
+
+    for (const { p, data } of results) {
+      if (!data) continue
+      if (data.missing) {
+        deletedFromCache.add(p)
+        removeFromItems.add(p)
+      } else if (data.cached || data.enrichment) {
+        const enriched = normalizeEnrichResponse(data.enrichment || data)
+        cacheUpdates[p] = enriched
+        if (enriched && (enriched.hidden || enriched.applied)) {
+          removeFromItems.add(p)
+        } else {
+          upsertPaths.push(p)
         }
-      } catch (e) {}
+      }
+    }
+
+    // Single enrich-cache update
+    if (deletedFromCache.size || Object.keys(cacheUpdates).length) {
+      setEnrichCache(prev => {
+        const n = { ...prev, ...cacheUpdates }
+        for (const p of deletedFromCache) delete n[p]
+        return n
+      })
+    }
+
+    // Single items/allItems update
+    if (removeFromItems.size || upsertPaths.length) {
+      const upsertItems = upsertPaths.map(p => ({ id: p, canonicalPath: p }))
+      setItems(prev => mergeItemsUnique(prev.filter(it => !removeFromItems.has(it.canonicalPath)), upsertItems, true))
+      setAllItems(prev => mergeItemsUnique(prev.filter(it => !removeFromItems.has(it.canonicalPath)), upsertItems, true))
     }
   }
 
@@ -3365,7 +3392,7 @@ function manualIdDebugLog(event, payload = {}) {
 }
 
 function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, onSaved, pushToast, inActions = false }) {
-  const EMPTY_MANUAL_VALUES = { anilist: '', tmdb: '', tvdb: '', anidbEpisode: '' }
+  const EMPTY_MANUAL_VALUES = { anilist: '', tmdb: '', tmdbType: '', tvdb: '', tvdbType: '', anidbEpisode: '' }
   const [values, setValues] = useState(EMPTY_MANUAL_VALUES)
   const [initialValues, setInitialValues] = useState(EMPTY_MANUAL_VALUES)
   const [loading, setLoading] = useState(false)
@@ -3420,7 +3447,9 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
   hasUnsavedChangesRef.current = (
     normalizeManualValue(values.anilist) !== normalizeManualValue(initialValues.anilist)
     || normalizeManualValue(values.tmdb) !== normalizeManualValue(initialValues.tmdb)
+    || (values.tmdbType || '') !== (initialValues.tmdbType || '')
     || normalizeManualValue(values.tvdb) !== normalizeManualValue(initialValues.tvdb)
+    || (values.tvdbType || '') !== (initialValues.tvdbType || '')
     || normalizeManualValue(values.anidbEpisode) !== normalizeManualValue(initialValues.anidbEpisode)
   )
   hasLocalTypedValuesRef.current = (
@@ -3506,7 +3535,9 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       const cachedValues = {
         anilist: seriesEntry?.anilist ? String(seriesEntry.anilist) : '',
         tmdb: seriesEntry?.tmdb ? String(seriesEntry.tmdb) : '',
+        tmdbType: seriesEntry?.tmdbType ? String(seriesEntry.tmdbType) : '',
         tvdb: seriesEntry?.tvdb ? String(seriesEntry.tvdb) : '',
+        tvdbType: seriesEntry?.tvdbType ? String(seriesEntry.tvdbType) : '',
         anidbEpisode: episodeEntry?.anidbEpisode ? String(episodeEntry.anidbEpisode) : ''
       }
       if (!manualIdTouchedKeys.has(cacheKey) && !hasLocalTypedValues) {
@@ -3571,7 +3602,9 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         const nextLoadedValues = {
           anilist: seriesEntry?.anilist ? String(seriesEntry.anilist) : '',
           tmdb: seriesEntry?.tmdb ? String(seriesEntry.tmdb) : '',
+          tmdbType: seriesEntry?.tmdbType ? String(seriesEntry.tmdbType) : '',
           tvdb: seriesEntry?.tvdb ? String(seriesEntry.tvdb) : '',
+          tvdbType: seriesEntry?.tvdbType ? String(seriesEntry.tvdbType) : '',
           anidbEpisode: episodeEntry?.anidbEpisode ? String(episodeEntry.anidbEpisode) : ''
         }
         userEditingRef.current = false
@@ -3605,7 +3638,9 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
   const hasChanges = (
     normalizeManualValue(values.anilist) !== normalizeManualValue(initialValues.anilist)
     || normalizeManualValue(values.tmdb) !== normalizeManualValue(initialValues.tmdb)
+    || (values.tmdbType || '') !== (initialValues.tmdbType || '')
     || normalizeManualValue(values.tvdb) !== normalizeManualValue(initialValues.tvdb)
+    || (values.tvdbType || '') !== (initialValues.tvdbType || '')
     || normalizeManualValue(values.anidbEpisode) !== normalizeManualValue(initialValues.anidbEpisode)
   )
 
@@ -3632,7 +3667,9 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
     const nextPayload = {
       anilist: String(values.anilist || '').trim() || null,
       tmdb: String(values.tmdb || '').trim() || null,
+      tmdbType: values.tmdbType || null,
       tvdb: String(values.tvdb || '').trim() || null,
+      tvdbType: values.tvdbType || null,
       anidbEpisode: String(values.anidbEpisode || '').trim() || null
     }
     if (nextPayload.anidbEpisode && !filePath) {
@@ -3652,13 +3689,17 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
         filePath,
         anilist: nextPayload.anilist,
         tmdb: nextPayload.tmdb,
+        tmdbType: nextPayload.tmdbType,
         tvdb: nextPayload.tvdb,
+        tvdbType: nextPayload.tvdbType,
         anidbEpisode: nextPayload.anidbEpisode
       })
       setInitialValues({
         anilist: nextPayload.anilist || '',
         tmdb: nextPayload.tmdb || '',
+        tmdbType: nextPayload.tmdbType || '',
         tvdb: nextPayload.tvdb || '',
+        tvdbType: nextPayload.tvdbType || '',
         anidbEpisode: nextPayload.anidbEpisode || ''
       })
       userEditingRef.current = false
@@ -3667,7 +3708,9 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       const cachedPayload = {
         anilist: nextPayload.anilist || '',
         tmdb: nextPayload.tmdb || '',
+        tmdbType: nextPayload.tmdbType || '',
         tvdb: nextPayload.tvdb || '',
+        tvdbType: nextPayload.tvdbType || '',
         anidbEpisode: nextPayload.anidbEpisode || ''
       }
 
@@ -3686,8 +3729,8 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       manualIdsCache.current = null
       loadedForRef.current = null
       
-      // Trigger callback to force rescan with new manual IDs
-      if (onSaved) await onSaved()
+      // Trigger callback to force rescan with new manual IDs, passing saved values
+      if (onSaved) await onSaved(cachedPayload)
       onToggle && onToggle(false)
     } catch (e) {
       const msg = e && e.response && e.response.data && e.response.data.error ? e.response.data.error : 'Failed to save manual IDs'
@@ -3727,18 +3770,38 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
               value={values.anilist}
               onChange={(e) => handleValueChange('anilist', e.target.value)}
             />
-            <input
-              className="form-input"
-              placeholder="TMDB ID"
-              value={values.tmdb}
-              onChange={(e) => handleValueChange('tmdb', e.target.value)}
-            />
-            <input
-              className="form-input"
-              placeholder="TVDB ID"
-              value={values.tvdb}
-              onChange={(e) => handleValueChange('tvdb', e.target.value)}
-            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <input
+                className="form-input"
+                placeholder="TMDB ID"
+                value={values.tmdb}
+                onChange={(e) => handleValueChange('tmdb', e.target.value)}
+              />
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.8em', cursor: 'pointer', userSelect: 'none' }}>
+                <input
+                  type="checkbox"
+                  checked={values.tmdbType === 'movie'}
+                  onChange={(e) => handleValueChange('tmdbType', e.target.checked ? 'movie' : '')}
+                />
+                Movie
+              </label>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <input
+                className="form-input"
+                placeholder="TVDB ID"
+                value={values.tvdb}
+                onChange={(e) => handleValueChange('tvdb', e.target.value)}
+              />
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.8em', cursor: 'pointer', userSelect: 'none' }}>
+                <input
+                  type="checkbox"
+                  checked={values.tvdbType === 'movie'}
+                  onChange={(e) => handleValueChange('tvdbType', e.target.checked ? 'movie' : '')}
+                />
+                Movie
+              </label>
+            </div>
             <input
               className="form-input"
               placeholder="AniDB Episode ID"
@@ -4336,11 +4399,18 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
             isOpen={isManualOpen}
             onToggle={toggleManualOpen}
             inActions={true}
-            onSaved={async () => {
+            onSaved={async (savedValues) => {
               setManualIdsTick(t => t + 1)
               if (it && enrichOne) {
                 try {
-                  await enrichOne(it, true)
+                  // Only skip anime providers (and thus ED2K hash computation) when
+                  // neither an AniDB episode ID nor an AniList ID was saved.
+                  // AniDB needs the hash; AniList doesn't but it's safe to let it run.
+                  // TMDB/TVDB-only saves don't need the hash at all.
+                  const hasAniDBId = !!(savedValues && savedValues.anidbEpisode)
+                  const hasAniListId = !!(savedValues && savedValues.anilist)
+                  const skipAnime = !hasAniDBId && !hasAniListId
+                  await enrichOne(it, true, skipAnime)
                 } catch (e) {
                   console.error('[ManualIdInputs] Force rescan after save failed:', e)
                 }

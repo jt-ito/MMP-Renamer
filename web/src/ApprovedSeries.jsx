@@ -119,7 +119,7 @@ export default function ApprovedSeries({ pushToast }) {
         // Use the source from the current active output
         const activeOutput = outputs.find((o) => o.key === okey);
         const source = activeOutput && activeOutput.source ? activeOutput.source : 'anilist';
-        await axios.post(API('/approved-series/fetch-image'), {
+        const resp = await axios.post(API('/approved-series/fetch-image'), {
           outputKey: okey,
           seriesName: sname,
           source
@@ -130,7 +130,9 @@ export default function ApprovedSeries({ pushToast }) {
             ...out,
             series: out.series.map((item) => {
               if ((item && item.name ? item.name : '') !== sname) return item;
-              return { ...item, _autoFetched: true };
+              const newImageUrl = (resp && resp.data && resp.data.imageUrl) ? resp.data.imageUrl : item.imageUrl;
+              const newSummary = (resp && resp.data && resp.data.summary) ? resp.data.summary : item.summary;
+              return { ...item, imageUrl: newImageUrl, summary: newSummary, _autoFetched: true };
             })
           };
         }));
@@ -150,18 +152,7 @@ export default function ApprovedSeries({ pushToast }) {
   const fetchLogs = async () => {
     try {
       const r = await axios.get(API('/logs/recent?lines=500&filter=approved_series'))
-      const allLogs = r.data.logs || ''
-      
-      // Filter logs by output key if activeOutput is set
-      if (activeOutput && activeOutput.key) {
-        const outputKey = activeOutput.key;
-        const lines = allLogs.split('\n');
-        // Show any log mentioning the output key (not just exact path matches)
-        const filtered = lines.filter(line => line.includes(outputKey));
-        setLogs(filtered.join('\n'));
-      } else {
-        setLogs(allLogs);
-      }
+      setLogs(r.data.logs || '')
     } catch (e) {
       // silent
     }
