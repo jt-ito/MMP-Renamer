@@ -77,7 +77,7 @@ export default function Settings({ pushToast }){
   const [anilistKey, setAnilistKey] = useState('')
   const [anidbUsername, setAnidbUsername] = useState('')
   const [anidbPassword, setAnidbPassword] = useState('')
-  const [anidbClientName, setAnidbClientName] = useState('mmprename')
+  const [anidbClientName, setAnidbClientName] = useState('mediabrowser')
   const [anidbClientVersion, setAnidbClientVersion] = useState('1')
   const [tvdbV4ApiKey, setTvdbV4ApiKey] = useState('')
   const [tvdbV4UserPin, setTvdbV4UserPin] = useState('')
@@ -134,7 +134,7 @@ export default function Settings({ pushToast }){
           setAnilistKey(user.anilist_api_key || '')
           setAnidbUsername(user.anidb_username || '')
           setAnidbPassword(user.anidb_password || '')
-          setAnidbClientName(user.anidb_client_name || 'mmprename')
+          setAnidbClientName(user.anidb_client_name || 'mediabrowser')
           setAnidbClientVersion(user.anidb_client_version || '1')
           setTvdbV4ApiKey(user.tvdb_v4_api_key || '')
           setTvdbV4UserPin(user.tvdb_v4_user_pin || '')
@@ -161,7 +161,7 @@ export default function Settings({ pushToast }){
         const a = server.anilist_api_key || localStorage.getItem('anilist_api_key') || ''
         const anidbUser = server.anidb_username || localStorage.getItem('anidb_username') || ''
         const anidbPass = server.anidb_password || localStorage.getItem('anidb_password') || ''
-        const anidbClient = server.anidb_client_name || localStorage.getItem('anidb_client_name') || 'mmprename'
+        const anidbClient = server.anidb_client_name || localStorage.getItem('anidb_client_name') || 'mediabrowser'
         const anidbVer = server.anidb_client_version || localStorage.getItem('anidb_client_version') || '1'
         const tvV4Key = server.tvdb_v4_api_key || localStorage.getItem('tvdb_v4_api_key') || ''
         const tvV4Pin = server.tvdb_v4_user_pin || localStorage.getItem('tvdb_v4_user_pin') || ''
@@ -205,7 +205,7 @@ export default function Settings({ pushToast }){
         const a = localStorage.getItem('anilist_api_key') || ''
         const anidbUser = localStorage.getItem('anidb_username') || ''
         const anidbPass = localStorage.getItem('anidb_password') || ''
-        const anidbClient = localStorage.getItem('anidb_client_name') || 'mmprename'
+        const anidbClient = localStorage.getItem('anidb_client_name') || 'mediabrowser'
         const anidbVer = localStorage.getItem('anidb_client_version') || '1'
         const tvV4Key = localStorage.getItem('tvdb_v4_api_key') || ''
         const tvV4Pin = localStorage.getItem('tvdb_v4_user_pin') || ''
@@ -320,7 +320,7 @@ export default function Settings({ pushToast }){
       setAnilistKey('')
       setAnidbUsername('')
       setAnidbPassword('')
-      setAnidbClientName('mmprename')
+      setAnidbClientName('mediabrowser')
       setAnidbClientVersion('1')
       setTvdbV4ApiKey('')
       setTvdbV4UserPin('')
@@ -471,7 +471,7 @@ export default function Settings({ pushToast }){
               type="text"
               value={anidbClientName}
               onChange={e=>{ setAnidbClientName(e.target.value); setDirty(true) }}
-              placeholder="Client Name (default: mmprename)"
+              placeholder="Client Name (default: mediabrowser)"
               style={{flex:1, padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)'}}
             />
           </div>
@@ -492,7 +492,7 @@ export default function Settings({ pushToast }){
               <li>Create a free account at <a href="https://anidb.net/user/register" target="_blank" rel="noopener noreferrer" style={{color:'var(--accent)'}}>anidb.net</a></li>
               <li>Register this client at <a href="https://anidb.net/software/add" target="_blank" rel="noopener noreferrer" style={{color:'var(--accent)'}}>AniDB Software Registration</a>
                 <ul style={{marginLeft:20, marginTop:4, fontSize:11, opacity:0.9}}>
-                  <li>Client name: <code style={{background:'var(--bg-700)', padding:'2px 6px', borderRadius:4}}>{anidbClientName || 'mmprename'}</code></li>
+                  <li>Client name: <code style={{background:'var(--bg-700)', padding:'2px 6px', borderRadius:4}}>{anidbClientName || 'mediabrowser'}</code></li>
                   <li>Version: <code style={{background:'var(--bg-700)', padding:'2px 6px', borderRadius:4}}>{anidbClientVersion || '1'}</code></li>
                   <li>Purpose: "Anime file renaming and metadata lookup"</li>
                 </ul>

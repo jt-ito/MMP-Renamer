@@ -1604,7 +1604,7 @@ async function metaLookup(title, apiKey, opts = {}) {
       return null
     }
     try {
-      const clientName = opts.anidb_client_name || 'mmprename'
+      const clientName = opts.anidb_client_name || 'mediabrowser'
       const clientVersion = opts.anidb_client_version || 1
       const anidbClient = getAniDBUDPClient(opts.anidb_username, opts.anidb_password, clientName, clientVersion)
       const episodeInfo = await anidbClient.lookupEpisode(manualAniDbEpisodeId)
@@ -8841,7 +8841,7 @@ async function findAniDbAidByTitle(seriesName, username) {
       const apiClient = getAniDBClient(
         (creds && creds.anidb_username) ? creds.anidb_username : '',
         (creds && creds.anidb_password) ? creds.anidb_password : '',
-        (creds && creds.anidb_client_name) ? creds.anidb_client_name : 'mmprename',
+        (creds && creds.anidb_client_name) ? creds.anidb_client_name : 'mediabrowser',
         (creds && creds.anidb_client_version) ? creds.anidb_client_version : 1
       );
       const anime = await apiClient.getAnimeInfoByTitle(query);
@@ -8972,7 +8972,7 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
         const client = getAniDBClient(
           (creds && creds.anidb_username) ? creds.anidb_username : '',
           (creds && creds.anidb_password) ? creds.anidb_password : '',
-          (creds && creds.anidb_client_name) ? creds.anidb_client_name : 'mmprename',
+          (creds && creds.anidb_client_name) ? creds.anidb_client_name : 'mediabrowser',
           (creds && creds.anidb_client_version) ? creds.anidb_client_version : 1
         );
         anime = await client.getAnimeInfo(aid);
@@ -9008,7 +9008,7 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
       try { appendLog(`APPROVED_SERIES_ANIDB_UDP_LOOKUP series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
       try {
         const udpClient = getAniDBClient(creds.anidb_username, creds.anidb_password,
-          creds.anidb_client_name || 'mmprename', creds.anidb_client_version || 1);
+          creds.anidb_client_name || 'mediabrowser', creds.anidb_client_version || 1);
         const udpInfo = await udpClient.getAnimeInfoByAidUdp(aid);
         if (udpInfo && udpInfo.picture && udpInfo.picture.trim()) {
           const cleanFilename = udpInfo.picture.trim();
