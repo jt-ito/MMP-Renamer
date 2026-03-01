@@ -8658,6 +8658,7 @@ async function fetchAniListSeriesArtworkByNameAndAniDbId(seriesName, anidbId) {
     const lookupTitle = normalizeApprovedSeriesLookupTitle(seriesName) || String(seriesName || '').trim();
     const aid = Number(anidbId);
     
+    try { appendLog(`APPROVED_SERIES_ANILIST_FALLBACK_QUERY title=${String(seriesName).slice(0,80)} anidbId=${aid} lookup=${lookupTitle.slice(0,80)}`); } catch (e) {}
     // First, try to find the anime on AniList by name
     const query = `query ($search: String) { Media(search: $search, type: ANIME) { id title { english romaji native } description(asHtml: false) coverImage { large medium color } bannerImage externalLinks { site url } } }`;
     const payload = JSON.stringify({ query, variables: { search: lookupTitle } });
@@ -8671,6 +8672,7 @@ async function fetchAniListSeriesArtworkByNameAndAniDbId(seriesName, anidbId) {
     const parsed = safeJsonParse(res.body);
     const media = parsed && parsed.data && parsed.data.Media ? parsed.data.Media : null;
     
+    try { appendLog(`APPROVED_SERIES_ANILIST_FALLBACK_MEDIA title=${String(seriesName).slice(0,80)} anidbId=${aid} found=${!!media} anilist_id=${media ? media.id : 'none'} anilist_title=${media && media.title ? (media.title.english||media.title.romaji||'').slice(0,80) : 'none'} ext_links=${media && Array.isArray(media.externalLinks) ? media.externalLinks.length : 0}`); } catch (e) {}
     if (!media) return null;
     
     // Verify this is the same anime by checking if AniDB ID matches in externalLinks
@@ -8937,6 +8939,7 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
   try {
     await new Promise(resolve => setTimeout(resolve, 2500));
     let aid = findAniDbAidForApprovedSeries(outputKey, seriesName);
+    const aidFromCache = !!aid;
     // animeFromTitleLookup holds the parsed anime object if findAniDbAidByTitle already
     // fetched it via the title API — we reuse it to avoid making a redundant second call.
     let animeFromTitleLookup = null;
@@ -8951,9 +8954,11 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
         aid = titleResult;
       }
       try {
-        if (aid) appendLog(`APPROVED_SERIES_ANIDB_TITLE_FALLBACK_HIT series=${String(seriesName || '').slice(0,120)} aid=${aid}`);
+        if (aid) appendLog(`APPROVED_SERIES_ANIDB_TITLE_FALLBACK_HIT series=${String(seriesName || '').slice(0,120)} aid=${aid} anime_reused=${!!animeFromTitleLookup}`);
         else appendLog(`APPROVED_SERIES_ANIDB_TITLE_FALLBACK_NONE series=${String(seriesName || '').slice(0,120)}`);
       } catch (e) {}
+    } else {
+      try { appendLog(`APPROVED_SERIES_ANIDB_AID_FROM_CACHE series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
     }
     if (!aid) {
       try { appendLog(`APPROVED_SERIES_ANIDB_NO_AID series=${String(seriesName || '').slice(0,80)}`); } catch (e) {}
@@ -8965,17 +8970,23 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
 
     const creds = getAniDBCredentials(username, serverSettings, users);
     try {
+      const hasUser = !!(creds && creds.anidb_username);
+      const hasPass = !!(creds && creds.anidb_password);
+      const clientName = (creds && creds.anidb_client_name) ? creds.anidb_client_name : 'mediabrowser';
+      try { appendLog(`APPROVED_SERIES_ANIDB_CREDS series=${String(seriesName || '').slice(0,80)} aid=${aid} has_user=${hasUser} has_pass=${hasPass} client=${clientName} reusing_api_obj=${!!animeFromTitleLookup}`); } catch (e) {}
       // Reuse the anime object from the title lookup if we already have it,
       // otherwise fetch by AID (avoids a redundant HTTP API call).
       let anime = animeFromTitleLookup;
       if (!anime) {
         const client = getAniDBClient(
-          (creds && creds.anidb_username) ? creds.anidb_username : '',
-          (creds && creds.anidb_password) ? creds.anidb_password : '',
-          (creds && creds.anidb_client_name) ? creds.anidb_client_name : 'mediabrowser',
+          hasUser ? creds.anidb_username : '',
+          hasPass ? creds.anidb_password : '',
+          clientName,
           (creds && creds.anidb_client_version) ? creds.anidb_client_version : 1
         );
+        try { appendLog(`APPROVED_SERIES_ANIDB_HTTP_FETCH series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
         anime = await client.getAnimeInfo(aid);
+        try { appendLog(`APPROVED_SERIES_ANIDB_HTTP_RESULT series=${String(seriesName || '').slice(0,80)} aid=${aid} got_anime=${!!anime} keys=${anime ? Object.keys(anime).join(',') : 'null'}`); } catch (e) {}
       }
       
       if (anime) {
@@ -8990,17 +9001,22 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
           // whether the field is absent, malformed, or in a different format.
           const reason = anime.restricted ? 'restricted_content' : 'no_picture_in_api';
           const rawSnippet = String(anime.raw || '').slice(0, 800).replace(/\n/g, ' ');
-          try { appendLog(`APPROVED_SERIES_ANIDB_NO_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aid} restricted=${!!anime.restricted} reason=${reason} raw=${rawSnippet}`); } catch (e) {}
+          try { appendLog(`APPROVED_SERIES_ANIDB_NO_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aid} restricted=${!!anime.restricted} reason=${reason} keys=${Object.keys(anime).join(',')} raw=${rawSnippet}`); } catch (e) {}
         }
         
         if (anime.description) {
           summary = stripHtmlSummary(decodeHtmlEntities(anime.description));
         }
+      } else {
+        try { appendLog(`APPROVED_SERIES_ANIDB_HTTP_NULL series=${String(seriesName || '').slice(0,80)} aid=${aid} reason=getAnimeInfo_returned_null`); } catch (e) {}
       }
     } catch (e) {
       try { appendLog(`APPROVED_SERIES_ANIDB_CLIENT_ERR series=${String(seriesName || '').slice(0,80)} aid=${aid} err=${e.message}`); } catch (ee) {}
     }
 
+    if (!imageUrl && !(creds && creds.anidb_username && creds.anidb_password)) {
+      try { appendLog(`APPROVED_SERIES_ANIDB_UDP_SKIP series=${String(seriesName || '').slice(0,80)} aid=${aid} reason=no_credentials has_user=${!!(creds && creds.anidb_username)} has_pass=${!!(creds && creds.anidb_password)}`); } catch (e) {}
+    }
     if (!imageUrl && creds && creds.anidb_username && creds.anidb_password) {
       // HTTP API returned no picture — try the authenticated UDP API before scraping.
       // The UDP API uses the user's actual login credentials and returns picture data
@@ -9056,16 +9072,17 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
       try { appendLog(`APPROVED_SERIES_ANIDB_NO_IMAGE series=${String(seriesName || '').slice(0,80)} aid=${aid} trying_anilist_fallback=true`); } catch (e) {}
       
       // AniDB doesn't have image - try AniList as fallback (Jellyfin strategy)
+      try { appendLog(`APPROVED_SERIES_ANIDB_FALLBACK_START series=${String(seriesName || '').slice(0,80)} aid=${aid} search_name=${String(seriesName || '').slice(0,80)}`); } catch (e) {}
       const anilistResult = await fetchAniListSeriesArtworkByNameAndAniDbId(seriesName, aid);
       if (anilistResult && anilistResult.imageUrl) {
-        try { appendLog(`APPROVED_SERIES_ANIDB_FALLBACK_SUCCESS series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
+        try { appendLog(`APPROVED_SERIES_ANIDB_FALLBACK_SUCCESS series=${String(seriesName || '').slice(0,80)} aid=${aid} anilist_id=${anilistResult.id || 'unknown'} imageUrl=${anilistResult.imageUrl.slice(0,100)}`); } catch (e) {}
         return {
           ...anilistResult,
           provider: 'anilist-fallback-from-anidb'
         };
       }
       
-      try { appendLog(`APPROVED_SERIES_ANIDB_FALLBACK_FAILED series=${String(seriesName || '').slice(0,80)} aid=${aid}`); } catch (e) {}
+      try { appendLog(`APPROVED_SERIES_ANIDB_FALLBACK_FAILED series=${String(seriesName || '').slice(0,80)} aid=${aid} anilist_result=${anilistResult ? 'no_image' : 'null'}`); } catch (e) {}
       return null;
     }
     try { appendLog(`APPROVED_SERIES_ANIDB_FETCH_OK series=${String(seriesName || '').slice(0,80)} aid=${aid} imageUrl=${imageUrl.slice(0,100)}`); } catch (e) {}
@@ -9183,9 +9200,10 @@ async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, s
 
     if (!lookedUp || !lookedUp.imageUrl) {
       try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_RESULT series=${cleanSeriesName.slice(0,80)} source=${selectedSource} result=none`); } catch (e) {}
-      // Log fallback if source is not AniList and fallback occurs
+      // Note: 'fallback=anilist' here means no image was found at all (negative cache stored).
+      // The actual AniList fallback attempt (if any) already happened inside fetchAniDbSeriesArtwork.
       if (selectedSource !== 'anilist') {
-        try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_FALLBACK series=${cleanSeriesName.slice(0,80)} source=${selectedSource} fallback=anilist`); } catch (e) {}
+        try { appendLog(`APPROVED_SERIES_IMAGE_FETCH_FALLBACK series=${cleanSeriesName.slice(0,80)} source=${selectedSource} fallback=anilist note=negative_cache_stored`); } catch (e) {}
       }
       // Persist a negative cache entry so this series is not retried on every page load.
       // The entry expires after APPROVED_SERIES_NEGATIVE_CACHE_TTL_MS (7 days).
