@@ -1599,3 +1599,16 @@ button.folder-option:hover {
 .light .context-menu-section-label {
   color: var(--text-600);
 }
+
+/* Chromium/WebKit scrollbar styling to match dark theme */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-800); }
+::-webkit-scrollbar-thumb { background: var(--bg-600); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+::-webkit-scrollbar-corner { background: var(--bg-800); }
+
+/* Light theme scrollbar overrides */
+.light ::-webkit-scrollbar-track { background: #e8eaed; }
+.light ::-webkit-scrollbar-thumb { background: #bcc0c6; }
+.light ::-webkit-scrollbar-thumb:hover { background: #9aa0a6; }
+.light ::-webkit-scrollbar-corner { background: #e8eaed; }

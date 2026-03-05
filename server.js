@@ -8854,20 +8854,20 @@ async function _doLoadAnidbTitlesDb() {
       const cached = JSON.parse(fs.readFileSync(ANIDB_TITLES_FILE, 'utf8'));
       if (cached && cached.titles && (Date.now() - cached.fetchedAt) < ANIDB_TITLES_TTL_MS) {
         _anidbTitlesMap = cached.titles;
-        try { appendLog(`ANIDB_TITLES_DB_LOADED source=cache entries=${Object.keys(cached.titles).length}`); } catch (e) {}
+        try { appendLog(`APPROVED_SERIES_ANIDB_TITLES_DB_LOADED source=cache entries=${Object.keys(cached.titles).length}`); } catch (e) {}
         return;
       }
     }
   } catch (e) {}
   try {
-    try { appendLog('ANIDB_TITLES_DB_DOWNLOAD_START'); } catch (e) {}
+    try { appendLog('APPROVED_SERIES_ANIDB_TITLES_DB_DOWNLOAD_START'); } catch (e) {}
     const xml    = await _downloadAnidbTitlesXml();
     const titles = _buildAnidbTitlesMap(xml);
     _anidbTitlesMap = titles;
     try { writeJson(ANIDB_TITLES_FILE, { fetchedAt: Date.now(), titles }); } catch (e) {}
-    try { appendLog(`ANIDB_TITLES_DB_DOWNLOAD_OK entries=${Object.keys(titles).length}`); } catch (e) {}
+    try { appendLog(`APPROVED_SERIES_ANIDB_TITLES_DB_DOWNLOAD_OK entries=${Object.keys(titles).length}`); } catch (e) {}
   } catch (e) {
-    try { appendLog(`ANIDB_TITLES_DB_DOWNLOAD_FAIL err=${e.message}`); } catch (ee) {}
+    try { appendLog(`APPROVED_SERIES_ANIDB_TITLES_DB_DOWNLOAD_FAIL err=${e.message}`); } catch (ee) {}
   }
 }
 
@@ -9806,10 +9806,13 @@ app.get('/api/rename/duplicates', requireAuth, requireAdmin, (req, res) => {
 // Logs endpoints
 app.get('/api/logs/recent', requireAuth, requireAdmin, (req, res) => {
   try {
-    // Read only the last ~100KB from the logs file to avoid loading very large files into memory.
     if (!fs.existsSync(logsFile)) return res.json({ logs: '' })
     const stat = fs.statSync(logsFile)
-    const maxBytes = 100 * 1024 // 100 KB
+    // Dashboard mode needs a much larger read window: approved-series image-fetching can flood
+    // the log tail with APPROVED_SERIES_* entries, which are all filtered out on the dashboard
+    // side — leaving no visible lines unless we read back far enough to find older ones.
+    const filterMode = req.query.filter || 'dashboard'
+    const maxBytes = filterMode === 'dashboard' ? 2 * 1024 * 1024 : 200 * 1024
     const start = Math.max(0, stat.size - maxBytes)
     const stream = fs.createReadStream(logsFile, { start, end: stat.size })
     let sb = ''
@@ -9827,8 +9830,7 @@ app.get('/api/logs/recent', requireAuth, requireAdmin, (req, res) => {
     })
     stream.on('end', () => {
       try {
-        // Parse query parameters: filter mode and line count
-        const filterMode = req.query.filter || 'dashboard' // 'dashboard' (default) | 'approved_series'
+        // Parse query parameters: line count (filterMode already resolved above)
         const lineCount = parseInt(req.query.lines, 10) || 200
         const isApprovedSeriesLog = (line) => {
           const text = String(line || '').trim()
