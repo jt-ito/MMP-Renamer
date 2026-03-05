@@ -8949,15 +8949,21 @@ async function findAniDbAidByTitle(seriesName) {
   //   2. try GetComparableName(name) (lowercased, punctuation stripped)
   try {
     await loadAnidbTitlesDb();
+    const titlesLoaded = _anidbTitlesMap ? Object.keys(_anidbTitlesMap).length : 0;
     const query = normalizeApprovedSeriesLookupTitle(seriesName) || String(seriesName || '').trim();
+    const comparable = _anidbComparableName(String(seriesName || '').trim());
+    appendLog(`APPROVED_SERIES_ANIDB_TITLE_LOOKUP series=${String(seriesName || '').slice(0,120)} query=${String(query || '').slice(0,120)} comparable=${String(comparable || '').slice(0,120)} titlesDbEntries=${titlesLoaded}`);
     const aid = anidbLookupTitle(seriesName) || anidbLookupTitle(query);
     if (aid) {
       try { appendLog(`APPROVED_SERIES_ANIDB_TITLE_DB_HIT series=${String(seriesName || '').slice(0,120)} aid=${aid}`); } catch (e) {}
       return aid;
     }
-    try { appendLog(`APPROVED_SERIES_ANIDB_TITLE_DB_MISS series=${String(seriesName || '').slice(0,120)}`); } catch (e) {}
+    try { appendLog(`APPROVED_SERIES_ANIDB_TITLE_DB_MISS series=${String(seriesName || '').slice(0,120)} query=${String(query || '').slice(0,120)}`); } catch (e) {}
     return null;
-  } catch (e) { return null; }
+  } catch (e) {
+    appendLog(`APPROVED_SERIES_ANIDB_TITLE_DB_ERR series=${String(seriesName || '').slice(0,120)} err=${e && e.message ? e.message : String(e)}`);
+    return null;
+  }
 }
 
 function extractAniDbPageImageUrl(html) {
@@ -9033,17 +9039,23 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
       clientName,
       clientVer
     );
-    appendLog(`APPROVED_SERIES_ANIDB_HTTP_FETCH series=${String(seriesName || '').slice(0,80)} aid=${aid} client=${clientName}`);
+    const apiUrl = `http://api.anidb.net:9001/httpapi?request=anime&client=${encodeURIComponent(clientName)}&clientver=${encodeURIComponent(String(clientVer))}&protover=1&aid=${aid}`;
+    appendLog(`APPROVED_SERIES_ANIDB_HTTP_FETCH series=${String(seriesName || '').slice(0,80)} aid=${aid} client=${clientName} clientver=${clientVer} url=${apiUrl}`);
     // Absolute deadline so a hung TCP connection never blocks the queue indefinitely
     const _anidbTimeout = new Promise((_, rej) =>
       setTimeout(() => rej(new Error('AniDB getAnimeInfo absolute timeout')), 25000)
     );
     const anime = await Promise.race([client.getAnimeInfo(aid), _anidbTimeout]);
-    appendLog(`APPROVED_SERIES_ANIDB_HTTP_RESULT series=${String(seriesName || '').slice(0,80)} aid=${aid} got_anime=${!!anime} keys=${anime ? Object.keys(anime).join(',') : 'null'}`);
+    const animeKeys = anime ? Object.keys(anime).join(',') : 'null';
+    const rawSnippet = (anime && anime.raw) ? String(anime.raw).slice(0, 500) : 'no_raw';
+    appendLog(`APPROVED_SERIES_ANIDB_HTTP_RESULT series=${String(seriesName || '').slice(0,80)} aid=${aid} got_anime=${!!anime} keys=${animeKeys}`);
+    appendLog(`APPROVED_SERIES_ANIDB_RAW_RESPONSE aid=${aid} raw=${rawSnippet}`);
 
     // 4. Parse picture and cache the result
-    const picture = (anime && anime.picture && String(anime.picture).trim()) ? String(anime.picture).trim() : null;
+    const picRaw = anime && anime.picture ? String(anime.picture) : '';
+    const picture = picRaw.trim() ? picRaw.trim() : null;
     const summary = (anime && anime.description) ? stripHtmlSummary(decodeHtmlEntities(anime.description)) : '';
+    appendLog(`APPROVED_SERIES_ANIDB_PICTURE_PARSE aid=${aid} pic_raw=${JSON.stringify(picRaw)} restricted=${!!(anime && anime.restricted)} trimmed=${JSON.stringify(picture)}`);
     _anidbAnimeCache.set(aid, { picture, summary, fetchedAt: Date.now() });
 
     if (!picture) {
@@ -9053,7 +9065,7 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
     }
 
     const imageUrl = `https://cdn.anidb.net/images/main/${picture}`;
-    appendLog(`APPROVED_SERIES_ANIDB_PICTURE_OK series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${picture}`);
+    appendLog(`APPROVED_SERIES_ANIDB_PICTURE_OK series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${picture} imageUrl=${imageUrl}`);
     return {
       id: aid,
       name: String(seriesName || '').trim(),
@@ -9063,7 +9075,8 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
       provider: 'anidb'
     };
   } catch (e) {
-    appendLog(`APPROVED_SERIES_ANIDB_FETCH_ERR series=${String(seriesName || '').slice(0,80)} err=${e.message}`);
+    const rawXmlInfo = e && e.rawXml ? ` rawXml=${String(e.rawXml).slice(0, 400)}` : '';
+    appendLog(`APPROVED_SERIES_ANIDB_FETCH_ERR series=${String(seriesName || '').slice(0,80)} err=${e && e.message ? e.message.slice(0, 300) : String(e)}${rawXmlInfo}`);
     return null;
   }
 }
