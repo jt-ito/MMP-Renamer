@@ -44,17 +44,17 @@ export default function Register({ onRegistered, pushToast }){
         <form onSubmit={submit} style={{display:'flex',flexDirection:'column',gap:12}}>
           <div>
             <label className="form-label">Username</label>
-            <input className="form-input" value={username} onChange={e=>setUsername(e.target.value)} />
+            <input className="form-input" autoComplete="username" value={username} onChange={e=>setUsername(e.target.value)} />
           </div>
 
           <div>
             <label className="form-label">Password</label>
-            <input className="form-input" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
+            <input className="form-input" type="password" autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)} />
           </div>
 
           <div>
             <label className="form-label">Confirm Password</label>
-            <input className="form-input" type="password" value={confirm} onChange={e=>setConfirm(e.target.value)} />
+            <input className="form-input" type="password" autoComplete="new-password" value={confirm} onChange={e=>setConfirm(e.target.value)} />
           </div>
 
           <div style={{display:'flex', gap:8, justifyContent:'flex-end'}}>
