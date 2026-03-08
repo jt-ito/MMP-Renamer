@@ -1222,6 +1222,23 @@ export default function App() {
   if (force) payload.force = true
   if (typeof skipAnimeProviders === 'boolean') payload.skipAnimeProviders = skipAnimeProviders
   const w = await axios.post(API('/enrich'), payload)
+      // If the server returned a background:true response (enrichment is still running
+      // in the background to avoid a proxy gateway timeout), schedule a follow-up GET
+      // in 8 seconds to pick up the result once it has been written to the cache.
+      if (w.data && w.data.background) {
+        setTimeout(async () => {
+          try {
+            const check = await axios.get(API('/enrich'), { params: { path: key } })
+            if (check.data && (check.data.cached || check.data.enrichment)) {
+              const norm = normalizeEnrichResponse(check.data.enrichment || check.data)
+              if (norm) setEnrichCache(prev => ({ ...prev, [key]: norm }))
+            }
+          } catch (e) {}
+        }, 8000)
+        // Return whatever enrichment data was sent back (may be the pre-existing cached entry)
+        const existingNorm = w.data.enrichment ? normalizeEnrichResponse(w.data.enrichment) : null
+        return existingNorm
+      }
       if (w.data) {
         const norm = normalizeEnrichResponse(w.data.enrichment || w.data)
         if (norm) setEnrichCache(prev => ({ ...prev, [key]: norm }))
@@ -1236,8 +1253,7 @@ export default function App() {
         }
       } catch (e) {}
 
-      // choose a friendly name for toast
-  // choose a friendly name for toast from normalized enrichment (prefer parsed then provider)
+      // choose a friendly name for toast from normalized enrichment (prefer parsed then provider)
   const _norm = (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
   const nameForToast = (_norm && (_norm.parsed?.title || _norm.provider?.title)) || (key && key.split('/')?.pop()) || key
   pushToast && pushToast('Enrich', `Updated metadata for ${nameForToast}`)
@@ -3294,7 +3310,7 @@ function LoadingScreen({ mode = 'incremental', total = 0, loaded = 0, scanProgre
 }
 
 function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(true);
   const displayLogs = React.useMemo(() => {
     try {
       if (!logs || !logTimezone) return logs
@@ -3342,7 +3358,7 @@ function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
       </h3>
       {isExpanded && (
         <>
-          <pre>{displayLogs}</pre>
+          <pre>{displayLogs || 'No logs yet'}</pre>
           <div style={{display:'flex',marginTop:8, alignItems:'center'}}>
             <button className="btn-ghost icon-only" onClick={refresh} title="Refresh logs"><IconRefresh/></button>
             <button className="btn-ghost icon-only" onClick={() => { navigator.clipboard?.writeText(logs); pushToast && pushToast('Logs', 'Copied to clipboard') }} title="Copy logs"><IconCopy/></button>

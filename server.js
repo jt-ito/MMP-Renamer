@@ -4042,7 +4042,7 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
         try { appendLog(`ANIDB_LOOKUP_START path=${realPath} title=${seriesLookupTitle}`); } catch (logErr) {
           console.error('[Server] Failed to log ANIDB_LOOKUP_START:', logErr.message);
         }
-        const timeoutMs = 90000;
+        const timeoutMs = 45000;
         const anidbPromise = lookupMetadataWithAniDB(realPath, seriesLookupTitle, metaLookupOpts, opts.forceHash || opts.force);
         const timeoutPromise = new Promise((_, reject) => {
           setTimeout(() => {
@@ -6134,50 +6134,65 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
     const tvdbOverride = (tvdb_override_v4_api_key || tvdb_override_v4_user_pin)
       ? { v4ApiKey: tvdb_override_v4_api_key || '', v4UserPin: tvdb_override_v4_user_pin || null }
       : null;
-    const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username, tvdbOverride, forceHash, force, skipAnimeProviders });
-    // Use centralized renderer and updater so rendering logic is consistent
-    try {
-      if (data && data.title) {
-        const providerRendered = renderProviderName(data, key, req.session);
-        const providerRaw = cloneProviderRaw(extractProviderRaw(data));
-        const providerBlock = { 
-          title: data.title, 
-          year: data.year, 
-          season: data.season, 
-          episode: data.episode, 
-          episodeTitle: data.episodeTitle || '', 
-          raw: providerRaw, 
-          renderedName: providerRendered, 
-          matched: !!data.title,
-          source: data.source || (data.provider && data.provider.source) || null,
-          seriesTitleEnglish: data.seriesTitleEnglish || null,
-          seriesTitleRomaji: data.seriesTitleRomaji || null,
-          seriesTitleExact: data.seriesTitleExact || null,
-          originalSeriesTitle: data.originalSeriesTitle || null
-        };
-        try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
-        // Merge entire data object to preserve seriesTitleEnglish, seriesTitleRomaji, etc.
-        // updateEnrichCache will preserve applied/hidden flags from enrichCache[key]
-        updateEnrichCache(key, Object.assign({}, data, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
-      } else {
+    // Wrap externalEnrich in a 50s timeout so the response always arrives before
+    // a reverse-proxy gateway timeout (typically 60s). The enrichment continues in
+    // the background and the updated cache can be fetched via GET /api/enrich later.
+    const ENRICH_HANDLER_TIMEOUT_MS = 50000;
+    let enrichHandlerDone = false;
+    const enrichHandlerPromise = (async () => {
+      const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username, tvdbOverride, forceHash, force, skipAnimeProviders });
+      // Use centralized renderer and updater so rendering logic is consistent
+      try {
+        if (data && data.title) {
+          const providerRendered = renderProviderName(data, key, req.session);
+          const providerRaw = cloneProviderRaw(extractProviderRaw(data));
+          const providerBlock = { 
+            title: data.title, 
+            year: data.year, 
+            season: data.season, 
+            episode: data.episode, 
+            episodeTitle: data.episodeTitle || '', 
+            raw: providerRaw, 
+            renderedName: providerRendered, 
+            matched: !!data.title,
+            source: data.source || (data.provider && data.provider.source) || null,
+            seriesTitleEnglish: data.seriesTitleEnglish || null,
+            seriesTitleRomaji: data.seriesTitleRomaji || null,
+            seriesTitleExact: data.seriesTitleExact || null,
+            originalSeriesTitle: data.originalSeriesTitle || null
+          };
+          try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
+          updateEnrichCache(key, Object.assign({}, data, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+        } else {
+          updateEnrichCache(key, Object.assign({}, data, { cachedAt: Date.now() }));
+        }
+      } catch (e) {
         updateEnrichCache(key, Object.assign({}, data, { cachedAt: Date.now() }));
       }
-    } catch (e) {
-      updateEnrichCache(key, Object.assign({}, data, { cachedAt: Date.now() }));
-    }
-            // if provider returned authoritative title/parsedName, persist into parsedCache so subsequent scans use it
-    try {
-      if (data && data.title) {
-        parsedCache[key] = parsedCache[key] || {}
-        parsedCache[key].title = data.title
-        parsedCache[key].parsedName = data.parsedName || parsedCache[key].parsedName
-        parsedCache[key].season = data.season != null ? data.season : parsedCache[key].season
-        parsedCache[key].episode = data.episode != null ? data.episode : parsedCache[key].episode
-        parsedCache[key].timestamp = Date.now()
-  try { if (db) db.setKV('parsedCache', parsedCache); else writeJson(parsedCacheFile, parsedCache); } catch (e) {}
+      // if provider returned authoritative title/parsedName, persist into parsedCache
+      try {
+        if (data && data.title) {
+          parsedCache[key] = parsedCache[key] || {}
+          parsedCache[key].title = data.title
+          parsedCache[key].parsedName = data.parsedName || parsedCache[key].parsedName
+          parsedCache[key].season = data.season != null ? data.season : parsedCache[key].season
+          parsedCache[key].episode = data.episode != null ? data.episode : parsedCache[key].episode
+          parsedCache[key].timestamp = Date.now()
+          try { if (db) db.setKV('parsedCache', parsedCache); else writeJson(parsedCacheFile, parsedCache); } catch (e) {}
+        }
+      } catch (e) {
+        updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
       }
-    } catch (e) {
-      updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
+      enrichHandlerDone = true;
+      return enrichCache[key];
+    })();
+    const enrichHandlerTimeout = new Promise(resolve => setTimeout(() => resolve('__timeout__'), ENRICH_HANDLER_TIMEOUT_MS));
+    const handlerResult = await Promise.race([enrichHandlerPromise, enrichHandlerTimeout]);
+    if (handlerResult === '__timeout__') {
+      // Enrichment is still running in background — respond immediately with whatever
+      // is currently cached (avoids 504 gateway timeout from reverse proxy).
+      appendLog(`ENRICH_BACKGROUND_TIMEOUT path=${key} returning_cached=${!!enrichCache[key]}`);
+      return res.json({ enrichment: enrichCache[key] || null, background: true });
     }
     res.json({ enrichment: enrichCache[key] });
   } catch (err) { appendLog(`ENRICH_FAIL path=${key} err=${err.message}`); res.status(500).json({ error: err.message }); }
