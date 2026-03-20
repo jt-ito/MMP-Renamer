@@ -813,6 +813,22 @@ try {
   }
 } catch (e) { appendLog(`STARTUP_SCAN_FILTER_FAIL err=${e && e.message ? e.message : String(e)}`); }
 
+// Remove any stale in-progress placeholder scan artifacts left over from a previous run.
+// These have scanning:true and items:[] so they would cause an empty dashboard on restart.
+try {
+  let stalePlaceholders = 0;
+  for (const sid of Object.keys(scans || {})) {
+    try {
+      const s = scans[sid];
+      if (s && s.scanning === true) { delete scans[sid]; stalePlaceholders++; }
+    } catch (e) {}
+  }
+  if (stalePlaceholders > 0) {
+    try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); } catch (e) {}
+    appendLog(`STARTUP_PLACEHOLDER_CLEANUP removed=${stalePlaceholders} stale in-progress scan artifacts`);
+  }
+} catch (e) { appendLog(`STARTUP_PLACEHOLDER_CLEANUP_FAIL err=${e && e.message ? e.message : String(e)}`); }
+
 // Initialize DB for scans if available
 // (DB was initialized above; this later duplicate block removed)
 
@@ -5646,9 +5662,10 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
   // and updates the artifact; the client's background poll will pick up the completed scan.
   const scanId = uuidv4();
   const scanSession = (req.session && req.session.username) ? { username: req.session.username } : {};
+  // Keep placeholder only in memory (not persisted) so a container restart doesn't leave a
+  // stale empty artifact as the "latest" scan. The artifact is persisted once the scan finishes.
   const placeholder = { id: scanId, libraryId: libraryId || 'local', totalCount: 0, items: [], generatedAt: Date.now(), scanning: true };
   scans[scanId] = placeholder;
-  try { if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans); } catch (e) {}
   res.json({ scanId, totalCount: 0, items: [], changedPaths: [], scanning: true });
 
   // Background scan — runs after the HTTP response has been flushed
