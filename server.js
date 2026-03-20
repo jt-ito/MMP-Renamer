@@ -714,6 +714,30 @@ if (!db) {
 
 try { healCachedEnglishAndMovieFlags(); } catch (e) { try { appendLog(`ENRICH_CACHE_HEAL_INIT_FAIL err=${e && e.message ? e.message : String(e)}`); } catch (ee) {} }
 
+// Heal enrichCache from renderedIndex: if the old sweep deleted enrichCache entries for applied
+// source files, rebuild hidden/applied flags from renderedIndex so they are not re-shown on dash.
+try {
+  let healedFromRendered = 0;
+  const rKeys = Object.keys(renderedIndex || {});
+  for (const rk of rKeys) {
+    try {
+      const entry = renderedIndex[rk];
+      if (!entry || !entry.source) continue;
+      const sourceKey = canonicalize(entry.source);
+      if (!sourceKey) continue;
+      const existing = enrichCache[sourceKey] || {};
+      if (!existing.applied || !existing.hidden) {
+        enrichCache[sourceKey] = Object.assign({}, existing, { applied: true, hidden: true });
+        healedFromRendered++;
+      }
+    } catch (e) { /* ignore per-entry */ }
+  }
+  if (healedFromRendered > 0) {
+    try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) {}
+    appendLog(`STARTUP_HEAL_RENDERED_INDEX healed=${healedFromRendered} applied/hidden flags restored from renderedIndex`);
+  }
+} catch (e) { appendLog(`STARTUP_HEAL_RENDERED_INDEX_FAIL err=${e && e.message ? e.message : String(e)}`); }
+
 // Filter out applied/hidden items from loaded scans on startup
 // (scans may have been persisted before items were applied/hidden)
 try {
@@ -5618,12 +5642,23 @@ app.get('/api/scan/:scanId/items', requireAuth, (req, res) => {
   const s = scans[req.params.scanId]; 
   if (!s) return res.status(404).json({ error: 'scan not found' }); 
   
+  // Build set of applied source paths from renderedIndex as a secondary check
+  // (handles the case where enrichCache entries were lost by the old sweep bug)
+  const appliedSources = new Set();
+  try {
+    for (const rk of Object.keys(renderedIndex || {})) {
+      const re = renderedIndex[rk];
+      if (re && re.source) appliedSources.add(canonicalize(re.source));
+    }
+  } catch (err) {}
+
   // Filter out applied/hidden items
   const filteredItems = (s.items || []).filter(it => {
     try {
       const k = canonicalize(it.canonicalPath);
       const e = enrichCache[k] || null;
       if (e && (e.hidden || e.applied)) return false;
+      if (appliedSources.has(k)) return false;
       return true;
     } catch (err) { return true; }
   });
@@ -5652,11 +5687,21 @@ app.get('/api/scan/latest', requireAuth, (req, res) => {
     const include = (req.query && (req.query.includeItems === '1' || req.query.includeItems === 'true'))
     if (include) {
       const limit = Math.min(Math.max(parseInt(req.query.limit || '50', 10), 1), 500)
+      // Build set of applied source paths from renderedIndex as a secondary check
+      const appliedSources = new Set();
+      try {
+        for (const rk of Object.keys(renderedIndex || {})) {
+          const re = renderedIndex[rk];
+          if (re && re.source) appliedSources.add(canonicalize(re.source));
+        }
+      } catch (err) {}
       // Filter out hidden/applied items at read time (same as /api/scan/:scanId/items)
       const visibleItems = (Array.isArray(pick.items) ? pick.items : []).filter(it => {
         try {
-          const e = enrichCache[canonicalize(it.canonicalPath)] || null;
+          const k = canonicalize(it.canonicalPath);
+          const e = enrichCache[k] || null;
           if (e && (e.hidden || e.applied)) return false;
+          if (appliedSources.has(k)) return false;
           return true;
         } catch (err) { return true; }
       })
@@ -5677,11 +5722,21 @@ app.get('/api/scan/:scanId/search', requireAuth, (req, res) => {
     const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 500);
     if (!q) return res.json({ items: [], offset, limit, total: 0 });
     const needle = String(q).toLowerCase();
+    // Build set of applied source paths from renderedIndex as a secondary check
+    const appliedSources = new Set();
+    try {
+      for (const rk of Object.keys(renderedIndex || {})) {
+        const re = renderedIndex[rk];
+        if (re && re.source) appliedSources.add(canonicalize(re.source));
+      }
+    } catch (err) {}
     // Pre-filter: exclude hidden/applied items before searching
     const visibleForSearch = (s.items || []).filter(it => {
       try {
-        const e = enrichCache[canonicalize(it.canonicalPath)] || null;
+        const k = canonicalize(it.canonicalPath);
+        const e = enrichCache[k] || null;
         if (e && (e.hidden || e.applied)) return false;
+        if (appliedSources.has(k)) return false;
         return true;
       } catch (err) { return true; }
     });
