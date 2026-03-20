@@ -1080,7 +1080,11 @@ export default function App() {
       setScanProgress(denom ? Math.min(100, Math.round((aggregated.length / Math.max(1, denom)) * 100)) : 100)
       setScanReady(true)
 
-      pushToast && pushToast('Scan', mode === 'full' ? 'Full scan complete — all items are ready.' : 'Incremental scan complete — latest items are ready.')
+      // When the server is processing the scan in the background (scanning: true),
+      // don't show a "complete" toast — the results will appear via background polling.
+      if (!result.scanning) {
+        pushToast && pushToast('Scan', mode === 'full' ? 'Full scan complete — all items are ready.' : 'Incremental scan complete — latest items are ready.')
+      }
 
       // Start background metadata work without blocking the UI. Full scans refresh the
       // entire library, while incremental scans only hydrate newly detected items.
