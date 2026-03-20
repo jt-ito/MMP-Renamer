@@ -738,9 +738,45 @@ try {
   }
 } catch (e) { appendLog(`STARTUP_HEAL_RENDERED_INDEX_FAIL err=${e && e.message ? e.message : String(e)}`); }
 
+// Purge applied/hidden source paths from the scan cache so the incremental scanner
+// never re-discovers them as "existing" files on future scans.
+try {
+  const scanLib = require('./lib/scan');
+  const priorScanCache = scanLib.loadScanCache(scanCacheFile);
+  if (priorScanCache && priorScanCache.files && Object.keys(priorScanCache.files).length) {
+    let prunedScanCache = 0;
+    for (const p of Object.keys(priorScanCache.files)) {
+      try {
+        const e = enrichCache[p] || enrichCache[canonicalize(p)] || null;
+        const inRendered = Object.values(renderedIndex || {}).some(re => re && re.source && canonicalize(re.source) === canonicalize(p));
+        if ((e && (e.hidden || e.applied)) || inRendered) {
+          delete priorScanCache.files[p];
+          prunedScanCache++;
+        }
+      } catch (e) { /* ignore per-entry */ }
+    }
+    if (prunedScanCache > 0) {
+      try { scanLib.saveScanCache(scanCacheFile, priorScanCache); } catch (e) {}
+      appendLog(`STARTUP_SCAN_CACHE_PURGE removed=${prunedScanCache} applied/hidden paths from scan cache`);
+    }
+  }
+} catch (e) { appendLog(`STARTUP_SCAN_CACHE_PURGE_FAIL err=${e && e.message ? e.message : String(e)}`); }
+
 // Filter out applied/hidden items from loaded scans on startup
 // (scans may have been persisted before items were applied/hidden)
 try {
+  // Build a combined set of applied source paths from both enrichCache AND renderedIndex
+  const startupAppliedSources = new Set();
+  try {
+    for (const k of Object.keys(enrichCache || {})) {
+      const e = enrichCache[k];
+      if (e && (e.hidden || e.applied)) startupAppliedSources.add(k);
+    }
+    for (const rk of Object.keys(renderedIndex || {})) {
+      const re = renderedIndex[rk];
+      if (re && re.source) startupAppliedSources.add(canonicalize(re.source));
+    }
+  } catch (e) {}
   let filteredCount = 0;
   const scanIds = Object.keys(scans || {});
   for (const sid of scanIds) {
@@ -753,6 +789,7 @@ try {
           const k = canonicalize(it.canonicalPath);
           const e = enrichCache[k] || null;
           if (e && (e.hidden || e.applied)) return false;
+          if (startupAppliedSources.has(k)) return false;
           return true;
         } catch (e) { return true; }
       });
@@ -828,7 +865,6 @@ function startFolderWatcher(username, libPath) {
             canonicalize, 
             uuidv4 
           });
-          saveScanCacheFn(result.currentCache);
           
           // Parse new/changed items so they have basic metadata
           for (const it of (result.toProcess || [])) {
@@ -836,15 +872,26 @@ function startFolderWatcher(username, libPath) {
           }
           
           // Filter out hidden/applied items before creating scan artifact
-          const allItems = scanLib.buildIncrementalItems(result.scanCache, result.toProcess, uuidv4);
+          const allItems = scanLib.buildIncrementalItems(result.currentCache, result.toProcess, uuidv4);
+          const _appliedWatcher = buildAppliedSourcesSet();
           const filteredItems = allItems.filter(it => {
             try {
               const k = canonicalize(it.canonicalPath);
-              const e = enrichCache[k] || null;
-              if (e && (e.hidden || e.applied)) return false;
+              if (_appliedWatcher.has(k)) return false;
               return true;
             } catch (e) { return true; }
           });
+          // Prune applied/hidden paths from scan cache so they stop being rediscovered
+          try {
+            if (result.currentCache && result.currentCache.files) {
+              for (const p of Object.keys(result.currentCache.files)) {
+                if (_appliedWatcher.has(canonicalize(p))) delete result.currentCache.files[p];
+              }
+              saveScanCacheFn(result.currentCache);
+            } else {
+              saveScanCacheFn(result.currentCache);
+            }
+          } catch (e) { try { saveScanCacheFn(result.currentCache); } catch (ee) {} }
           
           const generatedAt = Date.now();
           const scanId = uuidv4();
@@ -4831,6 +4878,26 @@ function canonicalize(p) {
   return path.resolve(p).replace(/\\/g, '/');
 }
 
+// Helper: build a Set of canonical source paths that should never appear on the dashboard.
+// Combines enrichCache hidden/applied entries with renderedIndex source paths so that
+// items are suppressed even when enrichCache entries are missing (e.g. lost by old sweep).
+function buildAppliedSourcesSet() {
+  const s = new Set();
+  try {
+    for (const k of Object.keys(enrichCache || {})) {
+      const e = enrichCache[k];
+      if (e && (e.hidden || e.applied)) s.add(k);
+    }
+  } catch (e) {}
+  try {
+    for (const rk of Object.keys(renderedIndex || {})) {
+      const re = renderedIndex[rk];
+      if (re && re.source) s.add(canonicalize(re.source));
+    }
+  } catch (e) {}
+  return s;
+}
+
 // Helper: decide whether a provider block is complete (no need to re-query)
 function isProviderComplete(provider) {
   try {
@@ -5432,16 +5499,24 @@ app.post('/api/scan', requireAuth, async (req, res) => {
       const cacheObj = { files: curFiles, dirs: curDirs, initialScanAt: Date.now() };
       saveScanCache(cacheObj);
       // ensure items includes canonicalPath/id entries for artifact
-      // Filter out entries that are marked hidden or already applied in enrichCache so restored scans respect those flags
+      // Filter out entries that are marked hidden or already applied (enrichCache + renderedIndex)
+      const _appliedFull = buildAppliedSourcesSet();
       items = items.map(it => ({ id: it.id || uuidv4(), canonicalPath: it.canonicalPath, scannedAt: it.scannedAt || Date.now() }))
         .filter(it => {
           try {
             const k = canonicalize(it.canonicalPath);
-            const e = enrichCache[k] || null;
-            if (e && (e.hidden || e.applied)) return false;
+            if (_appliedFull.has(k)) return false;
             return true;
           } catch (e) { return true; }
         });
+      // Also prune the scan cache of applied/hidden paths so they stop being rediscovered
+      try {
+        let pruned = 0;
+        for (const p of Object.keys(curFiles)) {
+          if (_appliedFull.has(canonicalize(p))) { delete curFiles[p]; pruned++; }
+        }
+        if (pruned > 0) { cacheObj.files = curFiles; appendLog(`FULL_SCAN_CACHE_PRUNE pruned=${pruned}`); }
+      } catch (e) {}
     } else {
       // incremental scan: optimized walk to detect new/changed files and removals
       const { toProcess, currentCache, removed } = incrementalScanLibrary(libPath);
@@ -5465,15 +5540,26 @@ app.post('/api/scan', requireAuth, async (req, res) => {
       // process new/changed items
       for (const it of (toProcess || [])) doProcessParsedItem(it, session);
       // persist current cache map (currentCache is { files, dirs })
-      if (currentCache) saveScanCache(currentCache);
+      // Also prune applied/hidden source paths from the scan cache so they stop being rediscovered
+      if (currentCache) {
+        try {
+          const _appliedInc = buildAppliedSourcesSet();
+          let incPruned = 0;
+          for (const p of Object.keys((currentCache.files || {}))) {
+            if (_appliedInc.has(canonicalize(p))) { delete currentCache.files[p]; incPruned++; }
+          }
+          if (incPruned > 0) appendLog(`INC_SCAN_CACHE_PRUNE pruned=${incPruned}`);
+        } catch (e) {}
+        saveScanCache(currentCache);
+      }
       // build items array for artifact from currentCache.files
-      // Exclude items that are marked hidden or applied in the enrich cache so restored scans don't re-show them
+      // Exclude items that are marked hidden or applied (enrichCache + renderedIndex fallback)
+      const _appliedInc2 = buildAppliedSourcesSet();
       items = Object.keys((currentCache && currentCache.files) || {}).map(p => ({ id: uuidv4(), canonicalPath: p, scannedAt: Date.now() }))
         .filter(it => {
           try {
             const k = canonicalize(it.canonicalPath);
-            const e = enrichCache[k] || null;
-            if (e && (e.hidden || e.applied)) return false;
+            if (_appliedInc2.has(k)) return false;
             return true;
           } catch (e) { return true; }
         });
@@ -5603,8 +5689,16 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
       }
       // do minimal parsing for new/changed entries
       for (const it of (toProcess || [])) doProcessParsedItem(it, req.session || {});
-      // persist new cache and build items array from currentCache, prioritizing fresh items first
-      if (currentCache) saveScanCache(currentCache);
+      // Prune applied/hidden source paths from scan cache before saving so they stop being rediscovered
+      if (currentCache) {
+        try {
+          const _appliedLightInc = buildAppliedSourcesSet();
+          for (const p of Object.keys((currentCache.files || {}))) {
+            if (_appliedLightInc.has(canonicalize(p))) delete currentCache.files[p];
+          }
+        } catch (e) {}
+        saveScanCache(currentCache);
+      }
       items = scanLib.buildIncrementalItems(currentCache, toProcess, uuidv4);
     }
   } catch (e) {
@@ -5614,12 +5708,12 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
 
   // proceed to create artifact and background enrich similar to /api/scan
   const scanId = uuidv4();
-  // Filter out items that are marked hidden or applied in enrichCache before creating artifact
+  // Filter out items that are marked hidden or applied (enrichCache + renderedIndex fallback)
+  const _appliedLightFilter = buildAppliedSourcesSet();
   const filteredItems = items.filter(it => {
     try {
       const k = canonicalize(it.canonicalPath);
-      const e = enrichCache[k] || null;
-      if (e && (e.hidden || e.applied)) return false;
+      if (_appliedLightFilter.has(k)) return false;
       return true;
     } catch (e) { return true; }
   });
