@@ -1025,6 +1025,21 @@ export default function App() {
       const libId = lib?.id || result.libraryId || (scanMeta && scanMeta.libraryId) || ''
       try { setLastLibraryId(libId) } catch (e) {}
 
+      // If the server is running the scan asynchronously, wait for it to finish
+      // before fetching results so the UI shows actual data instead of 0 items.
+      if (result.scanning) {
+        let waited = 0
+        while (waited < 90000) {
+          await new Promise(r => setTimeout(r, 600))
+          waited += 600
+          try {
+            const check = await axios.get(API(`/scan/${result.scanId}`))
+            if (check && check.data && !check.data.scanning) { result.scanning = false; break }
+          } catch (e) { result.scanning = false; break }
+        }
+        if (result.scanning) result.scanning = false // timed out — proceed anyway
+      }
+
       // fetch scan metadata
       const meta = await axios.get(API(`/scan/${result.scanId}`)).catch(() => ({ data: { totalCount: 0, libraryId: libId, generatedAt: Date.now() } }))
       const scanMetaPayload = meta && meta.data ? meta.data : { totalCount: 0, libraryId: libId, generatedAt: Date.now() }
@@ -1080,11 +1095,7 @@ export default function App() {
       setScanProgress(denom ? Math.min(100, Math.round((aggregated.length / Math.max(1, denom)) * 100)) : 100)
       setScanReady(true)
 
-      // When the server is processing the scan in the background (scanning: true),
-      // don't show a "complete" toast — the results will appear via background polling.
-      if (!result.scanning) {
-        pushToast && pushToast('Scan', mode === 'full' ? 'Full scan complete — all items are ready.' : 'Incremental scan complete — latest items are ready.')
-      }
+      pushToast && pushToast('Scan', mode === 'full' ? 'Full scan complete — all items are ready.' : 'Incremental scan complete — latest items are ready.')
 
       // Start background metadata work without blocking the UI. Full scans refresh the
       // entire library, while incremental scans only hydrate newly detected items.

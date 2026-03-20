@@ -5759,7 +5759,7 @@ app.post('/api/scan/incremental', requireAuth, async (req, res) => {
   });
 });
 
-app.get('/api/scan/:scanId', requireAuth, (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt }); });
+app.get('/api/scan/:scanId', requireAuth, (req, res) => { const s = scans[req.params.scanId]; if (!s) return res.status(404).json({ error: 'scan not found' }); res.json({ libraryId: s.libraryId, totalCount: s.totalCount, generatedAt: s.generatedAt, scanning: s.scanning === true }); });
 app.get('/api/scan/:scanId/items', requireAuth, (req, res) => { 
   const s = scans[req.params.scanId]; 
   if (!s) return res.status(404).json({ error: 'scan not found' }); 
