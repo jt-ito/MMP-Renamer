@@ -5652,8 +5652,16 @@ app.get('/api/scan/latest', requireAuth, (req, res) => {
     const include = (req.query && (req.query.includeItems === '1' || req.query.includeItems === 'true'))
     if (include) {
       const limit = Math.min(Math.max(parseInt(req.query.limit || '50', 10), 1), 500)
-      const items = Array.isArray(pick.items) ? pick.items.slice(0, limit) : []
-      return res.json({ scanId: pick.id, libraryId: pick.libraryId, totalCount: pick.totalCount, generatedAt: pick.generatedAt, items })
+      // Filter out hidden/applied items at read time (same as /api/scan/:scanId/items)
+      const visibleItems = (Array.isArray(pick.items) ? pick.items : []).filter(it => {
+        try {
+          const e = enrichCache[canonicalize(it.canonicalPath)] || null;
+          if (e && (e.hidden || e.applied)) return false;
+          return true;
+        } catch (err) { return true; }
+      })
+      const items = visibleItems.slice(0, limit)
+      return res.json({ scanId: pick.id, libraryId: pick.libraryId, totalCount: visibleItems.length, generatedAt: pick.generatedAt, items })
     }
     return res.json({ scanId: pick.id, libraryId: pick.libraryId, totalCount: pick.totalCount, generatedAt: pick.generatedAt })
   } catch (e) { return res.status(500).json({ error: e.message }) }
@@ -5669,9 +5677,17 @@ app.get('/api/scan/:scanId/search', requireAuth, (req, res) => {
     const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 500);
     if (!q) return res.json({ items: [], offset, limit, total: 0 });
     const needle = String(q).toLowerCase();
+    // Pre-filter: exclude hidden/applied items before searching
+    const visibleForSearch = (s.items || []).filter(it => {
+      try {
+        const e = enrichCache[canonicalize(it.canonicalPath)] || null;
+        if (e && (e.hidden || e.applied)) return false;
+        return true;
+      } catch (err) { return true; }
+    });
     // Filter on canonicalPath and basename to support filename searches
     // First pass: exact substring matches
-    let matched = (s.items || []).filter(it => {
+    let matched = visibleForSearch.filter(it => {
       try {
         const p = String(it.canonicalPath || '').toLowerCase();
         const b = (it.canonicalPath || '').split(/[\\/]/).pop().toLowerCase();
@@ -5697,7 +5713,7 @@ app.get('/api/scan/:scanId/search', requireAuth, (req, res) => {
         return dp[al][bl]
       }
       const scored = []
-      for (const it of (s.items || [])) {
+      for (const it of visibleForSearch) {
         try {
           const b = (it.canonicalPath || '').split(/[\\/]/).pop().toLowerCase();
           const dist = levenshtein(needle, b)
@@ -6268,6 +6284,10 @@ app.post('/api/enrich/sweep', requireAuth, requireAdmin, (req, res) => {
         if (!k) continue;
         // if the file no longer exists on disk, remove from cache
         if (!fs.existsSync(k)) {
+          // Preserve entries that carry hidden/applied flags so approval state
+          // survives even when the source file is moved or deleted.
+          const entry = enrichCache[k];
+          if (entry && (entry.hidden || entry.applied)) continue;
           removed.push(k);
           delete enrichCache[k];
         }
@@ -7919,6 +7939,10 @@ function sweepEnrichCache() {
       try {
         if (!k) continue;
         if (!fs.existsSync(k)) {
+          // Preserve entries that carry hidden/applied flags so approval state
+          // survives even when the source file is moved or deleted.
+          const entry = enrichCache[k];
+          if (entry && (entry.hidden || entry.applied)) continue;
           removed.push(k);
           delete enrichCache[k];
         }
