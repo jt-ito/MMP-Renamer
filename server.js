@@ -9106,46 +9106,14 @@ function extractAniDbPageSummary(html) {
   } catch (e) { return ''; }
 }
 
-async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
-  // Direct port of Jellyfin AniDbImageProvider.GetImages():
-  //   1. Resolve AID via enrich cache or offline titles DB (no HTTP title lookups)
-  //   2. Check in-memory session cache (6 h TTL per AID)
-  //   3. HTTP GET http://api.anidb.net:9001/httpapi?request=anime&client=mediabrowser&clientver=1&protover=1&aid={aid}
+async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCandidates) {
+  // Image fetch flow:
+  //   1. Resolve AID via enrich cache or offline titles DB
+  //   2. If AID found: check session cache, then HTTP getAnimeInfo(aid)
+  //   3. If no AID: HTTP getAnimeInfoByTitle() for each title candidate (title-search fallback)
   //   4. Parse <picture> element → https://cdn.anidb.net/images/main/{picture}
-  // No UDP fallback. No page scraping. No AniList fallback.
   try {
-    // 1. Resolve AID
-    let aid = findAniDbAidForApprovedSeries(outputKey, seriesName);
-    if (aid) {
-      appendLog(`APPROVED_SERIES_ANIDB_AID_FROM_CACHE series=${String(seriesName || '').slice(0,80)} aid=${aid}`);
-    } else {
-      aid = await findAniDbAidByTitle(seriesName);
-    }
-    if (!aid) {
-      appendLog(`APPROVED_SERIES_ANIDB_NO_AID series=${String(seriesName || '').slice(0,80)}`);
-      return null;
-    }
-
-    // 2. Session cache — skip HTTP call if we already fetched this AID recently
-    const sessCached = _anidbAnimeCache.get(aid);
-    if (sessCached && (Date.now() - sessCached.fetchedAt) < ANIDB_ANIME_CACHE_TTL_MS) {
-      if (!sessCached.picture) {
-        appendLog(`APPROVED_SERIES_ANIDB_SESSION_CACHE_NO_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aid}`);
-        return null;
-      }
-      const imageUrl = `https://cdn.anidb.net/images/main/${sessCached.picture}`;
-      appendLog(`APPROVED_SERIES_ANIDB_SESSION_CACHE_HIT series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${sessCached.picture}`);
-      return {
-        id: aid,
-        name: String(seriesName || '').trim(),
-        imageUrl,
-        summary: sessCached.summary || '',
-        fetchedAt: Date.now(),
-        provider: 'anidb'
-      };
-    }
-
-    // 3. AniDB HTTP API — exactly as Jellyfin (client=mediabrowser, clientver=1, protover=1)
+    // Build AniDB HTTP client once (shared across all attempts below)
     const creds = getAniDBCredentials(username, serverSettings, users);
     const clientName = (creds && creds.anidb_client_name) ? creds.anidb_client_name : 'mediabrowser';
     const clientVer  = (creds && creds.anidb_client_version) ? creds.anidb_client_version : 1;
@@ -9155,41 +9123,105 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username) {
       clientName,
       clientVer
     );
-    const apiUrl = `http://api.anidb.net:9001/httpapi?request=anime&client=${encodeURIComponent(clientName)}&clientver=${encodeURIComponent(String(clientVer))}&protover=1&aid=${aid}`;
-    appendLog(`APPROVED_SERIES_ANIDB_HTTP_FETCH series=${String(seriesName || '').slice(0,80)} aid=${aid} client=${clientName} clientver=${clientVer} url=${apiUrl}`);
-    // Absolute deadline so a hung TCP connection never blocks the queue indefinitely
-    const _anidbTimeout = new Promise((_, rej) =>
-      setTimeout(() => rej(new Error('AniDB getAnimeInfo absolute timeout')), 25000)
-    );
-    const anime = await Promise.race([client.getAnimeInfo(aid), _anidbTimeout]);
-    const animeKeys = anime ? Object.keys(anime).join(',') : 'null';
-    const rawSnippet = (anime && anime.raw) ? String(anime.raw).slice(0, 500) : 'no_raw';
-    appendLog(`APPROVED_SERIES_ANIDB_HTTP_RESULT series=${String(seriesName || '').slice(0,80)} aid=${aid} got_anime=${!!anime} keys=${animeKeys}`);
-    appendLog(`APPROVED_SERIES_ANIDB_RAW_RESPONSE aid=${aid} raw=${rawSnippet}`);
 
-    // 4. Parse picture and cache the result
-    const picRaw = anime && anime.picture ? String(anime.picture) : '';
-    const picture = picRaw.trim() ? picRaw.trim() : null;
-    const summary = (anime && anime.description) ? stripHtmlSummary(decodeHtmlEntities(anime.description)) : '';
-    appendLog(`APPROVED_SERIES_ANIDB_PICTURE_PARSE aid=${aid} pic_raw=${JSON.stringify(picRaw)} restricted=${!!(anime && anime.restricted)} trimmed=${JSON.stringify(picture)}`);
-    _anidbAnimeCache.set(aid, { picture, summary, fetchedAt: Date.now() });
+    // Helper: parse an anime HTTP response and return { id, name, imageUrl, summary } or null
+    const parseAnimeResult = (anime, resolvedAid) => {
+      const picRaw = anime && anime.picture ? String(anime.picture) : '';
+      const picture = picRaw.trim() || null;
+      const summary = (anime && anime.description) ? stripHtmlSummary(decodeHtmlEntities(anime.description)) : '';
+      const aidNum = resolvedAid
+        ? Number(resolvedAid)
+        : (anime && anime.aid ? Number(anime.aid) : null);
+      if (Number.isFinite(aidNum) && aidNum > 0) {
+        _anidbAnimeCache.set(aidNum, { picture, summary, fetchedAt: Date.now() });
+      }
+      appendLog(`APPROVED_SERIES_ANIDB_PICTURE_PARSE aid=${aidNum} pic_raw=${JSON.stringify(picRaw)} restricted=${!!(anime && anime.restricted)} trimmed=${JSON.stringify(picture)}`);
+      if (!picture) {
+        const reason = (anime && anime.restricted) ? 'restricted_content' : 'no_picture_in_response';
+        appendLog(`APPROVED_SERIES_ANIDB_NO_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aidNum} reason=${reason}`);
+        return null;
+      }
+      const imageUrl = `https://cdn.anidb.net/images/main/${picture}`;
+      appendLog(`APPROVED_SERIES_ANIDB_PICTURE_OK series=${String(seriesName || '').slice(0,80)} aid=${aidNum} picture=${picture} imageUrl=${imageUrl}`);
+      return {
+        id: aidNum,
+        name: String(seriesName || '').trim(),
+        imageUrl,
+        summary,
+        fetchedAt: Date.now(),
+        provider: 'anidb'
+      };
+    };
 
-    if (!picture) {
-      const reason = (anime && anime.restricted) ? 'restricted_content' : 'no_picture_in_response';
-      appendLog(`APPROVED_SERIES_ANIDB_NO_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aid} reason=${reason}`);
-      return null;
+    // 1. Resolve AID from enrich cache or offline titles DB
+    let aid = findAniDbAidForApprovedSeries(outputKey, seriesName);
+    if (aid) {
+      appendLog(`APPROVED_SERIES_ANIDB_AID_FROM_CACHE series=${String(seriesName || '').slice(0,80)} aid=${aid}`);
+    } else {
+      aid = await findAniDbAidByTitle(seriesName);
     }
 
-    const imageUrl = `https://cdn.anidb.net/images/main/${picture}`;
-    appendLog(`APPROVED_SERIES_ANIDB_PICTURE_OK series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${picture} imageUrl=${imageUrl}`);
-    return {
-      id: aid,
-      name: String(seriesName || '').trim(),
-      imageUrl,
-      summary,
-      fetchedAt: Date.now(),
-      provider: 'anidb'
-    };
+    if (aid) {
+      // 2a. Session cache hit?
+      const sessCached = _anidbAnimeCache.get(aid);
+      if (sessCached && (Date.now() - sessCached.fetchedAt) < ANIDB_ANIME_CACHE_TTL_MS) {
+        if (!sessCached.picture) {
+          appendLog(`APPROVED_SERIES_ANIDB_SESSION_CACHE_NO_PICTURE series=${String(seriesName || '').slice(0,80)} aid=${aid}`);
+          return null;
+        }
+        const imageUrl = `https://cdn.anidb.net/images/main/${sessCached.picture}`;
+        appendLog(`APPROVED_SERIES_ANIDB_SESSION_CACHE_HIT series=${String(seriesName || '').slice(0,80)} aid=${aid} picture=${sessCached.picture}`);
+        return {
+          id: aid,
+          name: String(seriesName || '').trim(),
+          imageUrl,
+          summary: sessCached.summary || '',
+          fetchedAt: Date.now(),
+          provider: 'anidb'
+        };
+      }
+
+      // 2b. HTTP API call by AID
+      const apiUrl = `http://api.anidb.net:9001/httpapi?request=anime&client=${encodeURIComponent(clientName)}&clientver=${encodeURIComponent(String(clientVer))}&protover=1&aid=${aid}`;
+      appendLog(`APPROVED_SERIES_ANIDB_HTTP_FETCH series=${String(seriesName || '').slice(0,80)} aid=${aid} client=${clientName} clientver=${clientVer} url=${apiUrl}`);
+      const _anidbTimeout = new Promise((_, rej) =>
+        setTimeout(() => rej(new Error('AniDB getAnimeInfo absolute timeout')), 25000)
+      );
+      const anime = await Promise.race([client.getAnimeInfo(aid), _anidbTimeout]);
+      const animeKeys = anime ? Object.keys(anime).join(',') : 'null';
+      const rawSnippet = (anime && anime.raw) ? String(anime.raw).slice(0, 500) : 'no_raw';
+      appendLog(`APPROVED_SERIES_ANIDB_HTTP_RESULT series=${String(seriesName || '').slice(0,80)} aid=${aid} got_anime=${!!anime} keys=${animeKeys}`);
+      appendLog(`APPROVED_SERIES_ANIDB_RAW_RESPONSE aid=${aid} raw=${rawSnippet}`);
+      return parseAnimeResult(anime, aid);
+    }
+
+    // 3. No AID found — fall back to HTTP title search for each candidate title.
+    //    This covers series enriched via AniList/TVDB (no AID in enrich cache) AND
+    //    cases where the offline titles DB is unavailable or the title doesn't match.
+    appendLog(`APPROVED_SERIES_ANIDB_NO_AID_TRYING_TITLE series=${String(seriesName || '').slice(0,80)}`);
+    const candidates = Array.isArray(titleCandidates) && titleCandidates.length
+      ? titleCandidates
+      : [String(seriesName || '').trim()].filter(Boolean);
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      try {
+        appendLog(`APPROVED_SERIES_ANIDB_TITLE_SEARCH series=${String(seriesName || '').slice(0,80)} candidate=${String(candidate).slice(0,80)}`);
+        const _titleTimeout = new Promise((_, rej) =>
+          setTimeout(() => rej(new Error('AniDB title search timeout')), 25000)
+        );
+        const anime = await Promise.race([client.getAnimeInfoByTitle(candidate), _titleTimeout]);
+        const rawSnippet2 = (anime && anime.raw) ? String(anime.raw).slice(0, 500) : 'no_raw';
+        appendLog(`APPROVED_SERIES_ANIDB_TITLE_SEARCH_RESULT candidate=${String(candidate).slice(0,80)} got_anime=${!!anime} raw=${rawSnippet2}`);
+        const result = parseAnimeResult(anime, null);
+        if (result && result.imageUrl) return result;
+      } catch (titleErr) {
+        const rawXmlInfo2 = titleErr && titleErr.rawXml ? ` rawXml=${String(titleErr.rawXml).slice(0, 300)}` : '';
+        appendLog(`APPROVED_SERIES_ANIDB_TITLE_SEARCH_ERR candidate=${String(candidate).slice(0,80)} err=${titleErr && titleErr.message ? titleErr.message.slice(0,200) : String(titleErr)}${rawXmlInfo2}`);
+      }
+    }
+
+    appendLog(`APPROVED_SERIES_ANIDB_NO_RESULT series=${String(seriesName || '').slice(0,80)} candidates_tried=${candidates.length}`);
+    return null;
   } catch (e) {
     const rawXmlInfo = e && e.rawXml ? ` rawXml=${String(e.rawXml).slice(0, 400)}` : '';
     appendLog(`APPROVED_SERIES_ANIDB_FETCH_ERR series=${String(seriesName || '').slice(0,80)} err=${e && e.message ? e.message.slice(0, 300) : String(e)}${rawXmlInfo}`);
@@ -9227,7 +9259,7 @@ async function fetchApprovedSeriesArtwork({ username, outputKey, source, seriesN
   }
   
   if (selectedSource === 'anidb') {
-    return fetchAniDbSeriesArtwork(seriesName, outputKey, username);
+    return fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCandidates);
   }
   
   return null;
