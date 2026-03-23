@@ -435,6 +435,78 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
   opacity: 0.85;
 }
 
+/* Items modal — wider than default .modal-card to fit file paths */
+.approved-series-items-modal {
+  max-width: 740px;
+  width: min(740px, 94vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.approved-series-items-list {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  border: 1px solid var(--bg-600);
+  border-radius: 8px;
+  background: var(--bg-900, #0d0f14);
+}
+
+.approved-series-items-list table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.approved-series-items-list th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-800);
+  color: var(--muted);
+  font-weight: 600;
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--bg-600);
+  white-space: nowrap;
+}
+
+.approved-series-items-list td {
+  padding: 6px 10px;
+  color: var(--fg, #e0e0e0);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  vertical-align: middle;
+  word-break: break-all;
+}
+
+.approved-series-items-list tr:last-child td {
+  border-bottom: none;
+}
+
+.approved-series-items-list tr:hover td {
+  background: rgba(255,255,255,0.04);
+}
+
+.light .approved-series-items-list {
+  background: rgba(240,248,255,0.7);
+  border-color: rgba(154,166,178,0.45);
+}
+
+.light .approved-series-items-list th {
+  background: rgba(217,234,253,0.92);
+  border-bottom-color: rgba(154,166,178,0.45);
+  color: var(--muted);
+}
+
+.light .approved-series-items-list td {
+  color: var(--fg, #1a1a2e);
+  border-bottom-color: rgba(154,166,178,0.15);
+}
+
+.light .approved-series-items-list tr:hover td {
+  background: rgba(154,166,178,0.1);
+}
+
 .settings-page-content h2 {
 	margin: 0;
 	font-size: 1.4rem;

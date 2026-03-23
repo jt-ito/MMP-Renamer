@@ -43,6 +43,7 @@ export default function ApprovedSeries({ pushToast }) {
   const [showLogs, setShowLogs] = useState(false)
   const [logs, setLogs] = useState('')
   const [contextMenu, setContextMenu] = useState(null)
+  const [itemsModal, setItemsModal] = useState(null) // { seriesName, outputKey, items, loading }
   const observedRef = useRef(new Set())
   const queuedRef = useRef(new Set())
   const inFlightRef = useRef(new Set())
@@ -115,6 +116,17 @@ export default function ApprovedSeries({ pushToast }) {
       }
     } catch (e) {
       pushToast && pushToast('Approved Series', `Failed to refresh "${series.name}"`)
+    }
+  }
+
+  const openItemsModal = async (series, outputKey) => {
+    setItemsModal({ seriesName: series.name, outputKey, items: [], loading: true })
+    try {
+      const r = await axios.get(API(`/approved-series/items?outputKey=${encodeURIComponent(outputKey)}&seriesName=${encodeURIComponent(series.name)}`))
+      const items = (r && r.data && Array.isArray(r.data.items)) ? r.data.items : []
+      setItemsModal({ seriesName: series.name, outputKey, items, loading: false })
+    } catch (e) {
+      setItemsModal({ seriesName: series.name, outputKey, items: [], loading: false, error: 'Failed to load items' })
     }
   }
 
@@ -483,6 +495,9 @@ export default function ApprovedSeries({ pushToast }) {
               {[{
                 label: '↺ Refresh Image',
                 action: () => { refreshSeries(contextMenu.series, contextMenu.outputKey); setContextMenu(null); }
+              }, {
+                label: '☰ View Items',
+                action: () => { openItemsModal(contextMenu.series, contextMenu.outputKey); setContextMenu(null); }
               }, null, {
                 label: '⎘ Copy Name',
                 action: () => { navigator.clipboard && navigator.clipboard.writeText(contextMenu.series.name); pushToast && pushToast('Approved Series', 'Name copied'); setContextMenu(null); }
@@ -499,6 +514,48 @@ export default function ApprovedSeries({ pushToast }) {
                 item === null
                   ? <div key={i} className="context-menu-divider" />
                   : <button key={i} className="context-menu-item" onClick={item.action}>{item.label}</button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {itemsModal && (
+          <div className="modal-overlay" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget) setItemsModal(null); }}>
+            <div className="modal-card approved-series-items-modal">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <h3 style={{ margin: 0 }}>{itemsModal.seriesName}</h3>
+                <button className="btn-ghost" style={{ padding: '4px 10px', fontSize: 13 }} onClick={() => setItemsModal(null)}>✕ Close</button>
+              </div>
+              {itemsModal.loading ? (
+                <p className="small-muted">Loading…</p>
+              ) : itemsModal.error ? (
+                <p className="small-muted">{itemsModal.error}</p>
+              ) : itemsModal.items.length === 0 ? (
+                <p className="small-muted">No approved items found for this series.</p>
+              ) : (
+                <>
+                  <p className="small-muted" style={{ margin: 0 }}>{itemsModal.items.length} approved file{itemsModal.items.length === 1 ? '' : 's'}</p>
+                  <div className="approved-series-items-list">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Filename</th>
+                          <th>Renamed To</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {itemsModal.items.map((item, i) => (
+                          <tr key={i}>
+                            <td style={{ color: 'var(--muted)', width: 32, textAlign: 'right' }}>{i + 1}</td>
+                            <td style={{ fontFamily: 'Consolas, monospace', fontSize: 11 }} title={item.path}>{item.basename}</td>
+                            <td style={{ color: 'var(--muted)' }}>{item.providerTitle || item.parsedTitle || '—'}{item.providerEpisodeTitle ? ` — ${item.providerEpisodeTitle}` : ''}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </div>
           </div>

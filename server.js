@@ -9757,6 +9757,47 @@ app.get('/api/approved-series', requireAuth, (req, res) => {
   }
 });
 
+// Returns the individual approved files that make up a given series within an output.
+app.get('/api/approved-series/items', requireAuth, (req, res) => {
+  try {
+    const outputKey = normalizeOutputKey(req.query.outputKey || '');
+    const seriesName = String(req.query.seriesName || '').trim();
+    if (!outputKey || !seriesName) return res.status(400).json({ error: 'outputKey and seriesName are required' });
+
+    const items = [];
+    for (const cacheKey of Object.keys(enrichCache || {})) {
+      const entry = enrichCache[cacheKey];
+      if (!entry || entry.applied !== true || !entry.appliedTo) continue;
+      const targets = Array.isArray(entry.appliedTo) ? entry.appliedTo : [entry.appliedTo];
+      for (const target of targets) {
+        if (!target) continue;
+        const targetOutputKey = normalizeOutputKey(deriveAppliedSeriesInfo(target).outputRoot || path.dirname(path.dirname(target)));
+        if (targetOutputKey !== outputKey) continue;
+        const entrySeriesName = getSeriesNameForApprovedEntry(entry, target);
+        if (entrySeriesName !== seriesName) continue;
+        const info = deriveAppliedSeriesInfo(target);
+        const provider = entry.provider || {};
+        const parsed = entry.parsed || {};
+        items.push({
+          path: target,
+          basename: path.basename(target),
+          seasonFolder: info.seriesFolder ? path.basename(info.seriesFolder) : null,
+          providerTitle: provider.renderedName || provider.title || null,
+          providerEpisodeTitle: provider.episodeTitle || null,
+          providerYear: provider.year || null,
+          parsedTitle: parsed.parsedName || parsed.title || null,
+          appliedAt: entry.appliedAt || null
+        });
+      }
+    }
+
+    items.sort((a, b) => a.basename.localeCompare(b.basename, undefined, { numeric: true, sensitivity: 'base' }));
+    return res.json({ items, seriesName, outputKey });
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
+
 app.post('/api/approved-series/source', requireAuth, (req, res) => {
   try {
     const username = req.session && req.session.username ? req.session.username : null;
