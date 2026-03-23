@@ -9271,6 +9271,30 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
     const candidates = Array.isArray(titleCandidates) && titleCandidates.length
       ? titleCandidates
       : [String(seriesName || '').trim()].filter(Boolean);
+
+    // 3a. Try each candidate against the offline titles DB before any HTTP call.
+    //     Handles alternate romanizations (e.g. "Tsunpuri") that weren't used in step 1.
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      const candidateDbAid = anidbLookupTitle(candidate);
+      if (candidateDbAid) {
+        appendLog(`APPROVED_SERIES_ANIDB_CANDIDATE_DB_HIT series=${String(seriesName || '').slice(0,80)} candidate=${String(candidate).slice(0,80)} aid=${candidateDbAid}`);
+        try {
+          const anime = await Promise.race([
+            client.getAnimeInfo(candidateDbAid),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('AniDB candidate AID fetch timeout')), 25000))
+          ]);
+          const result = parseAnimeResult(anime, candidateDbAid);
+          if (result && result.imageUrl) return result;
+        } catch (candidateAidErr) {
+          appendLog(`APPROVED_SERIES_ANIDB_CANDIDATE_AID_ERR candidate=${String(candidate).slice(0,80)} aid=${candidateDbAid} err=${candidateAidErr && candidateAidErr.message ? candidateAidErr.message.slice(0,100) : String(candidateAidErr)}`);
+        }
+      }
+    }
+
+    // 3b. Offline DB missed for all candidates — fall back to aname= HTTP title search.
+    //     Only try ASCII/latin-script titles; AniDB's aname= endpoint is unreliable for
+    //     CJK/native-script characters and wastes time on 500ms-per-call timeouts.
     for (const candidate of candidates) {
       if (!candidate) continue;
       // Skip non-ASCII titles — AniDB's aname= search doesn't handle them reliably
@@ -9316,15 +9340,40 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
     }
 
     // 5. AniList had no AniDB external link for this series. Get synonyms from AniList
-    //    and try ASCII-only ones via aname= as a true last resort. Non-ASCII synonyms
-    //    are skipped since AniDB's aname= endpoint cannot match them.
+    //    5a. Try ALL synonyms (including native/CJK) against the offline titles DB — free,
+    //        no API cost, and finds results that aname= HTTP can never match.
+    //    5b. Fall back to aname= HTTP for ASCII-only synonyms as a last resort.
     const anilistSynonyms = await getAniListSynonymsForTitle(candidates.slice(0, 2));
-    const novelSynonyms = anilistSynonyms.filter(s =>
-      !candidates.some(c => c === s) && !/[^\x00-\x7F]/.test(s)
-    );
-    if (novelSynonyms.length > 0) {
-      appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_EXPAND series=${String(seriesName || '').slice(0,80)} count=${novelSynonyms.length} first=${String(novelSynonyms[0]).slice(0,60)}`);
-      for (const synonym of novelSynonyms) {
+    // All novel synonyms (no ASCII restriction) for offline DB lookup
+    const novelSynonymsAll = anilistSynonyms.filter(s => !candidates.some(c => c === s));
+    // ASCII-only subset for aname= HTTP fallback
+    const novelSynonymsAscii = novelSynonymsAll.filter(s => !/[^\x00-\x7F]/.test(s));
+    if (novelSynonymsAll.length > 0) {
+      appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_EXPAND series=${String(seriesName || '').slice(0,80)} count=${novelSynonymsAll.length} first=${String(novelSynonymsAll[0]).slice(0,60)}`);
+
+      // 5a. Offline titles DB lookup for each synonym — handles CJK/native titles too
+      for (const synonym of novelSynonymsAll) {
+        const synonymDbAid = anidbLookupTitle(synonym);
+        if (synonymDbAid) {
+          appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_DB_HIT series=${String(seriesName || '').slice(0,80)} synonym=${String(synonym).slice(0,60)} aid=${synonymDbAid}`);
+          try {
+            const anime = await Promise.race([
+              client.getAnimeInfo(synonymDbAid),
+              new Promise((_, rej) => setTimeout(() => rej(new Error('AniDB synonym AID fetch timeout')), 25000))
+            ]);
+            const result = parseAnimeResult(anime, synonymDbAid);
+            if (result && result.imageUrl) {
+              appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_HIT series=${String(seriesName || '').slice(0,80)} synonym=${String(synonym).slice(0,60)} via=offline_db`);
+              return result;
+            }
+          } catch (synonymAidErr) {
+            appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_AID_ERR synonym=${String(synonym).slice(0,60)} aid=${synonymDbAid} err=${synonymAidErr && synonymAidErr.message ? synonymAidErr.message.slice(0,100) : String(synonymAidErr)}`);
+          }
+        }
+      }
+
+      // 5b. aname= HTTP search for ASCII synonyms only (last resort)
+      for (const synonym of novelSynonymsAscii) {
         try {
           const anime = await Promise.race([
             client.getAnimeInfoByTitle(synonym),
@@ -9332,7 +9381,7 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
           ]);
           const result = parseAnimeResult(anime, null);
           if (result && result.imageUrl) {
-            appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_HIT series=${String(seriesName || '').slice(0,80)} synonym=${String(synonym).slice(0,60)}`);
+            appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_HIT series=${String(seriesName || '').slice(0,80)} synonym=${String(synonym).slice(0,60)} via=aname`);
             return result;
           }
         } catch (synErr) {
