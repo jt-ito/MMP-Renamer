@@ -9265,14 +9265,19 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
     }
 
     // 3. No AID found — fall back to HTTP title search for each candidate title.
-    //    This covers series enriched via AniList/TVDB (no AID in enrich cache) AND
-    //    cases where the offline titles DB is unavailable or the title doesn't match.
+    //    Only try ASCII/latin-script titles; AniDB's aname= endpoint is unreliable for
+    //    CJK/native-script characters and wastes time on 500ms-per-call timeouts.
     appendLog(`APPROVED_SERIES_ANIDB_NO_AID_TRYING_TITLE series=${String(seriesName || '').slice(0,80)}`);
     const candidates = Array.isArray(titleCandidates) && titleCandidates.length
       ? titleCandidates
       : [String(seriesName || '').trim()].filter(Boolean);
     for (const candidate of candidates) {
       if (!candidate) continue;
+      // Skip non-ASCII titles — AniDB's aname= search doesn't handle them reliably
+      if (/[^\x00-\x7F]/.test(candidate)) {
+        appendLog(`APPROVED_SERIES_ANIDB_TITLE_SEARCH_SKIP_NON_ASCII candidate=${String(candidate).slice(0,80)}`);
+        continue;
+      }
       try {
         appendLog(`APPROVED_SERIES_ANIDB_TITLE_SEARCH series=${String(seriesName || '').slice(0,80)} candidate=${String(candidate).slice(0,80)}`);
         const _titleTimeout = new Promise((_, rej) =>
@@ -9291,12 +9296,32 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
 
     appendLog(`APPROVED_SERIES_ANIDB_NO_RESULT series=${String(seriesName || '').slice(0,80)} candidates_tried=${candidates.length}`);
 
-    // 4. Nothing found via direct title search.
-    //    Query AniList for synonyms and retry those as additional AniDB search terms.
-    //    AniList often knows both English and romanised names; AniDB may only be indexed
-    //    under the native/romanised title, so this bridges the gap.
+    // 4. Candidate title searches all missed. Ask AniList for this series' AniDB external
+    //    link and do a reliable ?aid= lookup. This is faster and more robust than trying
+    //    native-script title searches — a single AniList call resolves the AID directly.
+    const anilistResolvedAid = await resolveAniDbAidViaAniList(candidates.slice(0, 3));
+    if (anilistResolvedAid) {
+      appendLog(`APPROVED_SERIES_ANIDB_AID_VIA_ANILIST series=${String(seriesName || '').slice(0,80)} aid=${anilistResolvedAid}`);
+      try {
+        const _aidTimeout = new Promise((_, rej) =>
+          setTimeout(() => rej(new Error('AniDB getAnimeInfo timeout (AniList AID)')), 25000)
+        );
+        const anime = await Promise.race([client.getAnimeInfo(anilistResolvedAid), _aidTimeout]);
+        appendLog(`APPROVED_SERIES_ANIDB_AID_VIA_ANILIST_RESULT series=${String(seriesName || '').slice(0,80)} aid=${anilistResolvedAid} got_anime=${!!anime}`);
+        const result = parseAnimeResult(anime, anilistResolvedAid);
+        if (result && result.imageUrl) return result;
+      } catch (aidErr) {
+        appendLog(`APPROVED_SERIES_ANIDB_AID_VIA_ANILIST_ERR series=${String(seriesName || '').slice(0,80)} aid=${anilistResolvedAid} err=${aidErr && aidErr.message ? aidErr.message.slice(0,150) : String(aidErr)}`);
+      }
+    }
+
+    // 5. AniList had no AniDB external link for this series. Get synonyms from AniList
+    //    and try ASCII-only ones via aname= as a true last resort. Non-ASCII synonyms
+    //    are skipped since AniDB's aname= endpoint cannot match them.
     const anilistSynonyms = await getAniListSynonymsForTitle(candidates.slice(0, 2));
-    const novelSynonyms = anilistSynonyms.filter(s => !candidates.some(c => c === s));
+    const novelSynonyms = anilistSynonyms.filter(s =>
+      !candidates.some(c => c === s) && !/[^\x00-\x7F]/.test(s)
+    );
     if (novelSynonyms.length > 0) {
       appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_EXPAND series=${String(seriesName || '').slice(0,80)} count=${novelSynonyms.length} first=${String(novelSynonyms[0]).slice(0,60)}`);
       for (const synonym of novelSynonyms) {
@@ -9313,25 +9338,6 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
         } catch (synErr) {
           appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_ERR synonym=${String(synonym).slice(0,60)} err=${synErr && synErr.message ? synErr.message.slice(0,100) : String(synErr)}`);
         }
-      }
-    }
-
-    // 5. AniDB title search (even via synonyms) failed — possibly because AniDB's aname= endpoint
-    //    doesn't match Japanese/native-script titles reliably. Ask AniList for the AniDB external
-    //    link ID and do a direct ?aid= lookup, which is always reliable.
-    const anilistResolvedAid = await resolveAniDbAidViaAniList(candidates.slice(0, 3));
-    if (anilistResolvedAid) {
-      appendLog(`APPROVED_SERIES_ANIDB_AID_VIA_ANILIST series=${String(seriesName || '').slice(0,80)} aid=${anilistResolvedAid}`);
-      try {
-        const _aidTimeout = new Promise((_, rej) =>
-          setTimeout(() => rej(new Error('AniDB getAnimeInfo timeout (AniList AID)')), 25000)
-        );
-        const anime = await Promise.race([client.getAnimeInfo(anilistResolvedAid), _aidTimeout]);
-        appendLog(`APPROVED_SERIES_ANIDB_AID_VIA_ANILIST_RESULT series=${String(seriesName || '').slice(0,80)} aid=${anilistResolvedAid} got_anime=${!!anime}`);
-        const result = parseAnimeResult(anime, anilistResolvedAid);
-        if (result && result.imageUrl) return result;
-      } catch (aidErr) {
-        appendLog(`APPROVED_SERIES_ANIDB_AID_VIA_ANILIST_ERR series=${String(seriesName || '').slice(0,80)} aid=${anilistResolvedAid} err=${aidErr && aidErr.message ? aidErr.message.slice(0,150) : String(aidErr)}`);
       }
     }
 
