@@ -9113,16 +9113,15 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
   //   3. If no AID: HTTP getAnimeInfoByTitle() for each title candidate (title-search fallback)
   //   4. Parse <picture> element → https://cdn.anidb.net/images/main/{picture}
   try {
-    // Build AniDB HTTP client once (shared across all attempts below)
-    const creds = getAniDBCredentials(username, serverSettings, users);
-    const clientName = (creds && creds.anidb_client_name) ? creds.anidb_client_name : 'mediabrowser';
-    const clientVer  = (creds && creds.anidb_client_version) ? creds.anidb_client_version : 1;
-    const client = getAniDBClient(
-      (creds && creds.anidb_username) ? creds.anidb_username : '',
-      (creds && creds.anidb_password) ? creds.anidb_password : '',
-      clientName,
-      clientVer
-    );
+    // For the HTTP picture API, always use the Jellyfin/Emby registered client
+    // (mediabrowser/1). The anidb_client_name setting is intended for the UDP
+    // file-hash API; using it here causes AniDB error 302 if the client name is
+    // not specifically registered for the HTTP endpoint (e.g. 'mmprename' is a
+    // UDP registration only). Jellyfin's AniDbImageProvider hardcodes this same
+    // pair, so it is the safe, known-working choice.
+    const HTTP_IMAGE_CLIENT = 'mediabrowser';
+    const HTTP_IMAGE_CLIENT_VER = 1;
+    const client = getAniDBClient('', '', HTTP_IMAGE_CLIENT, HTTP_IMAGE_CLIENT_VER);
 
     // Helper: parse an anime HTTP response and return { id, name, imageUrl, summary } or null
     const parseAnimeResult = (anime, resolvedAid) => {
@@ -9182,8 +9181,8 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
       }
 
       // 2b. HTTP API call by AID
-      const apiUrl = `http://api.anidb.net:9001/httpapi?request=anime&client=${encodeURIComponent(clientName)}&clientver=${encodeURIComponent(String(clientVer))}&protover=1&aid=${aid}`;
-      appendLog(`APPROVED_SERIES_ANIDB_HTTP_FETCH series=${String(seriesName || '').slice(0,80)} aid=${aid} client=${clientName} clientver=${clientVer} url=${apiUrl}`);
+      const apiUrl = `http://api.anidb.net:9001/httpapi?request=anime&client=${encodeURIComponent(HTTP_IMAGE_CLIENT)}&clientver=${encodeURIComponent(String(HTTP_IMAGE_CLIENT_VER))}&protover=1&aid=${aid}`;
+      appendLog(`APPROVED_SERIES_ANIDB_HTTP_FETCH series=${String(seriesName || '').slice(0,80)} aid=${aid} client=${HTTP_IMAGE_CLIENT} clientver=${HTTP_IMAGE_CLIENT_VER} url=${apiUrl}`);
       const _anidbTimeout = new Promise((_, rej) =>
         setTimeout(() => rej(new Error('AniDB getAnimeInfo absolute timeout')), 25000)
       );
