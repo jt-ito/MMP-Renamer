@@ -8834,6 +8834,38 @@ async function fetchAniListSeriesArtworkByNameAndAniDbId(seriesName, anidbId) {
   }
 }
 
+// Query AniList for a title and return all synonyms + alternate title strings.
+// Used as a last-resort expansion step when the AniDB title search finds nothing:
+// AniDB often only indexes the romanised/native title, while we may only know the
+// English title (or vice versa). AniList's synonyms field bridges that gap.
+async function getAniListSynonymsForTitle(candidates) {
+  const queue = Array.isArray(candidates) ? candidates : (candidates ? [String(candidates)] : []);
+  for (const rawTitle of queue.slice(0, 2)) {
+    const lookupTitle = normalizeApprovedSeriesLookupTitle(rawTitle) || String(rawTitle || '').trim();
+    if (!lookupTitle) continue;
+    try {
+      const query = `query ($search: String) { Media(search: $search, type: ANIME) { synonyms title { english romaji native } } }`;
+      const payload = JSON.stringify({ query, variables: { search: lookupTitle } });
+      const res = await httpRequest(
+        { hostname: 'graphql.anilist.co', path: '/', method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } },
+        payload, 8000
+      );
+      if (!res || res.statusCode !== 200) continue;
+      const parsed = safeJsonParse(res.body);
+      const media = parsed && parsed.data && parsed.data.Media ? parsed.data.Media : null;
+      if (!media) continue;
+      const synonyms = Array.isArray(media.synonyms) ? media.synonyms.filter(s => s && String(s).trim()) : [];
+      const titleFields = media.title
+        ? [media.title.english, media.title.romaji, media.title.native].filter(Boolean)
+        : [];
+      const all = [...new Set([...titleFields, ...synonyms])].filter(s => s && String(s).trim());
+      if (all.length > 0) return all;
+    } catch (e) { continue; }
+  }
+  return [];
+}
+
 async function fetchTmdbSeriesArtwork(title, tmdbKey) {
   try {
     if (!tmdbKey) {
@@ -9220,6 +9252,32 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
     }
 
     appendLog(`APPROVED_SERIES_ANIDB_NO_RESULT series=${String(seriesName || '').slice(0,80)} candidates_tried=${candidates.length}`);
+
+    // 4. Nothing found via direct title search.
+    //    Query AniList for synonyms and retry those as additional AniDB search terms.
+    //    AniList often knows both English and romanised names; AniDB may only be indexed
+    //    under the native/romanised title, so this bridges the gap.
+    const anilistSynonyms = await getAniListSynonymsForTitle(candidates.slice(0, 2));
+    const novelSynonyms = anilistSynonyms.filter(s => !candidates.some(c => c === s));
+    if (novelSynonyms.length > 0) {
+      appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_EXPAND series=${String(seriesName || '').slice(0,80)} count=${novelSynonyms.length} first=${String(novelSynonyms[0]).slice(0,60)}`);
+      for (const synonym of novelSynonyms) {
+        try {
+          const anime = await Promise.race([
+            client.getAnimeInfoByTitle(synonym),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('AniDB synonym search timeout')), 25000))
+          ]);
+          const result = parseAnimeResult(anime, null);
+          if (result && result.imageUrl) {
+            appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_HIT series=${String(seriesName || '').slice(0,80)} synonym=${String(synonym).slice(0,60)}`);
+            return result;
+          }
+        } catch (synErr) {
+          appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_ERR synonym=${String(synonym).slice(0,60)} err=${synErr && synErr.message ? synErr.message.slice(0,100) : String(synErr)}`);
+        }
+      }
+    }
+
     return null;
   } catch (e) {
     const rawXmlInfo = e && e.rawXml ? ` rawXml=${String(e.rawXml).slice(0, 400)}` : '';
@@ -9264,7 +9322,7 @@ async function fetchApprovedSeriesArtwork({ username, outputKey, source, seriesN
   return null;
 }
 
-async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, seriesName, allowCooldown = true }) {
+async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, seriesName, allowCooldown = true, force = false }) {
   const selectedSource = normalizeApprovedSeriesSource(source);
   const normalizedOutputKey = normalizeOutputKey(outputKey);
   const cleanSeriesName = String(seriesName || '').trim();
@@ -9283,6 +9341,13 @@ async function fetchAndCacheApprovedSeriesImage({ username, outputKey, source, s
   }
 
   const cacheKey = `${normalizedOutputKey}::${seriesKey}`;
+  // Force-refresh: evict the cached result and clear the in-flight lock so the fetch
+  // proceeds unconditionally, bypassing both the positive and negative caches.
+  if (force && cacheKey) {
+    delete approvedSeriesImages[cacheKey];
+    approvedSeriesImageFetchLocks.delete(`${username || 'anon'}::${normalizedOutputKey}::${seriesKey}`);
+  }
+
   const existing = approvedSeriesImages && approvedSeriesImages[cacheKey] ? approvedSeriesImages[cacheKey] : null;
 
   // Negative cache hit: a previous fetch confirmed this series has no image anywhere.
@@ -9669,6 +9734,25 @@ app.post('/api/approved-series/fetch-image', requireAuth, async (req, res) => {
     if (!['anilist', 'tmdb', 'anidb'].includes(selectedSource)) return res.status(400).json({ error: 'invalid source' });
 
     const result = await fetchAndCacheApprovedSeriesImage({ username, outputKey, source: selectedSource, seriesName, allowCooldown: true });
+    return res.json(result);
+  } catch (e) {
+    return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
+
+// Force-refresh a single series image: evicts cache and re-fetches regardless of cooldowns.
+app.post('/api/approved-series/refresh-series', requireAuth, async (req, res) => {
+  try {
+    const username = req.session && req.session.username ? req.session.username : null;
+    const outputKey = normalizeOutputKey(req && req.body ? req.body.outputKey : '');
+    const seriesName = req && req.body && req.body.seriesName ? String(req.body.seriesName).trim() : '';
+    if (!outputKey) return res.status(400).json({ error: 'outputKey is required' });
+    if (!seriesName) return res.status(400).json({ error: 'seriesName is required' });
+    const sourcePrefs = getApprovedSeriesSourcePreferences(username);
+    const resolvedPref = resolveApprovedSeriesSourcePreference(sourcePrefs, outputKey);
+    const selectedSource = normalizeApprovedSeriesSource((req && req.body && req.body.source) || resolvedPref.source || 'anilist');
+    if (!['anilist', 'tmdb', 'anidb'].includes(selectedSource)) return res.status(400).json({ error: 'invalid source' });
+    const result = await fetchAndCacheApprovedSeriesImage({ username, outputKey, source: selectedSource, seriesName, allowCooldown: false, force: true });
     return res.json(result);
   } catch (e) {
     return res.status(500).json({ error: e && e.message ? e.message : String(e) });

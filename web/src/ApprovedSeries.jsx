@@ -5,7 +5,7 @@ const API = (p) => `/api${p}`
 
 // Memoized card — only re-renders when its own series data or isFetching flag changes,
 // not when any other card in the grid gets its image back.
-const SeriesCard = React.memo(function SeriesCard({ series, outputKey, isFetching }) {
+const SeriesCard = React.memo(function SeriesCard({ series, outputKey, isFetching, onContextMenu }) {
   const cardKey = `${outputKey}::${series.name}`
   return (
     <article
@@ -13,6 +13,7 @@ const SeriesCard = React.memo(function SeriesCard({ series, outputKey, isFetchin
       data-output-key={outputKey}
       data-series-name={series.name}
       data-series-key={cardKey}
+      onContextMenu={(e) => { e.preventDefault(); onContextMenu && onContextMenu(e, series, outputKey); }}
     >
       <div className="approved-series-cover-wrap">
         {series.imageUrl ? (
@@ -41,11 +42,13 @@ export default function ApprovedSeries({ pushToast }) {
   const [sourcePromptOutput, setSourcePromptOutput] = useState(null)
   const [showLogs, setShowLogs] = useState(false)
   const [logs, setLogs] = useState('')
+  const [contextMenu, setContextMenu] = useState(null)
   const observedRef = useRef(new Set())
   const queuedRef = useRef(new Set())
   const inFlightRef = useRef(new Set())
   const queueTimerRef = useRef(null)
   const logsTimerRef = useRef(null)
+  const contextMenuRef = useRef(null)
   const logLinesRef = useRef([])  // accumulated log lines — never shrinks during a session
   const logScrollRef = useRef(null)  // ref to the scrolling <div> for auto-scroll
 
@@ -72,6 +75,47 @@ export default function ApprovedSeries({ pushToast }) {
   }
 
   useEffect(() => { load() }, [])
+
+  // Dismiss context menu when clicking outside it
+  useEffect(() => {
+    if (!contextMenu) return
+    const handler = (e) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target)) setContextMenu(null)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [contextMenu])
+
+  const handleSeriesContextMenu = (e, series, outputKey) => {
+    const x = Math.min(e.clientX, window.innerWidth - 210)
+    const y = Math.min(e.clientY, window.innerHeight - 240)
+    setContextMenu({ x, y, series, outputKey })
+  }
+
+  const refreshSeries = async (series, outputKey) => {
+    const src = (outputs.find(o => o.key === outputKey) || {}).source || 'anilist'
+    try {
+      pushToast && pushToast('Approved Series', `Refreshing "${series.name}"…`)
+      const resp = await axios.post(API('/approved-series/refresh-series'), { outputKey, seriesName: series.name, source: src })
+      const newImageUrl = resp && resp.data && resp.data.imageUrl ? resp.data.imageUrl : null
+      const newSummary = resp && resp.data && resp.data.summary != null ? resp.data.summary : null
+      if (newImageUrl) {
+        setOutputs((prev) => prev.map((out) => {
+          if (out.key !== outputKey || !Array.isArray(out.series)) return out
+          return { ...out, series: out.series.map((item) =>
+            item && item.name === series.name
+              ? { ...item, imageUrl: newImageUrl, summary: newSummary !== null ? newSummary : item.summary }
+              : item
+          )}
+        }))
+        pushToast && pushToast('Approved Series', `Refreshed "${series.name}"`)
+      } else {
+        pushToast && pushToast('Approved Series', `No image found for "${series.name}"`)
+      }
+    } catch (e) {
+      pushToast && pushToast('Approved Series', `Failed to refresh "${series.name}"`)
+    }
+  }
 
   const activeOutput = useMemo(() => outputs.find((o) => o.key === activeOutputKey) || null, [outputs, activeOutputKey])
 
@@ -410,6 +454,7 @@ export default function ApprovedSeries({ pushToast }) {
                       series={series}
                       outputKey={activeOutput.key}
                       isFetching={!!autoFetching[`${activeOutput.key}::${series.name}`]}
+                      onContextMenu={handleSeriesContextMenu}
                     />
                   )) : (
                     <p className="small-muted">No approved series found for this output.</p>
@@ -418,6 +463,56 @@ export default function ApprovedSeries({ pushToast }) {
               </>
             ) : null}
           </>
+        )}
+
+        {contextMenu && (
+          <div
+            ref={contextMenuRef}
+            style={{
+              position: 'fixed',
+              left: contextMenu.x,
+              top: contextMenu.y,
+              background: 'var(--card-bg, #1e1e2e)',
+              border: '1px solid var(--border, #444)',
+              borderRadius: 6,
+              boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+              zIndex: 9999,
+              minWidth: 190,
+              padding: '4px 0',
+            }}
+          >
+            {[{
+              label: '↺ Refresh Image',
+              action: () => { refreshSeries(contextMenu.series, contextMenu.outputKey); setContextMenu(null); }
+            }, null, {
+              label: '⎘ Copy Name',
+              action: () => { navigator.clipboard && navigator.clipboard.writeText(contextMenu.series.name); pushToast && pushToast('Approved Series', 'Name copied'); setContextMenu(null); }
+            }, {
+              label: '⬡ Search AniList',
+              action: () => { window.open(`https://anilist.co/search/anime?search=${encodeURIComponent(contextMenu.series.name)}`, '_blank'); setContextMenu(null); }
+            }, {
+              label: '⬡ Search AniDB',
+              action: () => { window.open(`https://anidb.net/search/fulltext/?q=${encodeURIComponent(contextMenu.series.name)}&noalias=1&cat.anime=1`, '_blank'); setContextMenu(null); }
+            }, {
+              label: '⬡ Search TMDB',
+              action: () => { window.open(`https://www.themoviedb.org/search?query=${encodeURIComponent(contextMenu.series.name)}`, '_blank'); setContextMenu(null); }
+            }].map((item, i) =>
+              item === null
+                ? <div key={i} style={{ borderTop: '1px solid var(--border, #444)', margin: '3px 0' }} />
+                : <button
+                    key={i}
+                    onClick={item.action}
+                    style={{
+                      display: 'block', width: '100%', padding: '7px 14px',
+                      textAlign: 'left', background: 'transparent', border: 'none',
+                      color: 'var(--text, #e0e0e0)', fontSize: 13, cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--hover-bg, rgba(255,255,255,0.08))'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                  >{item.label}</button>
+            )}
+          </div>
         )}
 
         {sourcePromptOutput ? (
