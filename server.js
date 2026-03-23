@@ -8866,6 +8866,44 @@ async function getAniListSynonymsForTitle(candidates) {
   return [];
 }
 
+// Ask AniList for a series by title and extract the AniDB AID from its externalLinks.
+// Returns the numeric AID or null. Used as a last-resort bridge: when AniDB title search
+// fails (common for Japanese-script titles), AniList usually has the AniDB link so we can
+// flip to a reliable ?aid= lookup instead of a fragile aname= search.
+async function resolveAniDbAidViaAniList(candidates) {
+  const queue = Array.isArray(candidates) ? candidates : (candidates ? [String(candidates)] : []);
+  for (const rawTitle of queue.slice(0, 3)) {
+    const lookupTitle = normalizeApprovedSeriesLookupTitle(rawTitle) || String(rawTitle || '').trim();
+    if (!lookupTitle) continue;
+    try {
+      const query = `query ($search: String) { Media(search: $search, type: ANIME) { title { english romaji } externalLinks { site url } } }`;
+      const payload = JSON.stringify({ query, variables: { search: lookupTitle } });
+      const res = await httpRequest(
+        { hostname: 'graphql.anilist.co', path: '/', method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } },
+        payload, 8000
+      );
+      if (!res || res.statusCode !== 200) continue;
+      const parsed = safeJsonParse(res.body);
+      const media = parsed && parsed.data && parsed.data.Media ? parsed.data.Media : null;
+      if (!media) continue;
+      const links = Array.isArray(media.externalLinks) ? media.externalLinks : [];
+      for (const link of links) {
+        const site = String((link && link.site) || '').toLowerCase();
+        const url = String((link && link.url) || '');
+        if (site.includes('anidb') || /anidb\.net/i.test(url)) {
+          const m = url.match(/anidb\.net\/anime\/([0-9]{1,8})\b/i);
+          if (m && m[1]) {
+            const aid = Number(m[1]);
+            if (Number.isFinite(aid) && aid > 0) return aid;
+          }
+        }
+      }
+    } catch (e) { continue; }
+  }
+  return null;
+}
+
 async function fetchTmdbSeriesArtwork(title, tmdbKey) {
   try {
     if (!tmdbKey) {
@@ -9275,6 +9313,25 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
         } catch (synErr) {
           appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_ERR synonym=${String(synonym).slice(0,60)} err=${synErr && synErr.message ? synErr.message.slice(0,100) : String(synErr)}`);
         }
+      }
+    }
+
+    // 5. AniDB title search (even via synonyms) failed — possibly because AniDB's aname= endpoint
+    //    doesn't match Japanese/native-script titles reliably. Ask AniList for the AniDB external
+    //    link ID and do a direct ?aid= lookup, which is always reliable.
+    const anilistResolvedAid = await resolveAniDbAidViaAniList(candidates.slice(0, 3));
+    if (anilistResolvedAid) {
+      appendLog(`APPROVED_SERIES_ANIDB_AID_VIA_ANILIST series=${String(seriesName || '').slice(0,80)} aid=${anilistResolvedAid}`);
+      try {
+        const _aidTimeout = new Promise((_, rej) =>
+          setTimeout(() => rej(new Error('AniDB getAnimeInfo timeout (AniList AID)')), 25000)
+        );
+        const anime = await Promise.race([client.getAnimeInfo(anilistResolvedAid), _aidTimeout]);
+        appendLog(`APPROVED_SERIES_ANIDB_AID_VIA_ANILIST_RESULT series=${String(seriesName || '').slice(0,80)} aid=${anilistResolvedAid} got_anime=${!!anime}`);
+        const result = parseAnimeResult(anime, anilistResolvedAid);
+        if (result && result.imageUrl) return result;
+      } catch (aidErr) {
+        appendLog(`APPROVED_SERIES_ANIDB_AID_VIA_ANILIST_ERR series=${String(seriesName || '').slice(0,80)} aid=${anilistResolvedAid} err=${aidErr && aidErr.message ? aidErr.message.slice(0,150) : String(aidErr)}`);
       }
     }
 
