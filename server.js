@@ -8633,10 +8633,8 @@ function resolveApprovedSeriesSourcePreference(sourcePrefs, outputKey) {
     const saved = sourcePrefs[normalized];
     if (saved) {
       const resolvedSource = normalizeApprovedSeriesSource(saved);
-      try { appendLog(`APPROVED_SERIES_SOURCE_RESOLVED key=${normalized.slice(0,80)} source=${resolvedSource}`); } catch (e) {}
       return { source: resolvedSource, configured: true };
     }
-    try { appendLog(`APPROVED_SERIES_SOURCE_DEFAULT key=${normalized.slice(0,80)} reason=not_configured`); } catch (e) {}
   } catch (e) {
     try { appendLog(`APPROVED_SERIES_SOURCE_RESOLVE_ERR key=${outputKey} err=${e.message}`); } catch (ee) {}
   }

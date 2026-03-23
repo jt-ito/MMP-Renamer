@@ -51,6 +51,7 @@ export default function ApprovedSeries({ pushToast }) {
   const contextMenuRef = useRef(null)
   const logLinesRef = useRef([])  // accumulated log lines — never shrinks during a session
   const logScrollRef = useRef(null)  // ref to the scrolling <div> for auto-scroll
+  const lastRenderedLogsRef = useRef('')  // last string passed to setLogs — skip re-render if unchanged
 
   const AUTO_FETCH_INTERVAL_MS = 1200
 
@@ -246,7 +247,12 @@ export default function ApprovedSeries({ pushToast }) {
         // idx === newLines.length - 1 means no new lines yet — do nothing
       }
       const joined = logLinesRef.current.join('\n')
-      setLogs(joined)
+      // Only update state (and cause a re-render that would clear text selection)
+      // when there is actually new content to show.
+      if (joined !== lastRenderedLogsRef.current) {
+        lastRenderedLogsRef.current = joined
+        setLogs(joined)
+      }
       // Auto-scroll to bottom only if user hasn't scrolled up
       const el = logScrollRef.current
       if (el) {
@@ -260,6 +266,7 @@ export default function ApprovedSeries({ pushToast }) {
 
   const clearLogView = () => {
     logLinesRef.current = []
+    lastRenderedLogsRef.current = ''
     setLogs('')
   }
 
@@ -267,6 +274,7 @@ export default function ApprovedSeries({ pushToast }) {
   // view starts fresh for the new scope instead of mixing logs from both outputs.
   useEffect(() => {
     logLinesRef.current = []
+    lastRenderedLogsRef.current = ''
     setLogs('')
   }, [activeOutputKey])
 
