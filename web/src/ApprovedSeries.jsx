@@ -468,50 +468,31 @@ export default function ApprovedSeries({ pushToast }) {
         {contextMenu && (
           <div
             ref={contextMenuRef}
-            style={{
-              position: 'fixed',
-              left: contextMenu.x,
-              top: contextMenu.y,
-              background: 'var(--card-bg, #1e1e2e)',
-              border: '1px solid var(--border, #444)',
-              borderRadius: 6,
-              boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
-              zIndex: 9999,
-              minWidth: 190,
-              padding: '4px 0',
-            }}
+            className="context-menu"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
           >
-            {[{
-              label: '↺ Refresh Image',
-              action: () => { refreshSeries(contextMenu.series, contextMenu.outputKey); setContextMenu(null); }
-            }, null, {
-              label: '⎘ Copy Name',
-              action: () => { navigator.clipboard && navigator.clipboard.writeText(contextMenu.series.name); pushToast && pushToast('Approved Series', 'Name copied'); setContextMenu(null); }
-            }, {
-              label: '⬡ Search AniList',
-              action: () => { window.open(`https://anilist.co/search/anime?search=${encodeURIComponent(contextMenu.series.name)}`, '_blank'); setContextMenu(null); }
-            }, {
-              label: '⬡ Search AniDB',
-              action: () => { window.open(`https://anidb.net/search/fulltext/?q=${encodeURIComponent(contextMenu.series.name)}&noalias=1&cat.anime=1`, '_blank'); setContextMenu(null); }
-            }, {
-              label: '⬡ Search TMDB',
-              action: () => { window.open(`https://www.themoviedb.org/search?query=${encodeURIComponent(contextMenu.series.name)}`, '_blank'); setContextMenu(null); }
-            }].map((item, i) =>
-              item === null
-                ? <div key={i} style={{ borderTop: '1px solid var(--border, #444)', margin: '3px 0' }} />
-                : <button
-                    key={i}
-                    onClick={item.action}
-                    style={{
-                      display: 'block', width: '100%', padding: '7px 14px',
-                      textAlign: 'left', background: 'transparent', border: 'none',
-                      color: 'var(--text, #e0e0e0)', fontSize: 13, cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'var(--hover-bg, rgba(255,255,255,0.08))'}
-                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                  >{item.label}</button>
-            )}
+            <div className="context-menu-items">
+              {[{
+                label: '↺ Refresh Image',
+                action: () => { refreshSeries(contextMenu.series, contextMenu.outputKey); setContextMenu(null); }
+              }, null, {
+                label: '⎘ Copy Name',
+                action: () => { navigator.clipboard && navigator.clipboard.writeText(contextMenu.series.name); pushToast && pushToast('Approved Series', 'Name copied'); setContextMenu(null); }
+              }, {
+                label: '⬡ Search AniList',
+                action: () => { window.open(`https://anilist.co/search/anime?search=${encodeURIComponent(contextMenu.series.name)}`, '_blank'); setContextMenu(null); }
+              }, {
+                label: '⬡ Search AniDB',
+                action: () => { window.open(`https://anidb.net/search/fulltext/?q=${encodeURIComponent(contextMenu.series.name)}&noalias=1&cat.anime=1`, '_blank'); setContextMenu(null); }
+              }, {
+                label: '⬡ Search TMDB',
+                action: () => { window.open(`https://www.themoviedb.org/search?query=${encodeURIComponent(contextMenu.series.name)}`, '_blank'); setContextMenu(null); }
+              }].map((item, i) =>
+                item === null
+                  ? <div key={i} className="context-menu-divider" />
+                  : <button key={i} className="context-menu-item" onClick={item.action}>{item.label}</button>
+              )}
+            </div>
           </div>
         )}
 
