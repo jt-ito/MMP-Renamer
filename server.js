@@ -8722,13 +8722,80 @@ async function fetchAniListSeriesArtwork(title) {
 
 async function fetchAniListSeriesArtworkWithCandidates(candidates) {
   try {
-    const queue = Array.isArray(candidates) ? candidates : [];
-    for (const candidate of queue) {
-      const lookup = normalizeApprovedSeriesLookupTitle(candidate);
-      if (!lookup) continue;
+    const queue = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
+    const tried = new Set();
+
+    const tryLookup = async (raw, source) => {
+      const lookup = (normalizeApprovedSeriesLookupTitle(raw) || String(raw || '').trim());
+      if (!lookup) return null;
+      const key = lookup.toLowerCase();
+      if (tried.has(key)) return null;
+      tried.add(key);
+      try { appendLog(`APPROVED_SERIES_ANILIST_SEARCH title=${lookup.slice(0,80)} source=${source}`); } catch (e) {}
       const result = await fetchAniListSeriesArtwork(lookup);
-      if (result && result.imageUrl) return result;
+      if (result && result.imageUrl) {
+        try { appendLog(`APPROVED_SERIES_ANILIST_HIT title=${lookup.slice(0,80)} source=${source}`); } catch (e) {}
+        return result;
+      }
+      try { appendLog(`APPROVED_SERIES_ANILIST_MISS title=${lookup.slice(0,80)} source=${source}`); } catch (e) {}
+      return null;
+    };
+
+    // Step 1: try each candidate as-is
+    for (const candidate of queue) {
+      const result = await tryLookup(candidate, 'candidate');
+      if (result) return result;
     }
+
+    // Step 2: subtitle-stripped and word-prefix variants.
+    //   "Hanamonogatari Suruga Devil" → "Hanamonogatari Suruga" → "Hanamonogatari"
+    //   "Title: Subtitle"             → "Title"
+    const prefixVariants = [];
+    const seenPrefixes = new Set(tried); // don't re-try what step 1 already tried
+    for (const candidate of queue) {
+      const base = normalizeApprovedSeriesLookupTitle(candidate) || String(candidate || '').trim();
+      if (!base) continue;
+
+      // Strip common subtitle separators (colon, em-dash, en-dash, spaced hyphen)
+      const colonStripped = base.replace(/\s*[:–—]\s*.+$/, '').trim();
+      if (colonStripped && colonStripped !== base && !seenPrefixes.has(colonStripped.toLowerCase())) {
+        seenPrefixes.add(colonStripped.toLowerCase());
+        prefixVariants.push(colonStripped);
+      }
+
+      // Drop trailing words one at a time (up to 4 drops for very long subtitle-style names)
+      const words = base.split(/\s+/);
+      for (let drop = 1; drop <= Math.min(4, words.length - 1); drop++) {
+        const prefix = words.slice(0, words.length - drop).join(' ');
+        if (prefix && !seenPrefixes.has(prefix.toLowerCase())) {
+          seenPrefixes.add(prefix.toLowerCase());
+          prefixVariants.push(prefix);
+        }
+      }
+    }
+
+    for (const prefix of prefixVariants) {
+      const result = await tryLookup(prefix, 'prefix');
+      if (result) return result;
+    }
+
+    // Step 3: AniList synonym expansion — query AniList with the best candidate we have
+    //   to retrieve official English, romaji and synonym titles, then try those.
+    //   If step 1+2 found nothing, the original query may have matched a different series
+    //   and returned synonyms we can use as better search keys.
+    const synonymSeed = [...tried].slice(0, 2); // use the titles we already queried
+    if (synonymSeed.length > 0) {
+      const synonyms = await getAniListSynonymsForTitle(synonymSeed);
+      const novelSynonyms = synonyms.filter(s => s && !tried.has(String(s).toLowerCase()));
+      if (novelSynonyms.length > 0) {
+        try { appendLog(`APPROVED_SERIES_ANILIST_SYNONYM_EXPAND count=${novelSynonyms.length} first=${String(novelSynonyms[0]).slice(0,60)}`); } catch (e) {}
+        for (const synonym of novelSynonyms.slice(0, 5)) {
+          const result = await tryLookup(synonym, 'synonym');
+          if (result) return result;
+        }
+      }
+    }
+
   } catch (e) { /* ignore */ }
   return null;
 }
