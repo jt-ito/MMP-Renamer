@@ -2848,9 +2848,6 @@ export default function App() {
                 </>
               )}
             </div>
-            {/* Removed duplicate Rescan button per request; keep Refresh metadata */}
-            <button className={"btn-ghost" + (!(lastLibraryId || (scanMeta && scanMeta.libraryId)) ? ' disabled' : '')} onClick={async () => { if (!(lastLibraryId || (scanMeta && scanMeta.libraryId))) return; pushToast && pushToast('Refresh','Server-side refresh started'); try { await refreshScan(scanMeta ? scanMeta.id : lastLibraryId); pushToast && pushToast('Refresh','Server-side refresh complete'); } catch (e) { pushToast && pushToast('Refresh','Refresh failed') } }} title="Refresh metadata server-side" disabled={!(lastLibraryId || (scanMeta && scanMeta.libraryId))}><IconRefresh/> <span>Refresh metadata</span></button>
-            <button className="btn-ghost" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}>Theme: {theme === 'dark' ? 'Dark' : 'Light'}</button>
             <button className="btn-ghost" onClick={() => (window.location.hash = route === '#/settings' ? '#/' : '#/settings')}>Settings</button>
             {auth && auth.role === 'admin' && (
               <button className="btn-ghost" onClick={() => (window.location.hash = route === '#/hidden' ? '#/' : '#/hidden')}>Hidden items</button>
@@ -2887,7 +2884,7 @@ export default function App() {
             </section>
           ) : route === '#/settings' ? (
             <section className="list settings-page">
-              <Settings pushToast={pushToast} />
+              <Settings pushToast={pushToast} theme={theme} setTheme={setTheme} />
             </section>
           ) : route === '#/hidden' ? (
             <section className="list">

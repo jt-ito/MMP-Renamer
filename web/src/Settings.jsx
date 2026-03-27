@@ -71,7 +71,7 @@ function renderPreviewSample(template) {
   } catch (e) { return template }
 }
 
-export default function Settings({ pushToast }){
+export default function Settings({ pushToast, theme, setTheme }){
   // keys: tmdb for TMDb (keep backward compatibility with tvdb_api_key)
   const [tmdbKey, setTmdbKey] = useState('')
   const [anilistKey, setAnilistKey] = useState('')
@@ -829,6 +829,7 @@ export default function Settings({ pushToast }){
   <div className="settings-actions">
           <button className={"btn-save" + (dirty ? '' : ' disabled')} onClick={save} disabled={!dirty}>Save</button>
           <button className="btn-ghost" onClick={clearAll}>Clear</button>
+          {setTheme && <button className="btn-ghost" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}>Theme: {theme === 'dark' ? 'Dark' : 'Light'}</button>}
         </div>
 
         {/* Change password section */}
