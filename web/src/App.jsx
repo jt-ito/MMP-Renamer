@@ -797,6 +797,24 @@ export default function App() {
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 6000)
   }
 
+  // Update an existing toast in-place (for progress updates) or create one if it doesn't exist yet.
+  // The toast stays until explicitly dismissed — call setToasts to remove it when done.
+  function upsertToast(stableId, title, message) {
+    setToasts(t => {
+      const idx = t.findIndex(x => x.id === stableId)
+      if (idx >= 0) {
+        const updated = [...t]
+        updated[idx] = { ...updated[idx], title, message }
+        return updated
+      }
+      return [...t, { id: stableId, title, message, ts: new Date().toISOString() }]
+    })
+  }
+
+  function removeToast(stableId) {
+    setToasts(t => t.filter(x => x.id !== stableId))
+  }
+
   // On mount, verify cached paths to remove any stale entries from previous runs
   useEffect(() => { verifyCachePaths().catch(()=>{}) }, [])
   // Poll for hide events so client can force-refresh affected scans/items even if hide was initiated elsewhere
@@ -1966,13 +1984,15 @@ export default function App() {
       const jobId = r.data && r.data.jobId
       if (!jobId) throw new Error('no jobId returned')
       // Poll in background — does not block UI and survives page reload (server keeps running)
+      const progressToastId = `approve-job-${jobId}`
       pollJob(jobId, {
         onProgress: (job) => {
           const done = job.processedItems || 0
           const total = job.totalItems || 0
-          if (total > 1) pushToast && pushToast('Approve', `Approving… ${done}/${total}`, { id: `approve-job-${jobId}`, sticky: true, spinner: true })
+          if (total > 1) upsertToast(progressToastId, 'Approve', `Approving… ${done}/${total}`)
         }
       }).then(job => {
+        removeToast(progressToastId)
         const applied = (job.results || []).filter(r => r.status === 'hardlinked').length
         const errors  = (job.results || []).filter(r => r.status === 'error').length
         if (job.status === 'error') {
@@ -1983,6 +2003,7 @@ export default function App() {
           pushToast && pushToast('Approve', `Approved ${applied} item(s)`)
         }
       }).catch(e => {
+        removeToast(progressToastId)
         pushToast && pushToast('Approve', `Approve job error: ${e && e.message ? e.message : String(e)}`)
       })
     } catch (e) {
@@ -1997,13 +2018,15 @@ export default function App() {
       const r = await axios.post(API('/jobs/bulk-rescan'), { paths, force, skipAnimeProviders })
       const jobId = r.data && r.data.jobId
       if (!jobId) throw new Error('no jobId returned')
+      const progressToastId = `rescan-job-${jobId}`
       pollJob(jobId, {
         onProgress: (job) => {
           const done = job.processedItems || 0
           const total = job.totalItems || 0
-          if (total > 1) pushToast && pushToast('Rescan', `Rescanning… ${done}/${total}`, { id: `rescan-job-${jobId}`, sticky: true, spinner: true })
+          if (total > 1) upsertToast(progressToastId, 'Rescan', `Rescanning… ${done}/${total}`)
         }
       }).then(async (job) => {
+        removeToast(progressToastId)
         const ok = (job.results || []).filter(r => r.status === 'ok').length
         const errors = (job.results || []).filter(r => r.status === 'error').length
         if (job.status === 'error') {
@@ -2016,6 +2039,7 @@ export default function App() {
         // Refresh enrich cache for all processed paths to pick up new metadata in UI
         try { await refreshEnrichForPaths(paths) } catch (e) {}
       }).catch(e => {
+        removeToast(progressToastId)
         pushToast && pushToast('Rescan', `Rescan job error: ${e && e.message ? e.message : String(e)}`)
       })
     } catch (e) {
@@ -2579,8 +2603,8 @@ export default function App() {
         onChange={e => setSearchQuery(e.target.value)}
         disabled={searchDisabled}
       />
-      <button className='btn-ghost btn-search' onClick={() => doSearch(searchQuery)} disabled={searchDisabled || searching}>{searching ? <Spinner/> : 'Search'}</button>
-      <button className='btn-ghost btn-clear' onClick={() => doSearch('')} title='Clear search' disabled={searchDisabled}>Clear</button>
+      <button className='btn-ghost btn-search' style={{ display: selectMode && selectedCount ? 'none' : '' }} onClick={() => doSearch(searchQuery)} disabled={searchDisabled || searching}>{searching ? <Spinner/> : 'Search'}</button>
+      <button className='btn-ghost btn-clear' style={{ display: selectMode && selectedCount ? 'none' : '' }} onClick={() => doSearch('')} title='Clear search' disabled={searchDisabled}>Clear</button>
     </div>
   ) : null}
         {/* Global bulk-enrich indicator (shown when many enrich operations are running) */}
@@ -2595,6 +2619,7 @@ export default function App() {
             <div className="header-actions">
             <button
               className={"btn-save" + (selectMode && selectedCount ? ' shifted' : '')}
+              style={{ display: selectMode && selectedCount ? 'none' : '' }}
               onClick={() => {
                 if (scanning) { pushToast && pushToast('Scan','Scan already in progress'); return }
                 setConfirmFullScanOpen(true)
@@ -2608,6 +2633,7 @@ export default function App() {
             </button>
             <button
               className="btn-ghost btn-incremental"
+              style={{ display: selectMode && selectedCount ? 'none' : '' }}
               onClick={() => {
                 if (scanning) { pushToast && pushToast('Scan','Scan already in progress'); return }
                 void triggerScan(libraries[0], { mode: 'incremental' }).catch(() => {})
