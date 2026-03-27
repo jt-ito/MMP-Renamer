@@ -1715,12 +1715,7 @@ export default function App() {
       const serverKey = resp && resp.data && resp.data.path ? resp.data.path : originalPath
       if (serverKey && serverKey !== originalPath) touchedLoading.add(serverKey)
       const returned = resp && resp.data && (resp.data.enrichment || resp.data) ? (resp.data.enrichment || resp.data) : null
-      let authoritative = null
-      try {
-        const er = await axios.get(API('/enrich'), { params: { path: serverKey } }).catch(() => null)
-        authoritative = er && er.data && (er.data.enrichment || er.data) ? (er.data.enrichment || er.data) : null
-      } catch (e) { authoritative = null }
-      const enriched = authoritative ? normalizeEnrichResponse(authoritative) : (returned ? normalizeEnrichResponse(returned) : null)
+      const enriched = returned ? normalizeEnrichResponse(returned) : null
 
       if (enriched) {
         try { pendingHiddenRef.current.delete(serverKey) } catch (e) {}
@@ -1901,16 +1896,26 @@ export default function App() {
     // send plans to server; server will consult its configured scan_output_path to decide hardlink behavior
     try {
       const r = await axios.post(API('/rename/apply'), { plans, dryRun, outputFolder })
-      // After apply, refresh enrichment for each plan.fromPath so the UI reflects applied/hidden state immediately
+      // Optimistically update UI from the apply response instead of making N extra GET requests
       try {
-        const paths = (plans || []).map(p => p.fromPath).filter(Boolean)
-        // set per-item loading while refresh happens
-        const loadingMap = {}
-        for (const p of paths) loadingMap[p] = true
-  safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
-        await refreshEnrichForPaths(paths)
-        // clear loading flags
-  safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of paths) delete n[p]; return n })
+        const results = (r.data && r.data.results) ? r.data.results : []
+        const planByItemId = new Map((plans || []).map(p => [p.itemId, p]))
+        const appliedPaths = new Set()
+        for (const res of results) {
+          if (res.status === 'hardlinked' && res.itemId != null) {
+            const plan = planByItemId.get(res.itemId)
+            if (plan && plan.fromPath) appliedPaths.add(plan.fromPath)
+          }
+        }
+        if (appliedPaths.size > 0) {
+          setEnrichCache(prev => {
+            const n = { ...prev }
+            for (const p of appliedPaths) n[p] = Object.assign({}, n[p] || {}, { applied: true, hidden: true })
+            return n
+          })
+          setItems(prev => prev.filter(it => !appliedPaths.has(it.canonicalPath)))
+          setAllItems(prev => prev.filter(it => !appliedPaths.has(it.canonicalPath)))
+        }
       } catch (e) {
         // best-effort
       }
@@ -1919,6 +1924,105 @@ export default function App() {
       throw err
     }
   }
+
+  // ── Background job helpers ──────────────────────────────────────────────────
+  // Poll a server-side job until it finishes (or times out after 30 min).
+  async function pollJob(jobId, { onProgress } = {}) {
+    const INTERVAL = 1500
+    const TIMEOUT = 30 * 60 * 1000
+    const start = Date.now()
+    return new Promise((resolve, reject) => {
+      const t = setInterval(async () => {
+        try {
+          if (Date.now() - start > TIMEOUT) { clearInterval(t); reject(new Error('job poll timeout')); return }
+          const r = await axios.get(API(`/jobs/${jobId}`)).catch(() => null)
+          if (!r || !r.data || !r.data.job) return
+          const job = r.data.job
+          if (onProgress) onProgress(job)
+          if (job.status === 'done' || job.status === 'error') { clearInterval(t); resolve(job) }
+        } catch (e) { /* keep polling on transient errors */ }
+      }, INTERVAL)
+    })
+  }
+
+  // Submit an approve job and handle the full lifecycle (optimistic UI + toast on completion).
+  // Replaces the previewRename + applyRename two-step for bulk operations.
+  async function submitApproveJob(selItems, { outputFolder = null, useFilenameAsTitle = false, skipAnimeProviders } = {}) {
+    if (!selItems || !selItems.length) return
+    const paths = selItems.map(it => it.canonicalPath)
+    // Optimistic: remove items from UI immediately
+    setItems(prev => prev.filter(it => !paths.includes(it.canonicalPath)))
+    setAllItems(prev => prev.filter(it => !paths.includes(it.canonicalPath)))
+    setEnrichCache(prev => {
+      const n = { ...prev }
+      for (const p of paths) n[p] = Object.assign({}, n[p] || {}, { hidden: true })
+      return n
+    })
+    try {
+      const r = await axios.post(API('/jobs/approve'), {
+        items: selItems.map(it => ({ canonicalPath: it.canonicalPath })),
+        outputFolder, useFilenameAsTitle, skipAnimeProviders
+      })
+      const jobId = r.data && r.data.jobId
+      if (!jobId) throw new Error('no jobId returned')
+      // Poll in background — does not block UI and survives page reload (server keeps running)
+      pollJob(jobId, {
+        onProgress: (job) => {
+          const done = job.processedItems || 0
+          const total = job.totalItems || 0
+          if (total > 1) pushToast && pushToast('Approve', `Approving… ${done}/${total}`, { id: `approve-job-${jobId}`, sticky: true, spinner: true })
+        }
+      }).then(job => {
+        const applied = (job.results || []).filter(r => r.status === 'hardlinked').length
+        const errors  = (job.results || []).filter(r => r.status === 'error').length
+        if (job.status === 'error') {
+          pushToast && pushToast('Approve', `Approve failed: ${job.error || 'unknown error'}`)
+        } else if (errors) {
+          pushToast && pushToast('Approve', `Approved ${applied} item(s) (${errors} failed)`)
+        } else {
+          pushToast && pushToast('Approve', `Approved ${applied} item(s)`)
+        }
+      }).catch(e => {
+        pushToast && pushToast('Approve', `Approve job error: ${e && e.message ? e.message : String(e)}`)
+      })
+    } catch (e) {
+      pushToast && pushToast('Approve', `Approve failed: ${e && e.message ? e.message : String(e)}`)
+    }
+  }
+
+  // Submit a bulk-rescan job and handle lifecycle (no optimistic UI change — just metadata refresh).
+  async function submitBulkRescanJob(paths, { force = true, skipAnimeProviders } = {}) {
+    if (!paths || !paths.length) return
+    try {
+      const r = await axios.post(API('/jobs/bulk-rescan'), { paths, force, skipAnimeProviders })
+      const jobId = r.data && r.data.jobId
+      if (!jobId) throw new Error('no jobId returned')
+      pollJob(jobId, {
+        onProgress: (job) => {
+          const done = job.processedItems || 0
+          const total = job.totalItems || 0
+          if (total > 1) pushToast && pushToast('Rescan', `Rescanning… ${done}/${total}`, { id: `rescan-job-${jobId}`, sticky: true, spinner: true })
+        }
+      }).then(async (job) => {
+        const ok = (job.results || []).filter(r => r.status === 'ok').length
+        const errors = (job.results || []).filter(r => r.status === 'error').length
+        if (job.status === 'error') {
+          pushToast && pushToast('Rescan', `Rescan failed: ${job.error || 'unknown error'}`)
+        } else if (errors) {
+          pushToast && pushToast('Rescan', `Rescanned ${ok} item(s) (${errors} failed)`)
+        } else {
+          pushToast && pushToast('Rescan', `Rescanned ${ok} item(s)`)
+        }
+        // Refresh enrich cache for all processed paths to pick up new metadata in UI
+        try { await refreshEnrichForPaths(paths) } catch (e) {}
+      }).catch(e => {
+        pushToast && pushToast('Rescan', `Rescan job error: ${e && e.message ? e.message : String(e)}`)
+      })
+    } catch (e) {
+      pushToast && pushToast('Rescan', `Rescan failed: ${e && e.message ? e.message : String(e)}`)
+    }
+  }
+  // ───────────────────────────────────────────────────────────────────────────
 
   async function refreshScan(scanId, silent = false, options = {}) {
     if (!scanId) throw new Error('no scan id')
@@ -2541,16 +2645,14 @@ export default function App() {
                         const selectedFolderPath = selection.path ?? null
                         const useFilenameAsTitle = selection.applyAsFilename ?? false
                         
-                        pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
-                        const plans = await previewRename(selItems, undefined, { useFilenameAsTitle })
-                        await applyRename(plans, false, selectedFolderPath)
+                        pushToast && pushToast('Approve', `Queuing ${selItems.length} item(s) for approval...`)
+                        await submitApproveJob(selItems, { outputFolder: selectedFolderPath, useFilenameAsTitle })
                         setSelected(prev => {
                           if (!prev) return {}
                           const next = { ...prev }
                           for (const p of selectedPaths) delete next[p]
                           return next
                         })
-                        pushToast && pushToast('Approve', 'Approve completed')
                       } catch (e) { pushToast && pushToast('Approve', 'Approve failed') }
                     }}
                     onContextMenu={(ev) => {
@@ -2882,32 +2984,8 @@ export default function App() {
                 } else if (contextMenu.type === 'bulk') {
                   const selectedPaths = contextMenu.selectedPaths
                   if (!selectedPaths.length) return
-                  pushToast && pushToast('Rescan', `Rescanning ${selectedPaths.length} items (TV/Movie mode)...`)
-                  const loadingMap = {}
-                  for (const p of selectedPaths) loadingMap[p] = true
-                  safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
-                  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
-                  const RATE_DELAY_MS = 350
-                  let successCount = 0
-                  const failed = []
-                  for (let i = 0; i < selectedPaths.length; i++) {
-                    const path = selectedPaths[i]
-                    try {
-                      const result = await enrichOne({ canonicalPath: path }, true, true)
-                      if (result) successCount += 1
-                      else failed.push(path)
-                    } catch (err) {
-                      failed.push(path)
-                    }
-                    if (i < selectedPaths.length - 1) await sleep(RATE_DELAY_MS)
-                  }
-                  safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
-                  const failureCount = failed.length
-                  if (failureCount) {
-                    pushToast && pushToast('Rescan', `Rescanned ${successCount}/${selectedPaths.length} items (${failureCount} failed).`)
-                  } else {
-                    pushToast && pushToast('Rescan', `Rescanned ${selectedPaths.length} items.`)
-                  }
+                  pushToast && pushToast('Rescan', `Queuing ${selectedPaths.length} item(s) for rescan (TV/Movie mode)...`)
+                  await submitBulkRescanJob(selectedPaths, { force: true, skipAnimeProviders: true })
                 } else if (contextMenu.type === 'approve') {
                   const selectedPaths = contextMenu.selectedPaths
                   if (!selectedPaths.length) return
@@ -2918,16 +2996,14 @@ export default function App() {
                     if (!selection || selection.cancelled) return
                     const selectedFolderPath = selection.path ?? null
                     const useFilenameAsTitle = selection.applyAsFilename ?? false
-                    pushToast && pushToast('Approve', `Approving ${selItems.length} items (TV/Movie mode)...`)
-                    const plans = await previewRename(selItems, undefined, { useFilenameAsTitle, skipAnimeProviders: true })
-                    await applyRename(plans, false, selectedFolderPath)
+                    pushToast && pushToast('Approve', `Queuing ${selItems.length} item(s) for approval (TV/Movie mode)...`)
+                    await submitApproveJob(selItems, { outputFolder: selectedFolderPath, useFilenameAsTitle, skipAnimeProviders: true })
                     setSelected(prev => {
                       if (!prev) return {}
                       const next = { ...prev }
                       for (const p of selectedPaths) delete next[p]
                       return next
                     })
-                    pushToast && pushToast('Approve', 'Approve completed')
                   } catch (err) {
                     pushToast && pushToast('Approve', 'Approve failed')
                   }
@@ -2947,32 +3023,8 @@ export default function App() {
                 } else if (contextMenu.type === 'bulk') {
                   const selectedPaths = contextMenu.selectedPaths
                   if (!selectedPaths.length) return
-                  pushToast && pushToast('Rescan', `Rescanning ${selectedPaths.length} items (Anime mode)...`)
-                  const loadingMap = {}
-                  for (const p of selectedPaths) loadingMap[p] = true
-                  safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
-                  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
-                  const RATE_DELAY_MS = 350
-                  let successCount = 0
-                  const failed = []
-                  for (let i = 0; i < selectedPaths.length; i++) {
-                    const path = selectedPaths[i]
-                    try {
-                      const result = await enrichOne({ canonicalPath: path }, true, false)
-                      if (result) successCount += 1
-                      else failed.push(path)
-                    } catch (err) {
-                      failed.push(path)
-                    }
-                    if (i < selectedPaths.length - 1) await sleep(RATE_DELAY_MS)
-                  }
-                  safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
-                  const failureCount = failed.length
-                  if (failureCount) {
-                    pushToast && pushToast('Rescan', `Rescanned ${successCount}/${selectedPaths.length} items (${failureCount} failed).`)
-                  } else {
-                    pushToast && pushToast('Rescan', `Rescanned ${selectedPaths.length} items.`)
-                  }
+                  pushToast && pushToast('Rescan', `Queuing ${selectedPaths.length} item(s) for rescan (Anime mode)...`)
+                  await submitBulkRescanJob(selectedPaths, { force: true, skipAnimeProviders: false })
                 } else if (contextMenu.type === 'approve') {
                   const selectedPaths = contextMenu.selectedPaths
                   if (!selectedPaths.length) return
@@ -2983,16 +3035,14 @@ export default function App() {
                     if (!selection || selection.cancelled) return
                     const selectedFolderPath = selection.path ?? null
                     const useFilenameAsTitle = selection.applyAsFilename ?? false
-                    pushToast && pushToast('Approve', `Approving ${selItems.length} items (Anime mode)...`)
-                    const plans = await previewRename(selItems, undefined, { useFilenameAsTitle, skipAnimeProviders: false })
-                    await applyRename(plans, false, selectedFolderPath)
+                    pushToast && pushToast('Approve', `Queuing ${selItems.length} item(s) for approval (Anime mode)...`)
+                    await submitApproveJob(selItems, { outputFolder: selectedFolderPath, useFilenameAsTitle, skipAnimeProviders: false })
                     setSelected(prev => {
                       if (!prev) return {}
                       const next = { ...prev }
                       for (const p of selectedPaths) delete next[p]
                       return next
                     })
-                    pushToast && pushToast('Approve', 'Approve completed')
                   } catch (err) {
                     pushToast && pushToast('Approve', 'Approve failed')
                   }
@@ -3014,50 +3064,21 @@ export default function App() {
                     const selectedPaths = contextMenu.selectedPaths
                     console.log('[Approve Context] selectedPaths:', selectedPaths)
                     if (!selectedPaths.length) return
-                    
-                    // First rescan in TV/Movie mode
-                    pushToast && pushToast('Approve', `Rescanning ${selectedPaths.length} items (TV/Movie mode)...`)
-                    const loadingMap = {}
-                    for (const p of selectedPaths) loadingMap[p] = true
-                    safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
-                    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
-                    const RATE_DELAY_MS = 350
-                    let successCount = 0
-                    const failed = []
-                    for (let i = 0; i < selectedPaths.length; i++) {
-                      const path = selectedPaths[i]
-                      try {
-                        const result = await enrichOne({ canonicalPath: path }, true, true)
-                        if (result) successCount += 1
-                        else failed.push(path)
-                      } catch (err) {
-                        failed.push(path)
-                      }
-                      if (i < selectedPaths.length - 1) await sleep(RATE_DELAY_MS)
-                    }
-                    safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
-                    
-                    // Then approve
-                    try {
-                      const selItems = items.filter(it => selectedPaths.includes(it.canonicalPath))
-                      if (!selItems.length) return
-                      const selection = await selectOutputFolder(selectedPaths)
-                      if (!selection || selection.cancelled) return
-                      const selectedFolderPath = selection.path ?? null
-                      const useFilenameAsTitle = selection.applyAsFilename ?? false
-                      pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
-                      const plans = await previewRename(selItems, undefined, { useFilenameAsTitle, skipAnimeProviders: true })
-                      await applyRename(plans, false, selectedFolderPath)
-                      setSelected(prev => {
-                        if (!prev) return {}
-                        const next = { ...prev }
-                        for (const p of selectedPaths) delete next[p]
-                        return next
-                      })
-                      pushToast && pushToast('Approve', 'Approve completed')
-                    } catch (err) {
-                      pushToast && pushToast('Approve', 'Approve failed')
-                    }
+                    const selection = await selectOutputFolder(selectedPaths)
+                    if (!selection || selection.cancelled) return
+                    const selectedFolderPath = selection.path ?? null
+                    const useFilenameAsTitle = selection.applyAsFilename ?? false
+                    // Rescan + approve as a single server-side job that survives browser close
+                    pushToast && pushToast('Approve', `Queuing ${selectedPaths.length} item(s) for rescan + approve (TV/Movie mode)...`)
+                    await submitBulkRescanJob(selectedPaths, { force: true, skipAnimeProviders: true })
+                    const selItems = selectedPaths.map(p => ({ canonicalPath: p }))
+                    await submitApproveJob(selItems, { outputFolder: selectedFolderPath, useFilenameAsTitle, skipAnimeProviders: true })
+                    setSelected(prev => {
+                      if (!prev) return {}
+                      const next = { ...prev }
+                      for (const p of selectedPaths) delete next[p]
+                      return next
+                    })
                   }}
                 >
                   TV/Movie mode (rescan + approve)
@@ -3071,50 +3092,21 @@ export default function App() {
                     const selectedPaths = contextMenu.selectedPaths
                     console.log('[Approve Context] selectedPaths:', selectedPaths)
                     if (!selectedPaths.length) return
-                    
-                    // First rescan in Anime mode
-                    pushToast && pushToast('Approve', `Rescanning ${selectedPaths.length} items (Anime mode)...`)
-                    const loadingMap = {}
-                    for (const p of selectedPaths) loadingMap[p] = true
-                    safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
-                    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
-                    const RATE_DELAY_MS = 350
-                    let successCount = 0
-                    const failed = []
-                    for (let i = 0; i < selectedPaths.length; i++) {
-                      const path = selectedPaths[i]
-                      try {
-                        const result = await enrichOne({ canonicalPath: path }, true, false)
-                        if (result) successCount += 1
-                        else failed.push(path)
-                      } catch (err) {
-                        failed.push(path)
-                      }
-                      if (i < selectedPaths.length - 1) await sleep(RATE_DELAY_MS)
-                    }
-                    safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
-                    
-                    // Then approve
-                    try {
-                      const selItems = items.filter(it => selectedPaths.includes(it.canonicalPath))
-                      if (!selItems.length) return
-                      const selection = await selectOutputFolder(selectedPaths)
-                      if (!selection || selection.cancelled) return
-                      const selectedFolderPath = selection.path ?? null
-                      const useFilenameAsTitle = selection.applyAsFilename ?? false
-                      pushToast && pushToast('Approve', `Approving ${selItems.length} items...`)
-                      const plans = await previewRename(selItems, undefined, { useFilenameAsTitle, skipAnimeProviders: false })
-                      await applyRename(plans, false, selectedFolderPath)
-                      setSelected(prev => {
-                        if (!prev) return {}
-                        const next = { ...prev }
-                        for (const p of selectedPaths) delete next[p]
-                        return next
-                      })
-                      pushToast && pushToast('Approve', 'Approve completed')
-                    } catch (err) {
-                      pushToast && pushToast('Approve', 'Approve failed')
-                    }
+                    const selection = await selectOutputFolder(selectedPaths)
+                    if (!selection || selection.cancelled) return
+                    const selectedFolderPath = selection.path ?? null
+                    const useFilenameAsTitle = selection.applyAsFilename ?? false
+                    // Rescan + approve as a single server-side job that survives browser close
+                    pushToast && pushToast('Approve', `Queuing ${selectedPaths.length} item(s) for rescan + approve (Anime mode)...`)
+                    await submitBulkRescanJob(selectedPaths, { force: true, skipAnimeProviders: false })
+                    const selItems = selectedPaths.map(p => ({ canonicalPath: p }))
+                    await submitApproveJob(selItems, { outputFolder: selectedFolderPath, useFilenameAsTitle, skipAnimeProviders: false })
+                    setSelected(prev => {
+                      if (!prev) return {}
+                      const next = { ...prev }
+                      for (const p of selectedPaths) delete next[p]
+                      return next
+                    })
                   }}
                 >
                   Anime mode (rescan + approve)

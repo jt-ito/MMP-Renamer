@@ -6823,6 +6823,213 @@ app.get('/api/scan/:scanId/progress', requireAuth, (req, res) => {
   } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }) }
 })
 
+// Standalone plan generator — used by the preview route and the server-side approve job runner.
+// All req.session references are replaced with a plain `username` parameter.
+function generatePlanForItem(it, { username, effectiveOutput, applyFilenameAsTitle, template }) {
+    const fromPath = canonicalize(it.canonicalPath);
+    const key = fromPath;
+    const meta = enrichCache[fromPath] || {};
+  const rawTitle = (meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath));
+  let year = '';
+  try {
+    if (meta && (meta.year || (meta.extraGuess && meta.extraGuess.year))) {
+      year = meta.year || (meta.extraGuess && meta.extraGuess.year) || '';
+    } else if (meta && meta.provider && meta.provider.year) {
+      year = meta.provider.year;
+    } else {
+      year = extractYear(meta, fromPath) || '';
+    }
+  } catch (e) { year = '' }
+    const ext = path.extname(fromPath);
+    const filenameBase = sanitize(path.basename(fromPath, ext));
+  const userTemplate = (username && users[username] && users[username].settings && users[username].settings.rename_template) ? users[username].settings.rename_template : null;
+  const baseNameTemplate = template || userTemplate || serverSettings.rename_template || '{title}';
+    function pad(n){ return String(n).padStart(2,'0') }
+    const anidbRawEpisode = meta && meta.extraGuess && meta.extraGuess.anidb && meta.extraGuess.anidb.episodeNumberRaw;
+    const shouldUseAnidbRaw = anidbRawEpisode && /^[SCTPO]\d+$/i.test(String(anidbRawEpisode));
+    let epLabel = ''
+    if (meta && meta.episodeRange) {
+      epLabel = meta.season != null ? `S${pad(meta.season)}E${meta.episodeRange}` : `E${meta.episodeRange}`
+    } else if (shouldUseAnidbRaw) {
+      epLabel = meta.season != null ? `S${pad(meta.season)}E${String(anidbRawEpisode).toUpperCase()}` : `E${String(anidbRawEpisode).toUpperCase()}`
+    } else if (meta && meta.episode != null) {
+      epLabel = meta.season != null ? `S${pad(meta.season)}E${pad(meta.episode)}` : `E${pad(meta.episode)}`
+    }
+  let episodeTitleToken = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '';
+  let seasonToken = (meta && meta.season != null) ? String(meta.season) : '';
+  let episodeToken = (meta && meta.episode != null) ? String(meta.episode) : '';
+  let episodeRangeToken = (meta && meta.episodeRange) ? String(meta.episodeRange) : '';
+  const tmdbIdToken = (meta && meta.tmdb && meta.tmdb.raw && (meta.tmdb.raw.id || meta.tmdb.raw.seriesId)) ? String(meta.tmdb.raw.id || meta.tmdb.raw.seriesId) : '';
+  const isMovie = determineIsMovie(meta);
+  if (isMovie === true) {
+    epLabel = '';
+    episodeTitleToken = '';
+    seasonToken = '';
+    episodeToken = '';
+    episodeRangeToken = '';
+  }
+  const episodeTitleTokenFromMeta = (isMovie === true)
+    ? ''
+    : ((meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '');
+  const resolvedSeriesTitle = resolveSeriesTitle(meta, rawTitle, fromPath, episodeTitleTokenFromMeta, { preferExact: true });
+  const englishSeriesTitle = extractEnglishSeriesTitle(meta);
+  const renderBaseTitle = (isMovie === true)
+    ? (resolvedSeriesTitle || rawTitle)
+    : (englishSeriesTitle || resolvedSeriesTitle || rawTitle);
+  function cleanTitleForRender(baseTitle, epLabel, epTitle) {
+    try {
+      let cleaned = String(baseTitle || '').trim();
+      if (!cleaned) return '';
+      cleaned = cleaned.replace(/\s*[-–—:]+\s*S\d{1,2}E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
+      cleaned = cleaned.replace(/\s*[-–—:]+\s*E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
+      cleaned = cleaned.replace(/\s*[-–—:]+\s*Episode\s+\d+.*$/i, '');
+      return cleaned.trim();
+    } catch (e) {
+      return String(baseTitle || '').trim();
+    }
+  }
+  let episodeForTitle = '';
+  if (meta && meta.episode != null) {
+    if (shouldUseAnidbRaw) {
+      episodeForTitle = meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(anidbRawEpisode).toUpperCase()}` : `E${String(anidbRawEpisode).toUpperCase()}`;
+    } else {
+      episodeForTitle = meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`;
+    }
+  }
+  const title = cleanTitleForRender(renderBaseTitle, episodeForTitle, episodeTitleTokenFromMeta);
+  const templateYear = year ? String(year) : '';
+  const folderYear = (isMovie === true && templateYear) ? templateYear : '';
+  const folderBaseTitle = renderBaseTitle || title;
+  if (englishSeriesTitle || typeof isMovie === 'boolean') {
+    try {
+      const currentEnglish = meta && meta.seriesTitleEnglish ? String(meta.seriesTitleEnglish).trim() : null;
+      const needsEnglishUpdate = !currentEnglish || currentEnglish !== englishSeriesTitle;
+  const currentMovieFlag = (meta && typeof meta.isMovie === 'boolean') ? meta.isMovie : ((meta && meta.extraGuess && typeof meta.extraGuess.isMovie === 'boolean') ? meta.extraGuess.isMovie : null);
+      const needsMovieUpdate = typeof isMovie === 'boolean' && currentMovieFlag !== isMovie;
+      if (needsEnglishUpdate || needsMovieUpdate) {
+        const updatedExtra = meta && meta.extraGuess && typeof meta.extraGuess === 'object' ? Object.assign({}, meta.extraGuess) : {};
+  if (typeof isMovie === 'boolean') updatedExtra.isMovie = isMovie;
+        const cacheUpdate = Object.assign({}, meta, {
+          seriesTitleEnglish: englishSeriesTitle || currentEnglish || null,
+          seriesTitle: englishSeriesTitle || meta.seriesTitle || null,
+          seriesTitleExact: englishSeriesTitle || meta.seriesTitleExact || null,
+          isMovie: (typeof isMovie === 'boolean') ? isMovie : (typeof currentMovieFlag === 'boolean' ? currentMovieFlag : meta && meta.isMovie),
+          extraGuess: updatedExtra,
+        });
+        updateEnrichCacheInMemory(fromPath, cacheUpdate);
+        schedulePersistEnrichCache(100);
+      }
+    } catch (e) { /* best-effort cache update */ }
+  }
+  const seriesBase = englishSeriesTitle || (meta && (meta.seriesTitleEnglish || meta.seriesTitle)) || resolvedSeriesTitle || title || rawTitle || '';
+  const aliasResolved = getSeriesAlias(seriesBase);
+  let baseFolderName;
+  if (aliasResolved) {
+    baseFolderName = stripEpisodeArtifactsForFolder(String(aliasResolved).trim());
+  } else {
+    const shouldStripSeason = !(isMovie === true);
+    baseFolderName = stripEpisodeArtifactsForFolder(shouldStripSeason ? String(stripSeasonNumberSuffix(seriesBase)).trim() : String(seriesBase).trim());
+  }
+  if (!baseFolderName) baseFolderName = stripEpisodeArtifactsForFolder(path.basename(fromPath, path.extname(fromPath)) || rawTitle || title);
+  try { baseFolderName = titleCase(baseFolderName); } catch (e) {}
+  let sanitizedBaseFolder = sanitize(baseFolderName);
+  if (!sanitizedBaseFolder) {
+    const fallbackFolderTitle = stripEpisodeArtifactsForFolder(title) || stripEpisodeArtifactsForFolder(rawTitle) || 'Untitled';
+    sanitizedBaseFolder = sanitize(fallbackFolderTitle) || 'Untitled';
+  }
+  try { sanitizedBaseFolder = stripTrailingYear(sanitizedBaseFolder) } catch (e) {}
+  try {
+    const osKey = (username && users[username] && users[username].settings && users[username].settings.client_os) ? users[username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
+    const maxLen = getMaxFilenameLengthForOS(osKey) || 255;
+    if (sanitizedBaseFolder && sanitizedBaseFolder.length > maxLen) sanitizedBaseFolder = truncateFilenameComponent(sanitizedBaseFolder, maxLen);
+  } catch (e) {}
+  const titleFolder = folderYear ? `${sanitizedBaseFolder} (${folderYear})` : sanitizedBaseFolder;
+  const seasonFolder = (!isMovie && meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
+  const folder = applyFilenameAsTitle ? effectiveOutput : (seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder));
+  let nameWithoutExtRaw = null;
+  if (applyFilenameAsTitle && filenameBase) {
+    nameWithoutExtRaw = filenameBase;
+  } else if (meta && meta.provider && meta.provider.renderedName) {
+    let providerName = String(meta.provider.renderedName).replace(/\.[^/.]+$/, '');
+    try {
+      const shouldStripSeason = !(isMovie === true);
+      if (shouldStripSeason) {
+        const parts = providerName.split(/\s[-–—:]\s/);
+        if (parts && parts.length > 0) {
+          parts[0] = stripSeasonNumberSuffix(parts[0]);
+          providerName = parts.join(' - ');
+        } else {
+          providerName = stripSeasonNumberSuffix(providerName);
+        }
+      }
+      providerName = stripTrailingYear(providerName);
+    } catch (e) {}
+    if (isMovie === true) {
+      const y = String(templateYear || '').trim();
+      if (y) providerName = `${stripTrailingYear(providerName)} (${y})`;
+    } else {
+      providerName = ensureRenderedNameHasYear(providerName, templateYear);
+    }
+    try {
+      const hasEpisodeMeta = (isMovie !== true) && (meta && (meta.episode != null || meta.episodeRange));
+      const providerLower = String(providerName || '').toLowerCase();
+      const epLabelPresent = epLabel && providerLower.indexOf(String(epLabel).toLowerCase()) !== -1;
+      const epTitlePresent = episodeTitleToken && providerLower.indexOf(String(episodeTitleToken).toLowerCase()) !== -1;
+      const sxxMatch = /\bS\d{2}E\d{2}\b/i.test(providerName);
+      const exxMatch = /\bE\d{1,3}\b/i.test(providerName);
+      if (hasEpisodeMeta && !(epLabelPresent || epTitlePresent || sxxMatch || exxMatch)) {
+        nameWithoutExtRaw = null;
+      } else {
+        nameWithoutExtRaw = sanitize(providerName);
+      }
+    } catch (e) {
+      nameWithoutExtRaw = sanitize(providerName);
+    }
+  }
+  if (!nameWithoutExtRaw) {
+    const titleForFilename = (isMovie === true) ? title : stripSeasonNumberSuffix(title);
+    nameWithoutExtRaw = baseNameTemplate
+  .replace('{title}', sanitize(titleForFilename))
+      .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
+  .replace('{year}', sanitize(templateYear))
+      .replace('{epLabel}', sanitize(epLabel))
+      .replace('{episodeTitle}', sanitize(episodeTitleToken))
+      .replace('{season}', sanitize(seasonToken))
+      .replace('{episode}', sanitize(episodeToken))
+      .replace('{episodeRange}', sanitize(episodeRangeToken))
+  .replace('{tmdbId}', sanitize(tmdbIdToken));
+  }
+  if (!nameWithoutExtRaw && filenameBase) {
+    nameWithoutExtRaw = filenameBase;
+  }
+    const nameWithoutExt = String(nameWithoutExtRaw)
+      .replace(/\s*\(\s*\)\s*/g, '')
+      .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
+      .replace(/(^\s*-\s*)|(\s*-\s*$)/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    let truncatedNameWithoutExt = nameWithoutExt;
+    try {
+      const osKey = (username && users[username] && users[username].settings && users[username].settings.client_os) ? users[username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
+      const maxLen = getMaxFilenameLengthForOS(osKey) || 255;
+      const extLen = ext ? ext.length : 0;
+      const maxBasenameLen = Math.max(1, maxLen - extLen);
+      if (truncatedNameWithoutExt && truncatedNameWithoutExt.length > maxBasenameLen) {
+        truncatedNameWithoutExt = truncateFilenameComponent(truncatedNameWithoutExt, maxBasenameLen);
+      }
+    } catch (e) {}
+    const fileName = (truncatedNameWithoutExt + ext).trim();
+    let toPath;
+    if (effectiveOutput) {
+      const finalFileName = fileName.replace(/\\/g, '/');
+      toPath = path.join(folder, finalFileName).replace(/\\/g, '/');
+    } else {
+      toPath = path.join(path.dirname(fromPath), fileName).replace(/\\/g, '/');
+    }
+    const action = effectiveOutput ? 'hardlink' : (fromPath === toPath ? 'noop' : 'move');
+  return { itemId: it.id, fromPath, toPath, actions: [{ op: action }], templateUsed: baseNameTemplate };
+}
+
 // Rename preview (generate plan)
 app.post('/api/rename/preview', requireAuth, async (req, res) => {
   const { items, template, outputPath, useFilenameAsTitle, skipAnimeProviders } = req.body || {};
@@ -6927,286 +7134,15 @@ app.post('/api/rename/preview', requireAuth, async (req, res) => {
   
   // Wait for all enrichments to complete
   await Promise.all(enrichPromises);
-  
-  const plans = items.map(it => {
-    const fromPath = canonicalize(it.canonicalPath);
-    const key = fromPath;
-    const meta = enrichCache[fromPath] || {};
-  // prefer enrichment title (provider token) -> parsed/title/basename
-  const rawTitle = (meta && (meta.title || (meta.extraGuess && meta.extraGuess.title))) ? (meta.title || (meta.extraGuess && meta.extraGuess.title)) : path.basename(fromPath, path.extname(fromPath));
-  // Prefer explicit year fields on the enrichment entry; if missing, attempt to extract a year
-  // from available metadata (episode/season/series dates) via extractYear so filenames
-  // will include a year when provider metadata contains it.
-  let year = '';
-  try {
-    if (meta && (meta.year || (meta.extraGuess && meta.extraGuess.year))) {
-      year = meta.year || (meta.extraGuess && meta.extraGuess.year) || '';
-    } else if (meta && meta.provider && meta.provider.year) {
-      year = meta.provider.year;
-    } else {
-      year = extractYear(meta, fromPath) || '';
-    }
-  } catch (e) { year = '' }
-    const ext = path.extname(fromPath);
-    const filenameBase = sanitize(path.basename(fromPath, ext));
-  // support {year} token in template; choose effective template in order: request -> user setting -> server setting -> default
-  const userTemplate = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.rename_template) ? users[req.session.username].settings.rename_template : null;
-  const baseNameTemplate = template || userTemplate || serverSettings.rename_template || '{title}';
-    // compute epLabel from enrichment metadata
-    function pad(n){ return String(n).padStart(2,'0') }
-    
-    // Check if we have an AniDB raw episode number that should be preserved (like "S2", "C1", "T1")
-    const anidbRawEpisode = meta && meta.extraGuess && meta.extraGuess.anidb && meta.extraGuess.anidb.episodeNumberRaw;
-    const shouldUseAnidbRaw = anidbRawEpisode && /^[SCTPO]\d+$/i.test(String(anidbRawEpisode));
-    
-    try {
-      if (meta && meta.extraGuess && meta.extraGuess.anidb) {
-        console.log('[DEBUG] AniDB raw episode check:', {
-          hasAnidb: true,
-          episodeNumberRaw: meta.extraGuess.anidb.episodeNumberRaw,
-          anidbRawEpisode,
-          shouldUseAnidbRaw,
-          metaEpisode: meta.episode,
-          metaSeason: meta.season
-        });
-      }
-    } catch (e) {}
-    
-    let epLabel = ''
-    if (meta && meta.episodeRange) {
-      epLabel = meta.season != null ? `S${pad(meta.season)}E${meta.episodeRange}` : `E${meta.episodeRange}`
-    } else if (shouldUseAnidbRaw) {
-      // Use AniDB's raw episode format (S2, C1, etc.) with season 0 prefix
-      epLabel = meta.season != null ? `S${pad(meta.season)}E${String(anidbRawEpisode).toUpperCase()}` : `E${String(anidbRawEpisode).toUpperCase()}`
-    } else if (meta && meta.episode != null) {
-      epLabel = meta.season != null ? `S${pad(meta.season)}E${pad(meta.episode)}` : `E${pad(meta.episode)}`
-    }
-  let episodeTitleToken = (meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '';
 
-  // Support extra template tokens: {season}, {episode}, {episodeRange}, {tmdbId}
-  let seasonToken = (meta && meta.season != null) ? String(meta.season) : '';
-  let episodeToken = (meta && meta.episode != null) ? String(meta.episode) : '';
-  let episodeRangeToken = (meta && meta.episodeRange) ? String(meta.episodeRange) : '';
-  const tmdbIdToken = (meta && meta.tmdb && meta.tmdb.raw && (meta.tmdb.raw.id || meta.tmdb.raw.seriesId)) ? String(meta.tmdb.raw.id || meta.tmdb.raw.seriesId) : '';
-  const isMovie = determineIsMovie(meta);
-  if (isMovie === true) {
-    epLabel = '';
-    episodeTitleToken = '';
-    seasonToken = '';
-    episodeToken = '';
-    episodeRangeToken = '';
-  }
-
-  const episodeTitleTokenFromMeta = (isMovie === true)
-    ? ''
-    : ((meta && (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle))) ? (meta.episodeTitle || (meta.extraGuess && meta.extraGuess.episodeTitle)) : '');
-  const resolvedSeriesTitle = resolveSeriesTitle(meta, rawTitle, fromPath, episodeTitleTokenFromMeta, { preferExact: true });
-  const englishSeriesTitle = extractEnglishSeriesTitle(meta);
-  const renderBaseTitle = (isMovie === true)
-    ? (resolvedSeriesTitle || rawTitle)
-    : (englishSeriesTitle || resolvedSeriesTitle || rawTitle);
-  
-  // Helper function to clean up title for rendering - strips episode artifacts but preserves full series title including subtitles
-  function cleanTitleForRender(baseTitle, epLabel, epTitle) {
-    try {
-      let cleaned = String(baseTitle || '').trim();
-      if (!cleaned) return '';
-      
-      // Remove episode markers like "- S01E01 - Episode Title" from end if present
-      // But preserve the full series title including any colons or subtitles
-      cleaned = cleaned.replace(/\s*[-–—:]+\s*S\d{1,2}E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
-      cleaned = cleaned.replace(/\s*[-–—:]+\s*E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
-      cleaned = cleaned.replace(/\s*[-–—:]+\s*Episode\s+\d+.*$/i, '');
-      
-      return cleaned.trim();
-    } catch (e) {
-      return String(baseTitle || '').trim();
-    }
-  }
-  
-  // Format episode number for title - use AniDB raw format if available
-  let episodeForTitle = '';
-  if (meta && meta.episode != null) {
-    if (shouldUseAnidbRaw) {
-      episodeForTitle = meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(anidbRawEpisode).toUpperCase()}` : `E${String(anidbRawEpisode).toUpperCase()}`;
-    } else {
-      episodeForTitle = meta.season != null ? `S${String(meta.season).padStart(2,'0')}E${String(meta.episode).padStart(2,'0')}` : `E${String(meta.episode).padStart(2,'0')}`;
-    }
-  }
-  
-  const title = cleanTitleForRender(renderBaseTitle, episodeForTitle, episodeTitleTokenFromMeta);
-  const templateYear = year ? String(year) : '';
-  const folderYear = (isMovie === true && templateYear) ? templateYear : '';
-  const folderBaseTitle = renderBaseTitle || title;
-  if (englishSeriesTitle || typeof isMovie === 'boolean') {
-    try {
-      const currentEnglish = meta && meta.seriesTitleEnglish ? String(meta.seriesTitleEnglish).trim() : null;
-      const needsEnglishUpdate = !currentEnglish || currentEnglish !== englishSeriesTitle;
-  const currentMovieFlag = (meta && typeof meta.isMovie === 'boolean') ? meta.isMovie : ((meta && meta.extraGuess && typeof meta.extraGuess.isMovie === 'boolean') ? meta.extraGuess.isMovie : null);
-      const needsMovieUpdate = typeof isMovie === 'boolean' && currentMovieFlag !== isMovie;
-      if (needsEnglishUpdate || needsMovieUpdate) {
-        const updatedExtra = meta && meta.extraGuess && typeof meta.extraGuess === 'object' ? Object.assign({}, meta.extraGuess) : {};
-  if (typeof isMovie === 'boolean') updatedExtra.isMovie = isMovie;
-        const cacheUpdate = Object.assign({}, meta, {
-          seriesTitleEnglish: englishSeriesTitle || currentEnglish || null,
-          seriesTitle: englishSeriesTitle || meta.seriesTitle || null,
-          seriesTitleExact: englishSeriesTitle || meta.seriesTitleExact || null,
-          isMovie: (typeof isMovie === 'boolean') ? isMovie : (typeof currentMovieFlag === 'boolean' ? currentMovieFlag : meta && meta.isMovie),
-          extraGuess: updatedExtra,
-        });
-        updateEnrichCacheInMemory(fromPath, cacheUpdate);
-        schedulePersistEnrichCache(100);
-      }
-    } catch (e) { /* best-effort cache update */ }
-  }
-  // Prefer explicit series titles from metadata when available.
-  // Allow an explicit alias to override the computed name (and skip stripping) so known sequels
-  // or numbered canonical titles (e.g. "Kaiju No. 8") are preserved as-is.
-  // Prefer englishSeriesTitle (which already has Season suffix stripped) over meta.seriesTitleEnglish
-  const seriesBase = englishSeriesTitle || (meta && (meta.seriesTitleEnglish || meta.seriesTitle)) || resolvedSeriesTitle || title || rawTitle || '';
-  const aliasResolved = getSeriesAlias(seriesBase);
-  let baseFolderName;
-  if (aliasResolved) {
-    baseFolderName = stripEpisodeArtifactsForFolder(String(aliasResolved).trim());
-  } else {
-    // For movies, don't strip Part N suffixes; only strip for TV series
-    const shouldStripSeason = !(isMovie === true);
-    baseFolderName = stripEpisodeArtifactsForFolder(shouldStripSeason ? String(stripSeasonNumberSuffix(seriesBase)).trim() : String(seriesBase).trim());
-  }
-  if (!baseFolderName) baseFolderName = stripEpisodeArtifactsForFolder(path.basename(fromPath, path.extname(fromPath)) || rawTitle || title);
-  // Normalize folder name to consistent title-case to prevent duplicates from capitalization variance
-  try { baseFolderName = titleCase(baseFolderName); } catch (e) {}
-  let sanitizedBaseFolder = sanitize(baseFolderName);
-  if (!sanitizedBaseFolder) {
-    const fallbackFolderTitle = stripEpisodeArtifactsForFolder(title) || stripEpisodeArtifactsForFolder(rawTitle) || 'Untitled';
-    sanitizedBaseFolder = sanitize(fallbackFolderTitle) || 'Untitled';
-  }
-  // Strip any trailing year from folder name - for movies it will be added back in standard format
-  try { sanitizedBaseFolder = stripTrailingYear(sanitizedBaseFolder) } catch (e) {}
-  
-  // Enforce per-OS filename limits on folder and file base names
-  try {
-    const osKey = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.client_os) ? users[req.session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
-    const maxLen = getMaxFilenameLengthForOS(osKey) || 255;
-    if (sanitizedBaseFolder && sanitizedBaseFolder.length > maxLen) sanitizedBaseFolder = truncateFilenameComponent(sanitizedBaseFolder, maxLen);
-  } catch (e) {}
-  const titleFolder = folderYear ? `${sanitizedBaseFolder} (${folderYear})` : sanitizedBaseFolder;
-  const seasonFolder = (!isMovie && meta && meta.season != null) ? `Season ${String(meta.season).padStart(2,'0')}` : '';
-  // When using filename as title, skip series/season folder structure and place at output root
-  const folder = applyFilenameAsTitle ? effectiveOutput : (seasonFolder ? path.join(effectiveOutput, titleFolder, seasonFolder) : path.join(effectiveOutput, titleFolder));
-
-  // Render template with preferência to enrichment-provided tokens.
-  // If the provider returned a renderedName (TMDb), prefer that exact rendered string for preview.
-  // However, if this seems to be an episodic item and the provider-rendered name does not
-  // contain episode information (SxxExx or episode title), prefer the user/template render
-  // so previews include per-episode labels and the apply step won't collapse multiple
-  // episodes into the same series-level filename.
-  let nameWithoutExtRaw = null;
-  if (applyFilenameAsTitle && filenameBase) {
-    nameWithoutExtRaw = filenameBase;
-  } else if (meta && meta.provider && meta.provider.renderedName) {
-    // strip extension and insert year if provider-rendered name is missing it
-    let providerName = String(meta.provider.renderedName).replace(/\.[^/.]+$/, '');
-    try {
-      // For TV series, strip season-like suffix; for movies, preserve Part N
-      const shouldStripSeason = !(isMovie === true);
-      if (shouldStripSeason) {
-        const parts = providerName.split(/\s[-–—:]\s/);
-        if (parts && parts.length > 0) {
-          parts[0] = stripSeasonNumberSuffix(parts[0]);
-          providerName = parts.join(' - ');
-        } else {
-          providerName = stripSeasonNumberSuffix(providerName);
-        }
-      }
-      // Strip any existing year before adding to prevent duplication
-      providerName = stripTrailingYear(providerName);
-    } catch (e) {}
-    if (isMovie === true) {
-      const y = String(templateYear || '').trim();
-      if (y) providerName = `${stripTrailingYear(providerName)} (${y})`;
-    } else {
-      providerName = ensureRenderedNameHasYear(providerName, templateYear);
-    }
-    // If this looks like a series-level rendered name (no episode tokens) but we
-    // have episode metadata, prefer the template rendering so each episode gets
-    // a unique filename.
-    try {
-      const hasEpisodeMeta = (isMovie !== true) && (meta && (meta.episode != null || meta.episodeRange));
-      const providerLower = String(providerName || '').toLowerCase();
-      const epLabelPresent = epLabel && providerLower.indexOf(String(epLabel).toLowerCase()) !== -1;
-      const epTitlePresent = episodeTitleToken && providerLower.indexOf(String(episodeTitleToken).toLowerCase()) !== -1;
-      const sxxMatch = /\bS\d{2}E\d{2}\b/i.test(providerName);
-      const exxMatch = /\bE\d{1,3}\b/i.test(providerName);
-      if (hasEpisodeMeta && !(epLabelPresent || epTitlePresent || sxxMatch || exxMatch)) {
-        // fall through to template-based rendering below
-        nameWithoutExtRaw = null;
-      } else {
-        // Sanitize to remove invalid filename characters (colons, etc)
-        nameWithoutExtRaw = sanitize(providerName);
-      }
-    } catch (e) {
-      // Sanitize to remove invalid filename characters (colons, etc)
-      nameWithoutExtRaw = sanitize(providerName);
-    }
-  }
-  
-  if (!nameWithoutExtRaw) {
-    // For movies, preserve Part N in the title; for TV shows, strip season suffixes
-    const titleForFilename = (isMovie === true) ? title : stripSeasonNumberSuffix(title);
-    nameWithoutExtRaw = baseNameTemplate
-  .replace('{title}', sanitize(titleForFilename))
-      .replace('{basename}', sanitize(path.basename(key, path.extname(key))))
-  .replace('{year}', sanitize(templateYear))
-      .replace('{epLabel}', sanitize(epLabel))
-      .replace('{episodeTitle}', sanitize(episodeTitleToken))
-      .replace('{season}', sanitize(seasonToken))
-      .replace('{episode}', sanitize(episodeToken))
-      .replace('{episodeRange}', sanitize(episodeRangeToken))
-  .replace('{tmdbId}', sanitize(tmdbIdToken));
-  }
-  if (!nameWithoutExtRaw && filenameBase) {
-    nameWithoutExtRaw = filenameBase;
-  }
-    // Clean up common artifact patterns from empty tokens: stray parentheses, repeated separators
-    const nameWithoutExt = String(nameWithoutExtRaw)
-      .replace(/\s*\(\s*\)\s*/g, '')
-      .replace(/\s*\-\s*(?:\-\s*)+/g, ' - ')
-      .replace(/(^\s*-\s*)|(\s*-\s*$)/g, '')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-    // Apply filename length truncation to the complete basename (before extension)
-    let truncatedNameWithoutExt = nameWithoutExt;
-    try {
-      const osKey = (req && req.session && req.session.username && users[req.session.username] && users[req.session.username].settings && users[req.session.username].settings.client_os) ? users[req.session.username].settings.client_os : (serverSettings && serverSettings.client_os ? serverSettings.client_os : 'linux');
-      const maxLen = getMaxFilenameLengthForOS(osKey) || 255;
-      // Account for extension length in the limit
-      const extLen = ext ? ext.length : 0;
-      const maxBasenameLen = Math.max(1, maxLen - extLen);
-      if (truncatedNameWithoutExt && truncatedNameWithoutExt.length > maxBasenameLen) {
-        truncatedNameWithoutExt = truncateFilenameComponent(truncatedNameWithoutExt, maxBasenameLen);
-      }
-    } catch (e) {}
-    
-    const fileName = (truncatedNameWithoutExt + ext).trim();
-    // If an output path is configured, plan a hardlink under that path preserving a Jellyfin-friendly layout
-    let toPath;
-    if (effectiveOutput) {
-      const finalFileName = fileName.replace(/\\/g, '/');
-      toPath = path.join(folder, finalFileName).replace(/\\/g, '/');
-    } else {
-      toPath = path.join(path.dirname(fromPath), fileName).replace(/\\/g, '/');
-    }
-    const action = effectiveOutput ? 'hardlink' : (fromPath === toPath ? 'noop' : 'move');
-  return { itemId: it.id, fromPath, toPath, actions: [{ op: action }], templateUsed: baseNameTemplate };
-  });
+  const plans = items.map(it => generatePlanForItem(it, { username, effectiveOutput, applyFilenameAsTitle, template }));
   // DEBUG: persist a compact preview plan summary to logs for diagnostic purposes
   try {
-    const uname = req && req.session && req.session.username ? req.session.username : '<anon>';
+    const uname = username || '<anon>';
     const dump = (plans || []).slice(0, 50).map(p => ({ itemId: p.itemId, from: p.fromPath, to: p.toPath, templateUsed: p.templateUsed }));
     appendLog(`PREVIEW_PLANS user=${uname} count=${(plans||[]).length} payload=${JSON.stringify(dump)}`);
   } catch (e) { /* non-fatal debug logging */ }
-  
+
   // Ensure any side-effect updates (English titles, movie flags) are persisted immediately
   try { persistEnrichCacheNow(); } catch (e) {}
 
@@ -7227,7 +7163,7 @@ function ensureRenderedNameHasYear(name, year) {
       const parenRe = new RegExp(`\\(\\s*${escapeRegExp(yearToken)}\\s*\\)`, 'g');
       result = result.replace(parenRe, '').replace(/\s{2,}/g, ' ').trim();
     } catch (e) {}
-    
+
     // For TV shows: insert year BEFORE episode markers (S01E08, E01, etc.), not just before first separator
     // This ensures format: "Title (Year) - S01E08 - Episode" not "Title- S01E08 (Year) - Episode"
     const episodeMarkerPattern = /[\s\-–—]*(?:S\d{1,2}E\d{1,3}|E\d{1,3})\b/i;
@@ -9813,6 +9749,238 @@ function startApprovedSeriesBackgroundWorker() {
     try { appendLog(`APPROVED_SERIES_BACKGROUND_WORKER_START_FAIL err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
   }
 }
+
+// ─── Background Job Queue ─────────────────────────────────────────────────────
+// Jobs survive browser closure because they run entirely in the Node.js process.
+// Clients submit a job, get back a jobId, then poll GET /api/jobs/:id.
+const bgJobs = new Map();
+let _bgJobIdCounter = 1;
+function createBgJob(type, totalItems) {
+  const id = String(_bgJobIdCounter++);
+  const job = { id, type, status: 'running', createdAt: Date.now(), completedAt: null,
+                totalItems: totalItems || 0, processedItems: 0, results: [], error: null };
+  bgJobs.set(id, job);
+  // Keep at most 200 jobs to avoid unbounded memory growth
+  if (bgJobs.size > 200) { const oldest = bgJobs.keys().next().value; bgJobs.delete(oldest); }
+  return job;
+}
+
+// GET /api/jobs — list recent/active jobs (useful for reconnecting clients)
+app.get('/api/jobs', requireAuth, (req, res) => {
+  try {
+    const now = Date.now();
+    // Return jobs created in the last 30 minutes or still running
+    const jobs = [...bgJobs.values()].filter(j => j.status === 'running' || (now - j.createdAt < 30 * 60 * 1000));
+    res.json({ jobs });
+  } catch (e) { res.status(500).json({ error: e.message }) }
+});
+
+// GET /api/jobs/:id — poll a specific job
+app.get('/api/jobs/:id', requireAuth, (req, res) => {
+  try {
+    const job = bgJobs.get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'job not found' });
+    res.json({ job });
+  } catch (e) { res.status(500).json({ error: e.message }) }
+});
+
+// POST /api/jobs/approve — run preview + apply entirely server-side
+// Body: { items: [{canonicalPath}], outputFolder, template, useFilenameAsTitle, skipAnimeProviders }
+app.post('/api/jobs/approve', requireAuth, async (req, res) => {
+  try {
+    const { items, outputFolder, template, useFilenameAsTitle, skipAnimeProviders } = req.body || {};
+    if (!items || !Array.isArray(items) || !items.length) return res.status(400).json({ error: 'items required' });
+    const username = req.session && req.session.username ? req.session.username : null;
+    const applyFilenameAsTitle = coerceBoolean(useFilenameAsTitle);
+
+    // Resolve effective output path the same way the preview route does
+    let effectiveOutput = '';
+    try {
+      if (outputFolder) {
+        effectiveOutput = canonicalize(outputFolder);
+      } else if (username && users[username] && users[username].settings && users[username].settings.scan_output_path) {
+        effectiveOutput = canonicalize(users[username].settings.scan_output_path);
+      } else if (serverSettings && serverSettings.scan_output_path) {
+        effectiveOutput = canonicalize(serverSettings.scan_output_path);
+      }
+    } catch (e) { effectiveOutput = outputFolder ? canonicalize(outputFolder) : ''; }
+
+    const job = createBgJob('approve', items.length);
+    // Respond immediately so the client can close safely
+    res.json({ jobId: job.id, status: 'running' });
+
+    // Run the entire approve workflow in the background
+    ;(async () => {
+      try {
+        let tmdbKey = null;
+        try {
+          if (username && users[username] && users[username].settings && users[username].settings.tmdb_api_key) tmdbKey = users[username].settings.tmdb_api_key;
+          else if (serverSettings && serverSettings.tmdb_api_key) tmdbKey = serverSettings.tmdb_api_key;
+        } catch (e) {}
+
+        const _providerOrder = resolveMetadataProviderOrder(username);
+        const _forceHash = (_providerOrder && _providerOrder.length && _providerOrder[0] === 'anidb');
+
+        // Step 1: Enrich any items not yet complete
+        for (const it of items) {
+          try {
+            const fromPath = canonicalize(it.canonicalPath);
+            if (!applyFilenameAsTitle) {
+              const existing = enrichCache[fromPath] || null;
+              const prov = existing && existing.provider ? existing.provider : null;
+              if (!isProviderComplete(prov)) {
+                const opts = { username };
+                if (_forceHash) opts.forceHash = true;
+                const data = await externalEnrich(fromPath, tmdbKey, opts);
+                if (data) {
+                  const providerRendered = renderProviderName(data, fromPath, null);
+                  const providerRaw = cloneProviderRaw(extractProviderRaw(data));
+                  const providerBlock = {
+                    title: data.title, year: data.year, season: data.season, episode: data.episode,
+                    episodeTitle: data.episodeTitle || '', raw: providerRaw, renderedName: providerRendered,
+                    matched: !!data.title, source: data.source || (data.provider && data.provider.source) || null,
+                    seriesTitleEnglish: data.seriesTitleEnglish || null, seriesTitleRomaji: data.seriesTitleRomaji || null,
+                    seriesTitleExact: data.seriesTitleExact || null, originalSeriesTitle: data.originalSeriesTitle || null
+                  };
+                  updateEnrichCache(fromPath, Object.assign({}, enrichCache[fromPath] || {}, data, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+                }
+              }
+            }
+          } catch (e) { try { appendLog(`JOB_APPROVE_ENRICH_FAIL path=${it.canonicalPath} err=${e && e.message}`); } catch (ee) {} }
+          job.processedItems++;
+        }
+
+        // Step 2: Generate rename plans
+        const plans = items.map(it => generatePlanForItem(it, { username, effectiveOutput, applyFilenameAsTitle, template }));
+        try { persistEnrichCacheNow(); } catch (e) {}
+
+        // Step 3: Apply each plan (hardlink + cache update)
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const appliedFromPaths = new Set();
+        for (const p of plans) {
+          const resultItem = { itemId: p.itemId, fromPath: p.fromPath, status: 'pending' };
+          try {
+            const fromPath = path.resolve(p.fromPath);
+            if (!p.toPath) { resultItem.status = 'error'; resultItem.error = 'Plan missing target path'; job.results.push(resultItem); continue; }
+            const toPath = path.resolve(p.toPath);
+            if (fromPath === toPath) { resultItem.status = 'noop'; job.results.push(resultItem); continue; }
+            if (!fs.existsSync(fromPath)) { resultItem.status = 'error'; resultItem.error = 'Source file not found'; job.results.push(resultItem); continue; }
+            const parentDir = path.dirname(toPath);
+            if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
+            if (fs.existsSync(toPath)) {
+              resultItem.status = 'exists'; resultItem.to = toPath;
+            } else {
+              let linked = false, lastErr = null;
+              for (let attempt = 0; attempt < 3; attempt++) {
+                try { fs.linkSync(fromPath, toPath); linked = true; break; }
+                catch (err) { lastErr = err; if (err.code === 'EEXIST') { linked = true; break; } await sleep(100 * (attempt + 1)); }
+              }
+              if (!linked) throw lastErr || new Error('Hardlink failed');
+              const fromKey = canonicalize(fromPath);
+              enrichCache[fromKey] = enrichCache[fromKey] || {};
+              enrichCache[fromKey].applied = true; enrichCache[fromKey].hidden = true;
+              enrichCache[fromKey].appliedAt = Date.now(); enrichCache[fromKey].appliedTo = toPath;
+              const finalBasename = path.basename(toPath);
+              enrichCache[fromKey].renderedName = finalBasename;
+              enrichCache[fromKey].metadataFilename = finalBasename.replace(path.extname(finalBasename), '');
+              const targetKey = canonicalize(toPath);
+              renderedIndex[targetKey] = { source: fromPath, renderedName: finalBasename, appliedTo: toPath,
+                metadataFilename: enrichCache[fromKey].metadataFilename, provider: enrichCache[fromKey].provider || null, parsed: enrichCache[fromKey].parsed || null };
+              if (db) { db.setKV('enrichCache', enrichCache); db.setKV('renderedIndex', renderedIndex); }
+              appliedFromPaths.add(fromKey);
+              appendLog(`JOB_APPROVE_HARDLINK from=${fromPath} to=${toPath}`);
+              resultItem.status = 'hardlinked'; resultItem.to = toPath;
+            }
+          } catch (e) {
+            resultItem.status = 'error'; resultItem.error = e.message;
+            appendLog(`JOB_APPROVE_APPLY_ERROR item=${p.itemId} err=${e.message}`);
+          }
+          job.results.push(resultItem);
+        }
+
+        // Step 4: Final cache flush + remove applied items from scans
+        if (!db) { try { writeJson(enrichStoreFile, enrichCache); } catch (e) {} try { writeJson(renderedIndexFile, renderedIndex); } catch (e) {} }
+        else { try { persistEnrichCacheNow(); } catch (e) {} }
+        if (appliedFromPaths.size > 0) {
+          try {
+            for (const sid of Object.keys(scans || {})) {
+              const scan = scans[sid]; if (!scan || !Array.isArray(scan.items)) continue;
+              const before = scan.items.length;
+              scan.items = scan.items.filter(it => { try { return !appliedFromPaths.has(canonicalize(it.canonicalPath)); } catch (e) { return true; } });
+              if (scan.items.length !== before) scan.totalCount = scan.items.length;
+            }
+            if (db) db.saveScansObject(scans); else writeJson(scanStoreFile, scans);
+          } catch (e) { appendLog(`JOB_APPROVE_SCAN_FILTER_FAIL err=${e && e.message ? e.message : String(e)}`); }
+        }
+
+        job.status = 'done';
+        job.completedAt = Date.now();
+        appendLog(`JOB_APPROVE_DONE id=${job.id} applied=${appliedFromPaths.size}/${items.length}`);
+      } catch (e) {
+        job.status = 'error'; job.error = e.message; job.completedAt = Date.now();
+        appendLog(`JOB_APPROVE_FAIL id=${job.id} err=${e.message}`);
+      }
+    })();
+  } catch (e) { if (!res.headersSent) res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/jobs/bulk-rescan — enrich a list of paths server-side with rate limiting
+// Body: { paths: [...], force, skipAnimeProviders }
+app.post('/api/jobs/bulk-rescan', requireAuth, async (req, res) => {
+  try {
+    const { paths, force, skipAnimeProviders } = req.body || {};
+    if (!paths || !Array.isArray(paths) || !paths.length) return res.status(400).json({ error: 'paths required' });
+    const username = req.session && req.session.username ? req.session.username : null;
+
+    let tmdbKey = null;
+    try {
+      if (username && users[username] && users[username].settings && users[username].settings.tmdb_api_key) tmdbKey = users[username].settings.tmdb_api_key;
+      else if (serverSettings && serverSettings.tmdb_api_key) tmdbKey = serverSettings.tmdb_api_key;
+    } catch (e) {}
+
+    const job = createBgJob('bulk-rescan', paths.length);
+    res.json({ jobId: job.id, status: 'running' });
+
+    ;(async () => {
+      const RATE_DELAY_MS = 350;
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+      for (let i = 0; i < paths.length; i++) {
+        const p = paths[i];
+        const resultItem = { path: p, status: 'pending' };
+        try {
+          const fromPath = canonicalize(p);
+          const opts = { username, force: coerceBoolean(force) };
+          if (typeof skipAnimeProviders === 'boolean') opts.skipAnimeProviders = skipAnimeProviders;
+          const data = await externalEnrich(fromPath, tmdbKey, opts);
+          if (data) {
+            // Mirror what the POST /enrich route does: build provider block + update cache
+            const providerRendered = renderProviderName(data, fromPath, null);
+            const providerRaw = cloneProviderRaw(extractProviderRaw(data));
+            const providerBlock = {
+              title: data.title, year: data.year, season: data.season, episode: data.episode,
+              episodeTitle: data.episodeTitle || '', raw: providerRaw, renderedName: providerRendered,
+              matched: !!data.title, source: data.source || (data.provider && data.provider.source) || null,
+              seriesTitleEnglish: data.seriesTitleEnglish || null, seriesTitleRomaji: data.seriesTitleRomaji || null,
+              seriesTitleExact: data.seriesTitleExact || null, originalSeriesTitle: data.originalSeriesTitle || null
+            };
+            updateEnrichCache(fromPath, Object.assign({}, enrichCache[fromPath] || {}, data, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+          }
+          resultItem.status = data ? 'ok' : 'empty';
+        } catch (e) {
+          resultItem.status = 'error'; resultItem.error = e.message;
+          appendLog(`JOB_RESCAN_FAIL path=${p} err=${e.message}`);
+        }
+        job.results.push(resultItem);
+        job.processedItems = i + 1;
+        if (i < paths.length - 1) await sleep(RATE_DELAY_MS);
+      }
+      try { persistEnrichCacheNow(); } catch (e) {}
+      job.status = 'done'; job.completedAt = Date.now();
+      appendLog(`JOB_RESCAN_DONE id=${job.id} processed=${job.processedItems}/${paths.length}`);
+    })();
+  } catch (e) { if (!res.headersSent) res.status(500).json({ error: e.message }); }
+});
+// ─────────────────────────────────────────────────────────────────────────────
 
 app.get('/api/approved-series', requireAuth, (req, res) => {
   try {
