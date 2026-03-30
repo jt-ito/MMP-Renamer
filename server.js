@@ -1976,6 +1976,15 @@ async function metaLookup(title, apiKey, opts = {}) {
         const k = String(m[1] || '').toLowerCase()
         if (map[k]) return map[k]
       }
+      // "Part N" and "Cour N" — AniList frequently labels anime cours/arcs this way.
+      // Treat these as season/continuation markers so Part 3 entries are not mistaken
+      // for the root series when searching for an earlier season.
+      m = s.match(/\bPart\s+(\d{1,2})\b/i)
+      if (m && m[1]) return parseInt(m[1], 10)
+      m = s.match(/\bCour\s+(\d{1,2})\b/i)
+      if (m && m[1]) return parseInt(m[1], 10)
+      m = s.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+Cour\b/i)
+      if (m && m[1]) return parseInt(m[1], 10)
       // fallback: trailing digits like "Title 2" — only treat as season when
       // the title is short (likely an explicit season marker) or contains
       // only 1-2 words (e.g., "Show 2"). This avoids treating long series
@@ -4249,6 +4258,8 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
             const rawYear = raw.animeYear || raw.year || raw.animeProductionYear;
             const animeTypeRaw = res.animeType || raw.animeType || raw.animeSeriesType || null;
             const animeType = animeTypeRaw ? String(animeTypeRaw).trim() : null;
+            // Forward isMovie flag set by meta-providers (e.g. for animeType 'Movie')
+            if (typeof res.isMovie === 'boolean') guess.isMovie = res.isMovie;
             const parsedYear = rawYear != null ? Number(String(rawYear).slice(0, 4)) : NaN;
             if (!Number.isNaN(parsedYear) && parsedYear > 0) {
               guess.year = String(parsedYear);
@@ -4283,6 +4294,24 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
 
             if (episodeSeason == null && episodeNumber != null) {
               episodeSeason = 1;
+            }
+
+            // Enforce season 0 for special/OVA/ONA/music-video animeTypes even when
+            // the episode number came back as a plain integer (not an S-prefixed epno).
+            // Movies are not forced to S00 — they get isMovie=true instead.
+            if (animeType && episodeSeason !== 0) {
+              const animeTypeLower = animeType.toLowerCase();
+              if (['tv special', 'ova', 'ona', 'music video', 'special'].some(t => animeTypeLower.includes(t))) {
+                console.log(`[Server] AniDB animeType "${animeType}" → overriding season to 0`);
+                try { appendLog(`ANIDB_ANIMETYPE_SPECIAL_S00 type=${animeType} oldSeason=${episodeSeason}`); } catch (e) {}
+                episodeSeason = 0;
+              } else if (animeTypeLower === 'movie') {
+                if (typeof guess.isMovie !== 'boolean') {
+                  guess.isMovie = true;
+                  console.log(`[Server] AniDB animeType "Movie" → setting isMovie=true`);
+                  try { appendLog(`ANIDB_ANIMETYPE_MOVIE isMovie=true`); } catch (e) {}
+                }
+              }
             }
 
             if (episodeSeason != null) {
