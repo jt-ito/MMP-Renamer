@@ -4390,6 +4390,7 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
                 
                 pushToast && pushToast('Preview ready', 'Rename plan generated — applying now')
                 const res = await applyRename(plans, false, selectedFolderPath)
+                let applySucceeded = false
                 try {
                   const first = (Array.isArray(res) && res.length) ? res[0] : null
                   const status = first && (first.status || first.result || '')
@@ -4397,16 +4398,20 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
                     const kind = (status === 'copied') ? 'Copied (fallback)' : (status === 'hardlinked' ? 'Hardlinked' : (status === 'moved' ? 'Moved' : (status === 'exists' ? 'Exists' : (status === 'dryrun' ? 'Dry run' : 'No-op'))))
                     pushToast && pushToast('Apply', `${kind}: ${first.to || first.path || ''}`)
                     successShown = true
+                    applySucceeded = true
                   } else if (first && first.status === 'error') {
                     pushToast && pushToast('Apply', `Failed: ${first.error || 'unknown error'}`)
                   } else {
                     pushToast && pushToast('Apply result', JSON.stringify(res))
                     successShown = true
+                    applySucceeded = true
                   }
                 } catch (e) {
                   pushToast && pushToast('Apply result', JSON.stringify(res))
                 }
-                refreshEnrichForPaths([it.canonicalPath]).catch(() => {})
+                // Only refresh enrich on failure — on success applyRename already removed
+                // the item optimistically; refreshing would race the server and add it back.
+                if (!applySucceeded) refreshEnrichForPaths([it.canonicalPath]).catch(() => {})
               } catch (e) {
                 try { if (!successShown) pushToast && pushToast('Apply', `Apply failed: ${e && e.message ? e.message : String(e)}`) } catch (err) { /* swallow */ }
               } finally {
