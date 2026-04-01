@@ -1,18 +1,64 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 
 const API = (p) => `/api${p}`
 
 // Memoized card — only re-renders when its own series data or isFetching flag changes,
 // not when any other card in the grid gets its image back.
-const SeriesCard = React.memo(function SeriesCard({ series, outputKey, isFetching, onContextMenu }) {
+const MAX_TILT = 12 // degrees
+
+const SeriesCard = React.memo(function SeriesCard({ series, outputKey, isFetching, onContextMenu, parallax }) {
   const cardKey = `${outputKey}::${series.name}`
+  const cardRef = useRef(null)
+  const rafRef = useRef(null)
+
+  const handleMouseEnter = useCallback(() => {
+    if (!parallax) return
+    const el = cardRef.current
+    if (!el) return
+    // Suppress transition on transform while tilting so it tracks instantly
+    el.style.transition = 'border-color 180ms ease, box-shadow 240ms ease'
+    el.style.willChange = 'transform'
+  }, [parallax])
+
+  const handleMouseMove = useCallback((e) => {
+    if (!parallax) return
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    rafRef.current = requestAnimationFrame(() => {
+      const el = cardRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const dx = (e.clientX - (rect.left + rect.width / 2)) / (rect.width / 2)
+      const dy = (e.clientY - (rect.top + rect.height / 2)) / (rect.height / 2)
+      const rotX = -(dy * MAX_TILT)
+      const rotY = dx * MAX_TILT
+      el.style.transform = `perspective(900px) rotateX(${rotX}deg) rotateY(${rotY}deg) translateY(-6px) scale(1.05)`
+    })
+  }, [parallax])
+
+  const handleMouseLeave = useCallback(() => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    const el = cardRef.current
+    if (!el) return
+    // Smooth return to resting state
+    el.style.transition = 'transform 300ms ease, border-color 180ms ease, box-shadow 240ms ease'
+    el.style.transform = ''
+    el.style.willChange = ''
+  }, [])
+
+  useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }, [])
+
   return (
     <article
+      ref={cardRef}
       className="approved-series-card"
       data-output-key={outputKey}
       data-series-name={series.name}
       data-series-key={cardKey}
+      {...(parallax ? { 'data-parallax': '1' } : {})}
+      onMouseEnter={handleMouseEnter}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
       onContextMenu={(e) => { e.preventDefault(); onContextMenu && onContextMenu(e, series, outputKey); }}
     >
       <div className="approved-series-cover-wrap">
@@ -32,7 +78,7 @@ const SeriesCard = React.memo(function SeriesCard({ series, outputKey, isFetchin
   )
 })
 
-export default function ApprovedSeries({ pushToast }) {
+export default function ApprovedSeries({ pushToast, parallax = true }) {
   const [loading, setLoading] = useState(true)
   const [outputs, setOutputs] = useState([])
   const [activeOutputKey, setActiveOutputKey] = useState('')
@@ -475,6 +521,7 @@ export default function ApprovedSeries({ pushToast }) {
                       outputKey={activeOutput.key}
                       isFetching={!!autoFetching[`${activeOutput.key}::${series.name}`]}
                       onContextMenu={handleSeriesContextMenu}
+                      parallax={parallax}
                     />
                   )) : (
                     <p className="small-muted">No approved series found for this output.</p>

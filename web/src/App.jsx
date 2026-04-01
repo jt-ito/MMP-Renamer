@@ -196,6 +196,7 @@ export default function App() {
   const [metaPhase, setMetaPhase] = useState(false)
   const [metaProgress, setMetaProgress] = useState(0)
   const [theme, setTheme] = useLocalState('theme', 'dark')
+  const [cardParallax, setCardParallax] = useLocalState('card_parallax', true)
   const [folderSelectorApplyAsFilename, setFolderSelectorApplyAsFilename] = useState(false)
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState({})
@@ -2909,7 +2910,7 @@ export default function App() {
             </section>
           ) : route === '#/settings' ? (
             <section className="list settings-page">
-              <Settings pushToast={pushToast} />
+              <Settings pushToast={pushToast} cardParallax={cardParallax} setCardParallax={setCardParallax} />
             </section>
           ) : route === '#/hidden' ? (
             <section className="list">
@@ -2921,7 +2922,7 @@ export default function App() {
             </section>
           ) : route === '#/approved-series' ? (
             <section className="list settings-page">
-              <ApprovedSeries pushToast={pushToast} />
+              <ApprovedSeries pushToast={pushToast} parallax={cardParallax} />
             </section>
           ) : route === '#/notifications' ? (
             <section className="list">

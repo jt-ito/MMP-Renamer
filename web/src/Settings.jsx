@@ -71,7 +71,7 @@ function renderPreviewSample(template) {
   } catch (e) { return template }
 }
 
-export default function Settings({ pushToast }){
+export default function Settings({ pushToast, cardParallax, setCardParallax }){
   // keys: tmdb for TMDb (keep backward compatibility with tvdb_api_key)
   const [tmdbKey, setTmdbKey] = useState('')
   const [anilistKey, setAnilistKey] = useState('')
@@ -782,6 +782,26 @@ export default function Settings({ pushToast }){
           </label>
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8, marginLeft:32}}>
             Removes generated hardlinks from any configured output folder when you unapprove an item. The original source file is never touched.
+          </div>
+        </div>
+
+        <div style={{marginTop:18}}>
+          <label style={{display:'flex', alignItems:'center', gap:12, cursor:'pointer', userSelect:'none'}}>
+            <input
+              type="checkbox"
+              checked={cardParallax !== false}
+              onChange={e => { setCardParallax && setCardParallax(e.target.checked) }}
+              style={{
+                width:20,
+                height:20,
+                cursor:'pointer',
+                accentColor:'var(--hunter-green)'
+              }}
+            />
+            <span style={{fontSize:13, color:'var(--accent)', fontWeight:500}}>3D card parallax on Approved Series</span>
+          </label>
+          <div style={{fontSize:12, color:'var(--muted)', marginTop:8, marginLeft:32}}>
+            Cards on the Approved Series page tilt in 3D following your cursor. Disable for reduced motion or performance.
           </div>
         </div>
 
