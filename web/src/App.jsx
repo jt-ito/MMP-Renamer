@@ -3843,7 +3843,7 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       </button>
       {isOpen ? (
         <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8, alignItems: 'start' }}>
             <input
               className="form-input"
               placeholder="AniList ID"
