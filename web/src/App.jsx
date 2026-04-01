@@ -2981,6 +2981,7 @@ export default function App() {
               selectOutputFolder={selectOutputFolder}
               selectMode={selectMode} selected={selected} toggleSelect={(p, val) => setSelected(s => { const n = { ...s }; if (val) n[p]=true; else delete n[p]; return n })}
               providerKey={providerKey} hideOne={hideOnePath}
+              optimisticHide={(path) => { pendingHiddenRef.current.add(path); setEnrichCache(prev => ({ ...prev, [path]: Object.assign({}, prev && prev[path] ? prev[path] : {}, { hidden: true }) })); setItems(prev => prev.filter(x => x.canonicalPath !== path)); setAllItems(prev => prev.filter(x => x.canonicalPath !== path)) }}
               searchQuery={searchQuery} setSearchQuery={setSearchQuery} doSearch={doSearch} searching={searching}
               setContextMenu={setContextMenu} />
                   ) : null}
@@ -4120,7 +4121,7 @@ function CustomMetadataInputs({ path, enrichment, isOpen, onToggle, onSaved, pus
 
 const DEFAULT_ROW_HEIGHT = 90
 
-function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null, setContextMenu = () => {} }) {
+function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearEnd, enrichOne, previewRename, applyRename, pushToast, loadingEnrich = {}, selectMode = false, selected = {}, toggleSelect = () => {}, providerKey = '', hideOne = null, optimisticHide = null, searchQuery = '', setSearchQuery = () => {}, doSearch = () => {}, searching = false, selectOutputFolder = null, setContextMenu = () => {} }) {
   const listRef = useRef(null)
   const containerRef = useRef(null)
   const [listHeight, setListHeight] = useState(700)
@@ -4416,8 +4417,10 @@ function VirtualizedList({ items = [], enrichCache = {}, setEnrichCache, onNearE
                 }
 
                 const plans = await previewRename([it], undefined, { useFilenameAsTitle })
-                
-                pushToast && pushToast('Preview ready', 'Rename plan generated — applying now')
+
+                // Optimistically hide before network call for instant feedback
+                optimisticHide && optimisticHide(it.canonicalPath)
+
                 const res = await applyRename(plans, false, selectedFolderPath)
                 let applySucceeded = false
                 try {
