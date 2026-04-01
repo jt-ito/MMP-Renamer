@@ -2996,7 +2996,7 @@ export default function App() {
           onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
           title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
           style={{
-            position: 'fixed', top: 99, right: 13, zIndex: 200,
+            position: 'fixed', top: 99, right: 23, zIndex: 200,
             width: 40, height: 40,
             borderRadius: '50%',
             background: 'var(--bg-800)',
