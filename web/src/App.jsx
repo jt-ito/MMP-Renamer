@@ -2614,6 +2614,17 @@ export default function App() {
       <button className='btn-ghost btn-search' style={{ display: selectMode && selectedCount ? 'none' : '' }} onClick={() => doSearch(searchQuery)} disabled={searchDisabled || searching}>{searching ? <Spinner/> : 'Search'}</button>
       <button className='btn-ghost btn-clear' style={{ display: selectMode && selectedCount ? 'none' : '' }} onClick={() => doSearch('')} title='Clear search' disabled={searchDisabled}>Clear</button>
     </div>
+  ) : auth && route !== '#/' ? (
+    <div className="header-page-title">
+      {{
+        '#/settings': 'Settings',
+        '#/hidden': 'Hidden Items',
+        '#/duplicates': 'Duplicates',
+        '#/notifications': 'Notifications',
+        '#/approved-series': 'Approved Series',
+        '#/users': 'Users',
+      }[route] ?? 'MMP Renamer'}
+    </div>
   ) : null}
         {/* Global bulk-enrich indicator (shown when many enrich operations are running) */}
   {auth && visibleGlobalEnrichPending ? (
