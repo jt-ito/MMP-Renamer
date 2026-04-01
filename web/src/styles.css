@@ -487,23 +487,23 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 }
 
 .light .approved-series-items-list {
-  background: rgba(250,250,250,0.7);
-  border-color: rgba(212,212,216,0.45);
+  background: rgba(238,238,246,0.7);
+  border-color: rgba(180,181,212,0.45);
 }
 
 .light .approved-series-items-list th {
-  background: rgba(244,244,245,0.92);
-  border-bottom-color: rgba(212,212,216,0.45);
+  background: rgba(226,226,240,0.92);
+  border-bottom-color: rgba(180,181,212,0.45);
   color: var(--muted);
 }
 
 .light .approved-series-items-list td {
   color: var(--fg, #1a1a2e);
-  border-bottom-color: rgba(212,212,216,0.15);
+  border-bottom-color: rgba(180,181,212,0.15);
 }
 
 .light .approved-series-items-list tr:hover td {
-  background: rgba(212,212,216,0.1);
+  background: rgba(180,181,212,0.1);
 }
 
 .settings-page-content h2 {
@@ -783,14 +783,14 @@ button.folder-option:hover {
 	.btn-save, .btn-ghost, .btn-cta { padding:10px 12px; min-width:56px }
 }
 
-/* Light theme overrides — clean zinc-neutral palette */
+/* Light theme overrides — soft off-white with indigo accents */
 .light {
-	--bg-900: #FAFAFA; /* zinc-50 */
-	--bg-800: #F4F4F5; /* zinc-100 */
-	--bg-700: #E4E4E7; /* zinc-200 */
-	--bg-600: #D4D4D8; /* zinc-300 */
-	--muted: #71717A; /* zinc-500 */
-	--accent: #18181B; /* zinc-900 */
+	--bg-900: #EEEEF6; /* off-white, faint indigo tint */
+	--bg-800: #E2E2F0; /* slightly darker surface */
+	--bg-700: #D2D3E8; /* card/hover */
+	--bg-600: #B4B5D4; /* border */
+	--muted: #6B72A0; /* indigo-tinted grey */
+	--accent: #1C1E3A; /* deep indigo for text */
 	--accent-cta: #4F46E5; /* indigo-600 */
 	--accent-cta-2: #0EA5A3;
 	--hunter-green: #4F46E5;
@@ -804,39 +804,39 @@ button.folder-option:hover {
 }
 
 .light .app header {
-	background: linear-gradient(180deg, rgba(250,250,250,0.96), rgba(244,244,245,0.92));
-	border-bottom: 1px solid rgba(212,212,216,0.45);
-	box-shadow: 0 14px 32px rgba(228,228,231,0.45);
+	background: linear-gradient(180deg, rgba(238,238,246,0.96), rgba(226,226,240,0.92));
+	border-bottom: 1px solid rgba(180,181,212,0.45);
+	box-shadow: 0 14px 32px rgba(210,211,232,0.45);
 }
 
 .light .app header button {
-	background: rgba(244,244,245,0.78);
-	border: 1px solid rgba(212,212,216,0.45);
+	background: rgba(226,226,240,0.78);
+	border: 1px solid rgba(180,181,212,0.45);
 	color: var(--accent);
-	box-shadow: 0 8px 18px rgba(228,228,231,0.38);
+	box-shadow: 0 8px 18px rgba(210,211,232,0.38);
 }
 
 .light .app header button:hover {
-	background: rgba(228,228,231,0.85);
-	border-color: rgba(212,212,216,0.65);
+	background: rgba(210,211,232,0.85);
+	border-color: rgba(180,181,212,0.65);
 }
 
 .light .btn-ghost,
 .light .btn-incremental,
 .light .btn-search,
 .light .btn-clear {
-	background: rgba(244,244,245,0.78);
-	border: 1px solid rgba(212,212,216,0.45);
+	background: rgba(226,226,240,0.78);
+	border: 1px solid rgba(180,181,212,0.45);
 	color: var(--accent);
-	box-shadow: 0 10px 24px rgba(228,228,231,0.42);
+	box-shadow: 0 10px 24px rgba(210,211,232,0.42);
 }
 
 .light .btn-ghost:hover,
 .light .btn-incremental:hover,
 .light .btn-search:hover,
 .light .btn-clear:hover {
-	background: rgba(228,228,231,0.88);
-	border-color: rgba(212,212,216,0.65);
+	background: rgba(210,211,232,0.88);
+	border-color: rgba(180,181,212,0.65);
 }
 
 .light .btn-ghost:disabled,
@@ -860,15 +860,15 @@ button.folder-option:hover {
 }
 
 .light .btn-save {
-	background: linear-gradient(180deg, rgba(228,228,231,0.95), rgba(212,212,216,0.95));
+	background: linear-gradient(180deg, rgba(210,211,232,0.95), rgba(180,181,212,0.95));
 	color: var(--accent);
-	border: 1px solid rgba(212,212,216,0.55);
-	box-shadow: 0 16px 32px rgba(212,212,216,0.43);
+	border: 1px solid rgba(180,181,212,0.55);
+	box-shadow: 0 16px 32px rgba(180,181,212,0.43);
 }
 
 .light .btn-save:hover {
-	background: linear-gradient(180deg, rgba(212,212,216,0.98), rgba(228,228,231,0.98));
-	box-shadow: 0 18px 36px rgba(212,212,216,0.5);
+	background: linear-gradient(180deg, rgba(180,181,212,0.98), rgba(210,211,232,0.98));
+	box-shadow: 0 18px 36px rgba(180,181,212,0.5);
 }
 
 .light .btn-save:disabled {
@@ -886,39 +886,39 @@ button.folder-option:hover {
 .light .loading-card,
 .light .toast,
 .light .hidden-page .form-card {
-	background: linear-gradient(180deg, rgba(250,250,250,0.98), rgba(244,244,245,0.92));
-	border: 1px solid rgba(212,212,216,0.45);
-	box-shadow: 0 18px 40px rgba(228,228,231,0.45);
+	background: linear-gradient(180deg, rgba(238,238,246,0.98), rgba(226,226,240,0.92));
+	border: 1px solid rgba(180,181,212,0.45);
+	box-shadow: 0 18px 40px rgba(210,211,232,0.45);
 	color: var(--accent);
 }
 
 .light .logs pre {
-	background: rgba(244,244,245,0.6);
+	background: rgba(226,226,240,0.6);
 	color: var(--muted);
-	border: 1px solid rgba(212,212,216,0.45);
+	border: 1px solid rgba(180,181,212,0.45);
 }
 
 .light .row {
-	border-bottom: 1px solid rgba(212,212,216,0.35);
-	background: rgba(250,250,250,0.92);
+	border-bottom: 1px solid rgba(180,181,212,0.35);
+	background: rgba(238,238,246,0.92);
 }
 
 .light .row:nth-child(even) {
-	background: rgba(244,244,245,0.9);
+	background: rgba(226,226,240,0.9);
 }
 
 .light .row.row-select-mode:hover {
-	background: rgba(228,228,231,0.35);
+	background: rgba(210,211,232,0.35);
 }
 
 .light .row.row-selected {
-	background: linear-gradient(180deg, rgba(244,244,245,0.82), rgba(228,228,231,0.78));
-	border-color: rgba(212,212,216,0.65);
-	box-shadow: inset 0 0 0 1px rgba(212,212,216,0.45);
+	background: linear-gradient(180deg, rgba(226,226,240,0.82), rgba(210,211,232,0.78));
+	border-color: rgba(180,181,212,0.65);
+	box-shadow: inset 0 0 0 1px rgba(180,181,212,0.45);
 }
 
 .light .row.row-selected .path {
-	color: rgba(24,24,27,0.72);
+	color: rgba(28,30,58,0.72);
 }
 
 .light .row.row-selected .title {
@@ -928,9 +928,9 @@ button.folder-option:hover {
 
 .light .row input[type="checkbox"],
 .light .hidden-list input[type="checkbox"] {
-	border: 2px solid rgba(212,212,216,0.6);
-	background: rgba(250,250,250,0.92);
-	box-shadow: inset 0 1px 2px rgba(228,228,231,0.45);
+	border: 2px solid rgba(180,181,212,0.6);
+	background: rgba(238,238,246,0.92);
+	box-shadow: inset 0 1px 2px rgba(210,211,232,0.45);
 }
 
 .light .row input[type="checkbox"]:hover,
@@ -945,15 +945,15 @@ button.folder-option:hover {
 }
 
 .light .provider-button {
-	border-color: rgba(212,212,216,0.55);
+	border-color: rgba(180,181,212,0.55);
 	color: var(--accent);
-	background: rgba(250,250,250,0.9);
-	box-shadow: 0 8px 18px rgba(228,228,231,0.38);
+	background: rgba(238,238,246,0.9);
+	box-shadow: 0 8px 18px rgba(210,211,232,0.38);
 }
 
 .light .provider-button.inactive:hover {
-	background: rgba(244,244,245,0.85);
-	border-color: rgba(212,212,216,0.65);
+	background: rgba(226,226,240,0.85);
+	border-color: rgba(180,181,212,0.65);
 }
 
 .light .provider-button.active {
@@ -964,21 +964,21 @@ button.folder-option:hover {
 }
 
 .light .provider-slot {
-	background: rgba(228,228,231,0.35);
-	color: rgba(24,24,27,0.75);
+	background: rgba(210,211,232,0.35);
+	color: rgba(28,30,58,0.75);
 }
 
 .light .provider-slot-item.drag-over {
-	background: rgba(244,244,245,0.55);
-	border: 2px dashed rgba(212,212,216,0.75);
+	background: rgba(226,226,240,0.55);
+	border: 2px dashed rgba(180,181,212,0.75);
 }
 
 .light .form-input,
 .light select.form-input {
-	background: rgba(250,250,250,0.94);
-	border-color: rgba(212,212,216,0.45);
+	background: rgba(238,238,246,0.94);
+	border-color: rgba(180,181,212,0.45);
 	color: var(--accent);
-	box-shadow: inset 0 1px 2px rgba(228,228,231,0.25);
+	box-shadow: inset 0 1px 2px rgba(210,211,232,0.25);
 }
 
 .light .form-input:focus,
@@ -988,35 +988,35 @@ button.folder-option:hover {
 }
 
 .light .header-search .form-input {
-	background: rgba(244,244,245,0.82);
-	border-color: rgba(212,212,216,0.45);
+	background: rgba(226,226,240,0.82);
+	border-color: rgba(180,181,212,0.45);
 }
 
 .light select.form-input option,
 .light select.form-input optgroup {
-	background: rgba(250,250,250,0.96);
+	background: rgba(238,238,246,0.96);
 	color: var(--accent);
 }
 
 .light button.folder-option {
-	background: rgba(244,244,245,0.82);
-	border: 1px solid rgba(212,212,216,0.45);
+	background: rgba(226,226,240,0.82);
+	border: 1px solid rgba(180,181,212,0.45);
 }
 
 .light button.folder-option:hover {
 	border-color: rgba(79,70,229,0.45);
-	background: rgba(228,228,231,0.85);
-	box-shadow: 0 12px 28px rgba(228,228,231,0.38);
+	background: rgba(210,211,232,0.85);
+	box-shadow: 0 12px 28px rgba(210,211,232,0.38);
 }
 
 .light .folder-chip {
-	background: rgba(244,244,245,0.7);
+	background: rgba(226,226,240,0.7);
 	color: var(--accent);
 }
 
 .light .folder-chip.more {
-	background: rgba(228,228,231,0.6);
-	color: rgba(24,24,27,0.68);
+	background: rgba(210,211,232,0.6);
+	color: rgba(28,30,58,0.68);
 }
 
 .light .toast {
@@ -1024,31 +1024,31 @@ button.folder-option:hover {
 }
 
 .light .toast-body {
-	color: rgba(24,24,27,0.65);
+	color: rgba(28,30,58,0.65);
 }
 
 .light .actions button {
-	background: rgba(244,244,245,0.78);
-	border-color: rgba(212,212,216,0.45);
+	background: rgba(226,226,240,0.78);
+	border-color: rgba(180,181,212,0.45);
 	color: var(--accent);
-	box-shadow: 0 10px 24px rgba(228,228,231,0.38);
+	box-shadow: 0 10px 24px rgba(210,211,232,0.38);
 }
 
 .light .row-match-btn {
-  background: rgba(244,244,245,0.78);
-  border-color: rgba(212,212,216,0.45);
+  background: rgba(226,226,240,0.78);
+  border-color: rgba(180,181,212,0.45);
   color: var(--accent);
-  box-shadow: 0 10px 24px rgba(228,228,231,0.38);
+  box-shadow: 0 10px 24px rgba(210,211,232,0.38);
 }
 
 .light .actions button:hover {
-	background: rgba(228,228,231,0.85);
-	border-color: rgba(212,212,216,0.65);
+	background: rgba(210,211,232,0.85);
+	border-color: rgba(180,181,212,0.65);
 }
 
 .light .row-match-btn:hover {
-  background: rgba(228,228,231,0.85);
-  border-color: rgba(212,212,216,0.65);
+  background: rgba(210,211,232,0.85);
+  border-color: rgba(180,181,212,0.65);
 }
 
 .light .actions button.btn-apply {
@@ -1068,12 +1068,12 @@ button.folder-option:hover {
 }
 
 .light .modal-overlay {
-	background: rgba(212,212,216,0.45);
+	background: rgba(180,181,212,0.45);
 	backdrop-filter: blur(12px);
 }
 
 .light .progress-bar {
-	background: rgba(212,212,216,0.35);
+	background: rgba(180,181,212,0.35);
 }
 
 .light .progress-bar .fill {
@@ -1089,7 +1089,7 @@ button.folder-option:hover {
 
 /* Light theme animations - adjust pulse for visibility */
 @keyframes light-pulse-border {
-	0%, 100% { border-color: rgba(212,212,216,0.45); }
+	0%, 100% { border-color: rgba(180,181,212,0.45); }
 	50% { border-color: rgba(79,70,229,0.55); opacity: 1; }
 }
 
@@ -1128,13 +1128,13 @@ button.folder-option:hover {
 
 /* Light theme for stats badges */
 .light .item-stats-badge {
-  background: rgba(244,244,245,0.92);
-  border: 1px solid rgba(212,212,216,0.35);
-  box-shadow: 0 1px 3px rgba(228,228,231,0.3);
+  background: rgba(226,226,240,0.92);
+  border: 1px solid rgba(180,181,212,0.35);
+  box-shadow: 0 1px 3px rgba(210,211,232,0.3);
 }
 
 .light .item-stats-badge:hover {
-  background: rgba(250,250,250,0.98);
+  background: rgba(238,238,246,0.98);
   border-color: rgba(79,70,229,0.35);
 }
 
@@ -1305,19 +1305,19 @@ button.folder-option:hover {
 
 /* Light theme overrides for filter bar */
 .light .filter-bar {
-  background: rgba(244,244,245,0.92);
-  border-bottom: 1px solid rgba(212,212,216,0.45);
+  background: rgba(226,226,240,0.92);
+  border-bottom: 1px solid rgba(180,181,212,0.45);
 }
 
 .light .filter-select {
-  background: rgba(250,250,250,0.98);
-  border: 1px solid rgba(212,212,216,0.55);
+  background: rgba(238,238,246,0.98);
+  border: 1px solid rgba(180,181,212,0.55);
   color: var(--accent);
-  box-shadow: 0 1px 3px rgba(228,228,231,0.3);
+  box-shadow: 0 1px 3px rgba(210,211,232,0.3);
 }
 
 .light .filter-select:hover {
-  background: rgba(244,244,245,0.95);
+  background: rgba(226,226,240,0.95);
   border-color: rgba(79,70,229,0.45);
 }
 
@@ -1327,19 +1327,19 @@ button.folder-option:hover {
 }
 
 .light .filter-group label {
-  color: rgba(24,24,27,0.75);
+  color: rgba(28,30,58,0.75);
 }
 
 .light .filter-stats {
-  color: rgba(24,24,27,0.75);
-  background: rgba(244,244,245,0.6);
-  box-shadow: 0 1px 3px rgba(228,228,231,0.25);
+  color: rgba(28,30,58,0.75);
+  background: rgba(226,226,240,0.6);
+  box-shadow: 0 1px 3px rgba(210,211,232,0.25);
 }
 
 .light .clear-filters-btn {
-  border: 1px solid rgba(212,212,216,0.55);
+  border: 1px solid rgba(180,181,212,0.55);
   color: var(--accent);
-  background: rgba(250,250,250,0.9);
+  background: rgba(238,238,246,0.9);
 }
 
 .light .clear-filters-btn:hover {
@@ -1479,32 +1479,32 @@ button.folder-option:hover {
 }
 
 .light .shortcuts-modal-card {
-  background: linear-gradient(180deg, rgba(250,250,250,0.98), rgba(244,244,245,0.92));
-  border: 1px solid rgba(212,212,216,0.45);
-  box-shadow: 0 20px 60px rgba(228,228,231,0.6);
+  background: linear-gradient(180deg, rgba(238,238,246,0.98), rgba(226,226,240,0.92));
+  border: 1px solid rgba(180,181,212,0.45);
+  box-shadow: 0 20px 60px rgba(210,211,232,0.6);
 }
 
 .light .shortcut-item {
-  background: rgba(244,244,245,0.92);
-  border: 1px solid rgba(212,212,216,0.35);
+  background: rgba(226,226,240,0.92);
+  border: 1px solid rgba(180,181,212,0.35);
 }
 
 .light .shortcut-item:hover {
-  background: rgba(250,250,250,0.98);
+  background: rgba(238,238,246,0.98);
   border-color: rgba(79,70,229,0.45);
 }
 
 .light .shortcut-keys {
-  background: rgba(250,250,250,0.98);
-  border: 1px solid rgba(212,212,216,0.45);
+  background: rgba(238,238,246,0.98);
+  border: 1px solid rgba(180,181,212,0.45);
   color: var(--accent-cta);
-  box-shadow: 0 1px 3px rgba(228,228,231,0.3);
+  box-shadow: 0 1px 3px rgba(210,211,232,0.3);
 }
 
 .light .shortcuts-tip {
   background: rgba(79, 70, 229, 0.06);
   border: 1px solid rgba(79, 70, 229, 0.25);
-  color: rgba(24,24,27,0.75);
+  color: rgba(28,30,58,0.75);
 }
 
 .light .shortcuts-tip strong {
@@ -1568,7 +1568,7 @@ button.folder-option:hover {
 }
 
 .light .top-progress-bar {
-  background: rgba(244,244,245,0.8);
+  background: rgba(226,226,240,0.8);
 }
 
 .light .top-progress-bar-fill {
@@ -1646,9 +1646,9 @@ button.folder-option:hover {
 
 /* Light theme context menu */
 .light .context-menu {
-  background: rgba(244,244,245,0.98);
-  border: 1px solid rgba(212,212,216,0.5);
-  box-shadow: 0 10px 32px rgba(24,24,27,0.15);
+  background: rgba(226,226,240,0.98);
+  border: 1px solid rgba(180,181,212,0.5);
+  box-shadow: 0 10px 32px rgba(28,30,58,0.15);
   backdrop-filter: blur(10px);
 }
 
@@ -1657,15 +1657,15 @@ button.folder-option:hover {
 }
 
 .light .context-menu-item:hover {
-  background: rgba(228,228,231,0.6);
+  background: rgba(210,211,232,0.6);
 }
 
 .light .context-menu-item:active {
-  background: rgba(212,212,216,0.4);
+  background: rgba(180,181,212,0.4);
 }
 
 .light .context-menu-divider {
-  background: rgba(212,212,216,0.3);
+  background: rgba(180,181,212,0.3);
 }
 
 .light .context-menu-section-label {
@@ -1680,7 +1680,7 @@ button.folder-option:hover {
 ::-webkit-scrollbar-corner { background: var(--bg-800); }
 
 /* Light theme scrollbar overrides */
-.light ::-webkit-scrollbar-track { background: #f4f4f5; }
-.light ::-webkit-scrollbar-thumb { background: #d4d4d8; }
-.light ::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
-.light ::-webkit-scrollbar-corner { background: #f4f4f5; }
+.light ::-webkit-scrollbar-track { background: #e2e2f0; }
+.light ::-webkit-scrollbar-thumb { background: #b4b5d4; }
+.light ::-webkit-scrollbar-thumb:hover { background: #9091bc; }
+.light ::-webkit-scrollbar-corner { background: #e2e2f0; }

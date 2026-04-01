@@ -2593,8 +2593,8 @@ export default function App() {
         >
           MMP Renamer
         </h1>
-  {/* Header search: only show when authenticated */}
-  {auth ? (
+  {/* Header search: only show when authenticated and on the dashboard */}
+  {auth && route === '#/' ? (
     <div className="header-search">
       <input
         className="form-input"
@@ -2617,6 +2617,7 @@ export default function App() {
 
         {auth ? (
             <div className="header-actions">
+            {route === '#/' && (
             <button
               className={"btn-save" + (selectMode && selectedCount ? ' shifted' : '')}
               style={{ display: selectMode && selectedCount ? 'none' : '' }}
@@ -2631,6 +2632,8 @@ export default function App() {
                 {activeScanKind === 'full' ? (<><Spinner /><span>Scanning…</span></>) : 'Scan'}
               </span>
             </button>
+            )}
+            {route === '#/' && (
             <button
               className="btn-ghost btn-incremental"
               style={{ display: selectMode && selectedCount ? 'none' : '' }}
@@ -2645,6 +2648,7 @@ export default function App() {
                 {activeScanKind === 'incremental' ? (<><Spinner /><span>Updating…</span></>) : 'Incremental scan'}
               </span>
             </button>
+            )}
         {/* Global bulk-enrich indicator (shown when many enrich operations are running) */}
             <div className="select-approve-wrap">
                 {selectMode && selectedCount ? (
@@ -2822,8 +2826,10 @@ export default function App() {
                       title="Rescan selected"
                     >Rescan selected</button>
                 ) : null}
-              <button className={"btn-ghost" + (selectMode ? ' active' : '')} onClick={() => { setSelectMode(s => { if (s) setSelected({}); return !s }) }} title={selectMode ? 'Exit select mode (Esc)' : 'Select items'}>Select</button>
-              {selectMode && filteredItems.length > 0 && (
+              {route === '#/' && (
+                <button className={"btn-ghost" + (selectMode ? ' active' : '')} onClick={() => { setSelectMode(s => { if (s) setSelected({}); return !s }) }} title={selectMode ? 'Exit select mode (Esc)' : 'Select items'}>Select</button>
+              )}
+              {route === '#/' && selectMode && filteredItems.length > 0 && (
                 <>
                   <button 
                     className="btn-ghost"
