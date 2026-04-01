@@ -5,42 +5,55 @@ const API = (p) => `/api${p}`
 
 // Memoized card — only re-renders when its own series data or isFetching flag changes,
 // not when any other card in the grid gets its image back.
-const MAX_TILT = 12 // degrees
+const MAX_TILT = 8 // degrees
 
 const SeriesCard = React.memo(function SeriesCard({ series, outputKey, isFetching, onContextMenu, parallax }) {
   const cardKey = `${outputKey}::${series.name}`
   const cardRef = useRef(null)
+  const coverRef = useRef(null)
   const rafRef = useRef(null)
 
-  const handleMouseEnter = useCallback(() => {
+  // Mouse enters the cover image area — prepare for tracking
+  const handleCoverEnter = useCallback(() => {
     if (!parallax) return
     const el = cardRef.current
     if (!el) return
-    // Suppress transition on transform while tilting so it tracks instantly
     el.style.transition = 'border-color 180ms ease, box-shadow 240ms ease'
     el.style.willChange = 'transform'
   }, [parallax])
 
-  const handleMouseMove = useCallback((e) => {
+  // Mouse moves over cover — apply 3D tilt to the whole card
+  const handleCoverMove = useCallback((e) => {
     if (!parallax) return
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
     rafRef.current = requestAnimationFrame(() => {
       const el = cardRef.current
-      if (!el) return
-      const rect = el.getBoundingClientRect()
+      const cover = coverRef.current
+      if (!el || !cover) return
+      const rect = cover.getBoundingClientRect()
       const dx = (e.clientX - (rect.left + rect.width / 2)) / (rect.width / 2)
       const dy = (e.clientY - (rect.top + rect.height / 2)) / (rect.height / 2)
       const rotX = -(dy * MAX_TILT)
       const rotY = dx * MAX_TILT
-      el.style.transform = `perspective(900px) rotateX(${rotX}deg) rotateY(${rotY}deg) translateY(-6px) scale(1.05)`
+      el.style.transform = `perspective(900px) rotateX(${rotX}deg) rotateY(${rotY}deg) translateY(-6px) scale(1.04)`
     })
   }, [parallax])
 
-  const handleMouseLeave = useCallback(() => {
+  // Mouse leaves the cover but may still be on the title bar — ease back to just-lifted
+  const handleCoverLeave = useCallback(() => {
+    if (!parallax) return
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
     const el = cardRef.current
     if (!el) return
-    // Smooth return to resting state
+    el.style.transition = 'transform 200ms ease, border-color 180ms ease, box-shadow 240ms ease'
+    el.style.transform = 'translateY(-6px)'
+  }, [parallax])
+
+  // Mouse leaves the whole card — full reset
+  const handleCardLeave = useCallback(() => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    const el = cardRef.current
+    if (!el) return
     el.style.transition = 'transform 300ms ease, border-color 180ms ease, box-shadow 240ms ease'
     el.style.transform = ''
     el.style.willChange = ''
@@ -56,12 +69,16 @@ const SeriesCard = React.memo(function SeriesCard({ series, outputKey, isFetchin
       data-series-name={series.name}
       data-series-key={cardKey}
       {...(parallax ? { 'data-parallax': '1' } : {})}
-      onMouseEnter={handleMouseEnter}
-      onMouseMove={handleMouseMove}
-      onMouseLeave={handleMouseLeave}
+      onMouseLeave={handleCardLeave}
       onContextMenu={(e) => { e.preventDefault(); onContextMenu && onContextMenu(e, series, outputKey); }}
     >
-      <div className="approved-series-cover-wrap">
+      <div
+        ref={coverRef}
+        className="approved-series-cover-wrap"
+        onMouseEnter={handleCoverEnter}
+        onMouseMove={handleCoverMove}
+        onMouseLeave={handleCoverLeave}
+      >
         {series.imageUrl ? (
           <img className="approved-series-cover" src={series.imageUrl} alt={series.name} loading="lazy" />
         ) : (
@@ -73,7 +90,7 @@ const SeriesCard = React.memo(function SeriesCard({ series, outputKey, isFetchin
           <p className="approved-series-summary">{series.summary || `${series.appliedCount || 0} approved items`}</p>
         </div>
       </div>
-      <h3 className="approved-series-title" title={series.name}>{series.name}</h3>
+      <h3 className="approved-series-title" title={series.name}><span className="approved-series-title-text">{series.name}</span></h3>
     </article>
   )
 })

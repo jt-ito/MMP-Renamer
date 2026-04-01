@@ -304,30 +304,38 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  transition: transform 220ms ease, border-color 180ms ease, box-shadow 240ms ease, filter 220ms ease;
+  transition: transform 220ms ease, border-color 180ms ease, box-shadow 240ms ease;
   transform-origin: center center;
   /* contain: paint isolates repaint to this card and stops layout thrashing from siblings */
   contain: paint style;
 }
 
 .approved-series-card:hover {
-  will-change: transform;
-  transform: translateY(-6px) scale(1.03);
+  /* Lift card only — no scale so text stays pixel-sharp */
+  transform: translateY(-6px);
   border-color: rgba(99,102,241,0.50);
-  /* Asymmetric shadow implies a subtle left-tilt depth without rotating the card */
   box-shadow: 0 18px 30px rgba(0,0,0,0.44), 10px 12px 28px rgba(0,0,0,0.26), -4px 6px 14px rgba(0,0,0,0.12);
 }
 
-/* When JS parallax is handling the transform, suppress the CSS hover transform */
-.approved-series-card[data-parallax]:hover {
-  transform: none;
-}
-
+/* Scale only the cover art, not the text below */
 .approved-series-cover-wrap {
   position: relative;
   background: var(--bg-700);
   overflow: hidden;
   aspect-ratio: 2 / 3;
+  transition: transform 220ms ease;
+}
+
+.approved-series-card:hover .approved-series-cover-wrap {
+  transform: scale(1.05);
+}
+
+/* When JS parallax is handling transforms, suppress CSS transforms on both */
+.approved-series-card[data-parallax]:hover {
+  transform: none;
+}
+.approved-series-card[data-parallax]:hover .approved-series-cover-wrap {
+  transform: none;
 }
 
 .approved-series-cover {
@@ -380,7 +388,7 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 }
 
 .approved-series-title {
-  margin: 0;
+  margin: 0 6px 0 0;
   padding: 0 10px;
   min-height: 2.4em;
   height: 2.4em;
@@ -393,11 +401,16 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
   display: flex;
   align-items: center;
   justify-content: center;
-  text-align: center;
-  white-space: nowrap;
+  overflow: hidden;
+  transition: opacity 170ms ease;
+}
+.approved-series-title-text {
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: opacity 170ms ease;
+  white-space: nowrap;
+  text-align: center;
 }
 
 .approved-series-card:hover .approved-series-title {
