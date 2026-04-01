@@ -1920,9 +1920,12 @@ export default function App() {
         const results = (r.data && r.data.results) ? r.data.results : []
         const planByItemId = new Map((plans || []).map(p => [p.itemId, p]))
         const appliedPaths = new Set()
-        for (const res of results) {
-          if (res.status === 'hardlinked' && res.itemId != null) {
-            const plan = planByItemId.get(res.itemId)
+        for (let i = 0; i < results.length; i++) {
+          const res = results[i]
+          if (res.status === 'hardlinked') {
+            // itemId is undefined when plans come from preview (client sends only canonicalPath, not id)
+            // Fall back to index-based match since server processes plans in the same order
+            const plan = (res.itemId != null ? planByItemId.get(res.itemId) : null) || (plans && plans[i])
             if (plan && plan.fromPath) appliedPaths.add(plan.fromPath)
           }
         }
