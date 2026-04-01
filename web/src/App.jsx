@@ -1976,6 +1976,11 @@ export default function App() {
       for (const p of paths) n[p] = Object.assign({}, n[p] || {}, { hidden: true })
       return n
     })
+    // Guard against stale-closure re-insertion: mergeItemsUnique (used by handleScrollNearEnd
+    // and refreshEnrichForPaths) checks pendingHiddenRef before re-adding items from server
+    // pages or enrichment refreshes. Without this, a scroll-triggered page fetch while the
+    // server job is still running can pull item(s) back into the list before job completion.
+    for (const p of paths) pendingHiddenRef.current.add(p)
     try {
       const r = await axios.post(API('/jobs/approve'), {
         items: selItems.map(it => ({ canonicalPath: it.canonicalPath })),
@@ -1992,6 +1997,7 @@ export default function App() {
           if (total > 1) upsertToast(progressToastId, 'Approve', `Approving… ${done}/${total}`)
         }
       }).then(job => {
+        for (const p of paths) pendingHiddenRef.current.delete(p)
         removeToast(progressToastId)
         const applied = (job.results || []).filter(r => r.status === 'hardlinked').length
         const errors  = (job.results || []).filter(r => r.status === 'error').length
@@ -2003,10 +2009,12 @@ export default function App() {
           pushToast && pushToast('Approve', `Approved ${applied} item(s)`)
         }
       }).catch(e => {
+        for (const p of paths) pendingHiddenRef.current.delete(p)
         removeToast(progressToastId)
         pushToast && pushToast('Approve', `Approve job error: ${e && e.message ? e.message : String(e)}`)
       })
     } catch (e) {
+      for (const p of paths) pendingHiddenRef.current.delete(p)
       pushToast && pushToast('Approve', `Approve failed: ${e && e.message ? e.message : String(e)}`)
     }
   }
