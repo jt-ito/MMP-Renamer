@@ -509,12 +509,12 @@ body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", 
 }
 
 .light .approved-series-items-list {
-  background: rgba(238,238,246,0.7);
+  background: rgba(254,254,254,0.7);
   border-color: rgba(180,181,212,0.45);
 }
 
 .light .approved-series-items-list th {
-  background: rgba(226,226,240,0.92);
+  background: rgba(231,234,239,0.92);
   border-bottom-color: rgba(180,181,212,0.45);
   color: var(--muted);
 }
@@ -807,8 +807,8 @@ button.folder-option:hover {
 
 /* Light theme overrides — soft off-white with indigo accents */
 .light {
-	--bg-900: #EEEEF6; /* off-white, faint indigo tint */
-	--bg-800: #E2E2F0; /* slightly darker surface */
+	--bg-900: #FEFEFE; /* main white */
+	--bg-800: #E7EAEF; /* secondary surface */
 	--bg-700: #D2D3E8; /* card/hover */
 	--bg-600: #B4B5D4; /* border */
 	--muted: #6B72A0; /* indigo-tinted grey */
@@ -826,13 +826,13 @@ button.folder-option:hover {
 }
 
 .light .app header {
-	background: linear-gradient(180deg, rgba(238,238,246,0.96), rgba(226,226,240,0.92));
+	background: linear-gradient(180deg, rgba(254,254,254,0.96), rgba(231,234,239,0.92));
 	border-bottom: 1px solid rgba(180,181,212,0.45);
 	box-shadow: 0 14px 32px rgba(210,211,232,0.45);
 }
 
 .light .app header button {
-	background: rgba(226,226,240,0.78);
+	background: rgba(231,234,239,0.78);
 	border: 1px solid rgba(180,181,212,0.45);
 	color: var(--accent);
 	box-shadow: 0 8px 18px rgba(210,211,232,0.38);
@@ -847,7 +847,7 @@ button.folder-option:hover {
 .light .btn-incremental,
 .light .btn-search,
 .light .btn-clear {
-	background: rgba(226,226,240,0.78);
+	background: rgba(231,234,239,0.78);
 	border: 1px solid rgba(180,181,212,0.45);
 	color: var(--accent);
 	box-shadow: 0 10px 24px rgba(210,211,232,0.42);
@@ -908,25 +908,25 @@ button.folder-option:hover {
 .light .loading-card,
 .light .toast,
 .light .hidden-page .form-card {
-	background: linear-gradient(180deg, rgba(238,238,246,0.98), rgba(226,226,240,0.92));
+	background: linear-gradient(180deg, rgba(254,254,254,0.98), rgba(231,234,239,0.92));
 	border: 1px solid rgba(180,181,212,0.45);
 	box-shadow: 0 18px 40px rgba(210,211,232,0.45);
 	color: var(--accent);
 }
 
 .light .logs pre {
-	background: rgba(226,226,240,0.6);
+	background: rgba(231,234,239,0.6);
 	color: var(--muted);
 	border: 1px solid rgba(180,181,212,0.45);
 }
 
 .light .row {
 	border-bottom: 1px solid rgba(180,181,212,0.35);
-	background: rgba(238,238,246,0.92);
+	background: rgba(254,254,254,0.92);
 }
 
 .light .row:nth-child(even) {
-	background: rgba(226,226,240,0.9);
+	background: rgba(231,234,239,0.9);
 }
 
 .light .row.row-select-mode:hover {
@@ -934,7 +934,7 @@ button.folder-option:hover {
 }
 
 .light .row.row-selected {
-	background: linear-gradient(180deg, rgba(226,226,240,0.82), rgba(210,211,232,0.78));
+	background: linear-gradient(180deg, rgba(231,234,239,0.82), rgba(210,211,232,0.78));
 	border-color: rgba(180,181,212,0.65);
 	box-shadow: inset 0 0 0 1px rgba(180,181,212,0.45);
 }
@@ -951,7 +951,7 @@ button.folder-option:hover {
 .light .row input[type="checkbox"],
 .light .hidden-list input[type="checkbox"] {
 	border: 2px solid rgba(180,181,212,0.6);
-	background: rgba(238,238,246,0.92);
+	background: rgba(254,254,254,0.92);
 	box-shadow: inset 0 1px 2px rgba(210,211,232,0.45);
 }
 
@@ -969,12 +969,12 @@ button.folder-option:hover {
 .light .provider-button {
 	border-color: rgba(180,181,212,0.55);
 	color: var(--accent);
-	background: rgba(238,238,246,0.9);
+	background: rgba(254,254,254,0.9);
 	box-shadow: 0 8px 18px rgba(210,211,232,0.38);
 }
 
 .light .provider-button.inactive:hover {
-	background: rgba(226,226,240,0.85);
+	background: rgba(231,234,239,0.85);
 	border-color: rgba(180,181,212,0.65);
 }
 
@@ -991,13 +991,13 @@ button.folder-option:hover {
 }
 
 .light .provider-slot-item.drag-over {
-	background: rgba(226,226,240,0.55);
+	background: rgba(231,234,239,0.55);
 	border: 2px dashed rgba(180,181,212,0.75);
 }
 
 .light .form-input,
 .light select.form-input {
-	background: rgba(238,238,246,0.94);
+	background: rgba(254,254,254,0.94);
 	border-color: rgba(180,181,212,0.45);
 	color: var(--accent);
 	box-shadow: inset 0 1px 2px rgba(210,211,232,0.25);
@@ -1010,18 +1010,18 @@ button.folder-option:hover {
 }
 
 .light .header-search .form-input {
-	background: rgba(226,226,240,0.82);
+	background: rgba(231,234,239,0.82);
 	border-color: rgba(180,181,212,0.45);
 }
 
 .light select.form-input option,
 .light select.form-input optgroup {
-	background: rgba(238,238,246,0.96);
+	background: rgba(254,254,254,0.96);
 	color: var(--accent);
 }
 
 .light button.folder-option {
-	background: rgba(226,226,240,0.82);
+	background: rgba(231,234,239,0.82);
 	border: 1px solid rgba(180,181,212,0.45);
 }
 
@@ -1032,7 +1032,7 @@ button.folder-option:hover {
 }
 
 .light .folder-chip {
-	background: rgba(226,226,240,0.7);
+	background: rgba(231,234,239,0.7);
 	color: var(--accent);
 }
 
@@ -1050,14 +1050,14 @@ button.folder-option:hover {
 }
 
 .light .actions button {
-	background: rgba(226,226,240,0.78);
+	background: rgba(231,234,239,0.78);
 	border-color: rgba(180,181,212,0.45);
 	color: var(--accent);
 	box-shadow: 0 10px 24px rgba(210,211,232,0.38);
 }
 
 .light .row-match-btn {
-  background: rgba(226,226,240,0.78);
+  background: rgba(231,234,239,0.78);
   border-color: rgba(180,181,212,0.45);
   color: var(--accent);
   box-shadow: 0 10px 24px rgba(210,211,232,0.38);
@@ -1150,13 +1150,13 @@ button.folder-option:hover {
 
 /* Light theme for stats badges */
 .light .item-stats-badge {
-  background: rgba(226,226,240,0.92);
+  background: rgba(231,234,239,0.92);
   border: 1px solid rgba(180,181,212,0.35);
   box-shadow: 0 1px 3px rgba(210,211,232,0.3);
 }
 
 .light .item-stats-badge:hover {
-  background: rgba(238,238,246,0.98);
+  background: rgba(254,254,254,0.98);
   border-color: rgba(79,70,229,0.35);
 }
 
@@ -1327,19 +1327,19 @@ button.folder-option:hover {
 
 /* Light theme overrides for filter bar */
 .light .filter-bar {
-  background: rgba(226,226,240,0.92);
+  background: rgba(231,234,239,0.92);
   border-bottom: 1px solid rgba(180,181,212,0.45);
 }
 
 .light .filter-select {
-  background: rgba(238,238,246,0.98);
+  background: rgba(254,254,254,0.98);
   border: 1px solid rgba(180,181,212,0.55);
   color: var(--accent);
   box-shadow: 0 1px 3px rgba(210,211,232,0.3);
 }
 
 .light .filter-select:hover {
-  background: rgba(226,226,240,0.95);
+  background: rgba(231,234,239,0.95);
   border-color: rgba(79,70,229,0.45);
 }
 
@@ -1354,14 +1354,14 @@ button.folder-option:hover {
 
 .light .filter-stats {
   color: rgba(28,30,58,0.75);
-  background: rgba(226,226,240,0.6);
+  background: rgba(231,234,239,0.6);
   box-shadow: 0 1px 3px rgba(210,211,232,0.25);
 }
 
 .light .clear-filters-btn {
   border: 1px solid rgba(180,181,212,0.55);
   color: var(--accent);
-  background: rgba(238,238,246,0.9);
+  background: rgba(254,254,254,0.9);
 }
 
 .light .clear-filters-btn:hover {
@@ -1501,23 +1501,23 @@ button.folder-option:hover {
 }
 
 .light .shortcuts-modal-card {
-  background: linear-gradient(180deg, rgba(238,238,246,0.98), rgba(226,226,240,0.92));
+  background: linear-gradient(180deg, rgba(254,254,254,0.98), rgba(231,234,239,0.92));
   border: 1px solid rgba(180,181,212,0.45);
   box-shadow: 0 20px 60px rgba(210,211,232,0.6);
 }
 
 .light .shortcut-item {
-  background: rgba(226,226,240,0.92);
+  background: rgba(231,234,239,0.92);
   border: 1px solid rgba(180,181,212,0.35);
 }
 
 .light .shortcut-item:hover {
-  background: rgba(238,238,246,0.98);
+  background: rgba(254,254,254,0.98);
   border-color: rgba(79,70,229,0.45);
 }
 
 .light .shortcut-keys {
-  background: rgba(238,238,246,0.98);
+  background: rgba(254,254,254,0.98);
   border: 1px solid rgba(180,181,212,0.45);
   color: var(--accent-cta);
   box-shadow: 0 1px 3px rgba(210,211,232,0.3);
@@ -1590,7 +1590,7 @@ button.folder-option:hover {
 }
 
 .light .top-progress-bar {
-  background: rgba(226,226,240,0.8);
+  background: rgba(231,234,239,0.8);
 }
 
 .light .top-progress-bar-fill {
@@ -1668,7 +1668,7 @@ button.folder-option:hover {
 
 /* Light theme context menu */
 .light .context-menu {
-  background: rgba(226,226,240,0.98);
+  background: rgba(231,234,239,0.98);
   border: 1px solid rgba(180,181,212,0.5);
   box-shadow: 0 10px 32px rgba(28,30,58,0.15);
   backdrop-filter: blur(10px);
@@ -1702,7 +1702,7 @@ button.folder-option:hover {
 ::-webkit-scrollbar-corner { background: var(--bg-800); }
 
 /* Light theme scrollbar overrides */
-.light ::-webkit-scrollbar-track { background: #e2e2f0; }
+.light ::-webkit-scrollbar-track { background: #E7EAEF; }
 .light ::-webkit-scrollbar-thumb { background: #b4b5d4; }
 .light ::-webkit-scrollbar-thumb:hover { background: #9091bc; }
-.light ::-webkit-scrollbar-corner { background: #e2e2f0; }
+.light ::-webkit-scrollbar-corner { background: #E7EAEF; }
