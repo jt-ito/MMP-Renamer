@@ -550,6 +550,9 @@ function resolveExtractSubtitlesSetting(username) {
   return false;
 }
 
+// Tracks SRT output paths currently being written by ffmpeg to prevent concurrent duplicate writes
+const _subtitleExtractionInProgress = new Set();
+
 /**
  * Extracts all subtitle tracks from `fromPath` using ffmpeg and writes each one
  * as a separate .srt file next to `toPath`.
@@ -558,7 +561,6 @@ function resolveExtractSubtitlesSetting(username) {
  * Errors are non-fatal — a warning is logged and the approve flow continues.
  */
 async function extractSubtitlesToSrt(fromPath, toPath) {
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   // Step 1: probe for subtitle streams
   const probeArgs = [
     '-v', 'quiet', '-print_format', 'json', '-show_streams',
@@ -593,6 +595,8 @@ async function extractSubtitlesToSrt(fromPath, toPath) {
     const srtPath = path.join(toDir, toBase + suffix);
 
     if (fs.existsSync(srtPath)) continue; // already extracted
+    if (_subtitleExtractionInProgress.has(srtPath)) continue; // another operation is already writing this
+    _subtitleExtractionInProgress.add(srtPath);
 
     const extractArgs = [
       '-v', 'quiet', '-y',
@@ -612,6 +616,8 @@ async function extractSubtitlesToSrt(fromPath, toPath) {
       appendLog(`SUBTITLE_EXTRACTED from=${fromPath} to=${srtPath} stream=${streamIndex}`);
     } catch (e) {
       appendLog(`SUBTITLE_EXTRACT_ERROR from=${fromPath} stream=${streamIndex} err=${e && e.message ? e.message : String(e)}`);
+    } finally {
+      _subtitleExtractionInProgress.delete(srtPath);
     }
   }
 }
@@ -10117,16 +10123,16 @@ app.post('/api/jobs/approve', requireAuth, async (req, res) => {
               if (db) { db.setKV('enrichCache', enrichCache); db.setKV('renderedIndex', renderedIndex); }
               appliedFromPaths.add(fromKey);
               appendLog(`JOB_APPROVE_HARDLINK from=${fromPath} to=${toPath}`);
-              // Extract/copy subtitles if enabled
-              if (resolveExtractSubtitlesSetting(username)) {
-                try { copyExternalSubtitles(fromPath, toPath); } catch (e) {
-                  appendLog(`SUBTITLE_SIDECAR_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
-                }
-                try { await extractSubtitlesToSrt(fromPath, toPath); } catch (e) {
-                  appendLog(`SUBTITLE_EXTRACT_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
-                }
-              }
               resultItem.status = 'hardlinked'; resultItem.to = toPath;
+            }
+            // Extract/copy subtitles for both new hardlinks and already-existing outputs
+            if ((resultItem.status === 'hardlinked' || resultItem.status === 'exists') && resolveExtractSubtitlesSetting(username)) {
+              try { copyExternalSubtitles(fromPath, toPath); } catch (e) {
+                appendLog(`SUBTITLE_SIDECAR_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+              }
+              try { await extractSubtitlesToSrt(fromPath, toPath); } catch (e) {
+                appendLog(`SUBTITLE_EXTRACT_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+              }
             }
           } catch (e) {
             resultItem.status = 'error'; resultItem.error = e.message;
@@ -10182,37 +10188,62 @@ app.post('/api/jobs/backfill-subtitles', requireAuth, async (req, res) => {
     ;(async () => {
       try {
         let skipped = 0, extracted = 0, missing = 0, errors = 0;
+        const processedFromPaths = new Set(candidates.map(c => c.fromPath));
+
+        async function processBackfillItem(fromPath, toPath) {
+          if (!fs.existsSync(fromPath)) { missing++; return; }
+          if (!fs.existsSync(toPath)) { missing++; return; }
+          const toDir = path.dirname(toPath);
+          const toExt = path.extname(toPath);
+          const toBase = path.basename(toPath, toExt);
+          let existingEntries;
+          try { existingEntries = fs.readdirSync(toDir).filter(f => {
+            if (!f.startsWith(toBase)) return false;
+            const fe = path.extname(f).toLowerCase();
+            return SUBTITLE_EXTS.has(fe);
+          }); } catch (e) { existingEntries = []; }
+          if (existingEntries.length > 0) { skipped++; return; }
+          try { copyExternalSubtitles(fromPath, toPath); } catch (e) {
+            appendLog(`BACKFILL_SUBTITLE_SIDECAR_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+          }
+          await extractSubtitlesToSrt(fromPath, toPath);
+          extracted++;
+        }
+
         for (const { fromPath, toPath } of candidates) {
           try {
-            // Verify source and output files still exist
-            if (!fs.existsSync(fromPath)) { missing++; job.processedItems++; continue; }
-            if (!fs.existsSync(toPath)) { missing++; job.processedItems++; continue; }
-
-            // Check if any subtitle file already exists alongside toPath
-            const toDir = path.dirname(toPath);
-            const toExt = path.extname(toPath);
-            const toBase = path.basename(toPath, toExt);
-            const existingEntries = fs.readdirSync(toDir).filter(f => {
-              if (!f.startsWith(toBase)) return false;
-              const fe = path.extname(f).toLowerCase();
-              return SUBTITLE_EXTS.has(fe) || fe === '.srt';
-            });
-            if (existingEntries.length > 0) { skipped++; job.processedItems++; continue; }
-
-            try { copyExternalSubtitles(fromPath, toPath); } catch (e) {
-              appendLog(`BACKFILL_SUBTITLE_SIDECAR_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
-            }
-            await extractSubtitlesToSrt(fromPath, toPath);
-            extracted++;
+            await processBackfillItem(fromPath, toPath);
           } catch (e) {
             errors++;
             appendLog(`BACKFILL_SUBTITLE_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
           }
           job.processedItems++;
         }
+
+        // Second sweep: pick up any items approved while this backfill was running
+        const lateEntries = [];
+        for (const [fromKey, entry] of Object.entries(enrichCache || {})) {
+          if (!entry || !entry.applied || !entry.appliedTo) continue;
+          if (processedFromPaths.has(fromKey)) continue; // already handled above
+          lateEntries.push({ fromPath: fromKey, toPath: entry.appliedTo });
+        }
+        if (lateEntries.length > 0) {
+          job.totalItems += lateEntries.length;
+          for (const { fromPath, toPath } of lateEntries) {
+            try {
+              await processBackfillItem(fromPath, toPath);
+            } catch (e) {
+              errors++;
+              appendLog(`BACKFILL_SUBTITLE_LATE_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+            }
+            job.processedItems++;
+          }
+        }
+
         job.status = 'done'; job.completedAt = Date.now();
-        job.results = [{ extracted, skipped, missing, errors, total: candidates.length }];
-        appendLog(`JOB_BACKFILL_SUBTITLES done extracted=${extracted} skipped=${skipped} missing=${missing} errors=${errors}`);
+        const total = candidates.length + lateEntries.length;
+        job.results = [{ extracted, skipped, missing, errors, total }];
+        appendLog(`JOB_BACKFILL_SUBTITLES done extracted=${extracted} skipped=${skipped} missing=${missing} errors=${errors} late=${lateEntries.length}`);
       } catch (e) {
         job.status = 'error'; job.error = e.message; job.completedAt = Date.now();
         appendLog(`JOB_BACKFILL_SUBTITLES_FAIL err=${e.message}`);
