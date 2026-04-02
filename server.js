@@ -616,6 +616,119 @@ async function extractSubtitlesToSrt(fromPath, toPath) {
   }
 }
 
+const SUBTITLE_EXTS = new Set(['.srt', '.ass', '.ssa', '.vtt', '.sub']);
+
+/**
+ * Finds external (sidecar) subtitle files sitting in the same directory as `fromPath`.
+ * Tries three strategies in order:
+ *   1. Exact basename match: video.srt, video.eng.srt, video.en.srt
+ *   2. Episode-number match: extract ep number from video name, match 01.srt / 1.srt / E01.srt etc.
+ *   3. Positional match: sort videos and subtitles in the dir, pair by index.
+ * Returns an array of { subtitlePath, langTag (string|null), ext } objects.
+ */
+function findExternalSubtitles(fromPath) {
+  const fromDir = path.dirname(fromPath);
+  const fromExt = path.extname(fromPath);
+  const fromBase = path.basename(fromPath, fromExt);
+  let allFiles;
+  try { allFiles = fs.readdirSync(fromDir); } catch (e) { return []; }
+
+  const subFiles = allFiles.filter(f => SUBTITLE_EXTS.has(path.extname(f).toLowerCase()));
+  if (!subFiles.length) return [];
+
+  const results = [];
+  const matched = new Set();
+
+  // Strategy 1: basename prefix match
+  for (const f of subFiles) {
+    const subExt = path.extname(f).toLowerCase();
+    const subBase = path.basename(f, subExt);
+    if (subBase === fromBase) {
+      results.push({ subtitlePath: path.join(fromDir, f), langTag: null, ext: subExt });
+      matched.add(f);
+    } else if (subBase.startsWith(fromBase + '.')) {
+      // e.g. video.eng.srt or video.en.srt
+      const langPart = subBase.slice(fromBase.length + 1);
+      if (/^[a-zA-Z]{2,8}$/.test(langPart)) {
+        results.push({ subtitlePath: path.join(fromDir, f), langTag: langPart.toLowerCase(), ext: subExt });
+        matched.add(f);
+      }
+    }
+  }
+  if (results.length) return results;
+
+  // Strategy 2: episode number match
+  // Extract episode number: match patterns like E01, EP01, " - 01", "_01", or trailing number
+  const epNumMatch =
+    fromBase.match(/(?:e(?:p(?:isode)?)?)[\s._-]?(\d{1,3})(?:\D|$)/i) ||
+    fromBase.match(/(?:[\s._-])(\d{1,3})(?:\D|$)/) ||
+    fromBase.match(/(\d{1,3})(?:\D|$)/);
+  if (epNumMatch) {
+    const epNum = parseInt(epNumMatch[1], 10);
+    const epPadded = String(epNum).padStart(2, '0');
+    const epPlain = String(epNum);
+    for (const f of subFiles) {
+      if (matched.has(f)) continue;
+      const subExt = path.extname(f).toLowerCase();
+      const subBase = path.basename(f, subExt);
+      // Accept: "1", "01", "001", "E1", "E01", "EP01", "episode01"
+      // Optionally followed by a language suffix: "01.eng", "01.en"
+      const subNumMatch = subBase.match(/^(?:e(?:p(?:isode)?)?[\s._-]?)?(\d{1,3})(?:\.[a-zA-Z]{2,8})?$/i);
+      if (subNumMatch && parseInt(subNumMatch[1], 10) === epNum) {
+        // Extract optional lang tag from subtitle base
+        const langMatch = subBase.match(/^\d{1,3}\.([a-zA-Z]{2,8})$/);
+        const langTag = langMatch ? langMatch[1].toLowerCase() : null;
+        results.push({ subtitlePath: path.join(fromDir, f), langTag, ext: subExt });
+        matched.add(f);
+      }
+    }
+  }
+  if (results.length) return results;
+
+  // Strategy 3: positional match — sort video files and subtitle files, pair by index
+  const VIDEO_EXTS_SET = new Set(['.mkv','.mp4','.avi','.mov','.m4v','.mpg','.mpeg','.webm','.wmv','.flv','.ts','.ogg','.ogv','.3gp','.3g2']);
+  const videoFiles = allFiles
+    .filter(f => VIDEO_EXTS_SET.has(path.extname(f).toLowerCase()))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+  const idx = videoFiles.indexOf(path.basename(fromPath));
+  if (idx >= 0) {
+    const sortedSubs = [...subFiles]
+      .filter(f => !matched.has(f))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    if (idx < sortedSubs.length) {
+      const f = sortedSubs[idx];
+      const subExt = path.extname(f).toLowerCase();
+      results.push({ subtitlePath: path.join(fromDir, f), langTag: null, ext: subExt });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Copies sidecar subtitle files found next to `fromPath` into the output directory
+ * alongside `toPath`, renaming them to match the output basename.
+ * e.g. source/video.eng.srt → output/MovieName.S01E01.eng.srt
+ */
+function copyExternalSubtitles(fromPath, toPath) {
+  const found = findExternalSubtitles(fromPath);
+  if (!found.length) return;
+  const toDir = path.dirname(toPath);
+  const toExt = path.extname(toPath);
+  const toBase = path.basename(toPath, toExt);
+  for (const { subtitlePath, langTag, ext } of found) {
+    const suffix = langTag ? `.${langTag}${ext}` : ext;
+    const destPath = path.join(toDir, toBase + suffix);
+    if (fs.existsSync(destPath)) continue;
+    try {
+      fs.copyFileSync(subtitlePath, destPath);
+      appendLog(`SUBTITLE_SIDECAR_COPIED from=${subtitlePath} to=${destPath}`);
+    } catch (e) {
+      appendLog(`SUBTITLE_SIDECAR_COPY_ERROR from=${subtitlePath} to=${destPath} err=${e && e.message ? e.message : String(e)}`);
+    }
+  }
+}
+
 // Ensure basic persistent store files exist and load them into memory
 try { ensureFile(enrichStoreFile, {}); } catch (e) {}
 try { ensureFile(parsedCacheFile, {}); } catch (e) {}
@@ -10004,8 +10117,11 @@ app.post('/api/jobs/approve', requireAuth, async (req, res) => {
               if (db) { db.setKV('enrichCache', enrichCache); db.setKV('renderedIndex', renderedIndex); }
               appliedFromPaths.add(fromKey);
               appendLog(`JOB_APPROVE_HARDLINK from=${fromPath} to=${toPath}`);
-              // Extract subtitles if enabled
+              // Extract/copy subtitles if enabled
               if (resolveExtractSubtitlesSetting(username)) {
+                try { copyExternalSubtitles(fromPath, toPath); } catch (e) {
+                  appendLog(`SUBTITLE_SIDECAR_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+                }
                 try { await extractSubtitlesToSrt(fromPath, toPath); } catch (e) {
                   appendLog(`SUBTITLE_EXTRACT_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
                 }
@@ -10072,15 +10188,20 @@ app.post('/api/jobs/backfill-subtitles', requireAuth, async (req, res) => {
             if (!fs.existsSync(fromPath)) { missing++; job.processedItems++; continue; }
             if (!fs.existsSync(toPath)) { missing++; job.processedItems++; continue; }
 
-            // Check if at least one .srt already exists alongside toPath
+            // Check if any subtitle file already exists alongside toPath
             const toDir = path.dirname(toPath);
             const toExt = path.extname(toPath);
             const toBase = path.basename(toPath, toExt);
-            const existingEntries = fs.readdirSync(toDir).filter(f =>
-              f.startsWith(toBase) && f.endsWith('.srt')
-            );
+            const existingEntries = fs.readdirSync(toDir).filter(f => {
+              if (!f.startsWith(toBase)) return false;
+              const fe = path.extname(f).toLowerCase();
+              return SUBTITLE_EXTS.has(fe) || fe === '.srt';
+            });
             if (existingEntries.length > 0) { skipped++; job.processedItems++; continue; }
 
+            try { copyExternalSubtitles(fromPath, toPath); } catch (e) {
+              appendLog(`BACKFILL_SUBTITLE_SIDECAR_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+            }
             await extractSubtitlesToSrt(fromPath, toPath);
             extracted++;
           } catch (e) {
