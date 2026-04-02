@@ -29,9 +29,9 @@ WORKDIR /usr/src/app
 ENV NODE_ENV=production
 ENV PORT=5173
 
-# Ensure CA certs for TLS calls
+# Ensure CA certs for TLS calls, and ffmpeg for subtitle extraction
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends ca-certificates git libsqlite3-0 \
+	&& apt-get install -y --no-install-recommends ca-certificates git libsqlite3-0 ffmpeg \
 	&& rm -rf /var/lib/apt/lists/*
 
 # Copy artifacts from builder
