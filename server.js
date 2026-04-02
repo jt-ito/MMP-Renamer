@@ -5,6 +5,7 @@ const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
 const https = require('https')
+const { execFile } = require('child_process')
 const { v4: uuidv4 } = require('uuid')
 const tvdb = require('./lib/tvdb')
 const chokidar = require('chokidar')
@@ -380,6 +381,9 @@ loadManualIds();
 if (typeof serverSettings.delete_hardlinks_on_unapprove === 'undefined') {
   serverSettings.delete_hardlinks_on_unapprove = true;
 }
+if (typeof serverSettings.extract_subtitles === 'undefined') {
+  serverSettings.extract_subtitles = false;
+}
 
 const envAllowedOrigins = String(process.env.CORS_ALLOWED_ORIGINS || '')
   .split(',')
@@ -532,6 +536,84 @@ function resolveDeleteHardlinksSetting(username) {
     }
   } catch (e) {}
   return true;
+}
+
+function resolveExtractSubtitlesSetting(username) {
+  try {
+    if (username && users && users[username] && users[username].settings && typeof users[username].settings.extract_subtitles !== 'undefined') {
+      return coerceBoolean(users[username].settings.extract_subtitles);
+    }
+    if (serverSettings && typeof serverSettings.extract_subtitles !== 'undefined') {
+      return coerceBoolean(serverSettings.extract_subtitles);
+    }
+  } catch (e) {}
+  return false;
+}
+
+/**
+ * Extracts all subtitle tracks from `fromPath` using ffmpeg and writes each one
+ * as a separate .srt file next to `toPath`.
+ * Files are named: <toBasename>.<langTag>.srt  (or <toBasename>.srt for a single track).
+ * Nothing is written to / modified on the source file.
+ * Errors are non-fatal — a warning is logged and the approve flow continues.
+ */
+async function extractSubtitlesToSrt(fromPath, toPath) {
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  // Step 1: probe for subtitle streams
+  const probeArgs = [
+    '-v', 'quiet', '-print_format', 'json', '-show_streams',
+    '-select_streams', 's', fromPath
+  ];
+  let streams;
+  try {
+    streams = await new Promise((resolve, reject) => {
+      execFile('ffprobe', probeArgs, { timeout: 30000 }, (err, stdout) => {
+        if (err) return reject(err);
+        try { resolve(JSON.parse(stdout).streams || []); } catch (e) { reject(e); }
+      });
+    });
+  } catch (e) {
+    appendLog(`SUBTITLE_PROBE_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+    return;
+  }
+
+  if (!streams || !streams.length) return; // no subtitle tracks
+
+  const toDir = path.dirname(toPath);
+  const toExt = path.extname(toPath);
+  const toBase = path.basename(toPath, toExt);
+
+  for (let i = 0; i < streams.length; i++) {
+    const stream = streams[i];
+    const streamIndex = stream.index != null ? stream.index : i;
+    const lang = (stream.tags && (stream.tags.language || stream.tags.LANGUAGE)) || null;
+    const suffix = streams.length === 1
+      ? '.srt'
+      : (lang ? `.${lang}.srt` : `.${i}.srt`);
+    const srtPath = path.join(toDir, toBase + suffix);
+
+    if (fs.existsSync(srtPath)) continue; // already extracted
+
+    const extractArgs = [
+      '-v', 'quiet', '-y',
+      '-i', fromPath,
+      '-map', `0:${streamIndex}`,
+      '-c:s', 'srt',
+      srtPath
+    ];
+
+    try {
+      await new Promise((resolve, reject) => {
+        execFile('ffmpeg', extractArgs, { timeout: 120000 }, (err) => {
+          if (err) return reject(err);
+          resolve();
+        });
+      });
+      appendLog(`SUBTITLE_EXTRACTED from=${fromPath} to=${srtPath} stream=${streamIndex}`);
+    } catch (e) {
+      appendLog(`SUBTITLE_EXTRACT_ERROR from=${fromPath} stream=${streamIndex} err=${e && e.message ? e.message : String(e)}`);
+    }
+  }
 }
 
 // Ensure basic persistent store files exist and load them into memory
@@ -6074,7 +6156,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove', 'client_os', 'log_timezone'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'client_os', 'log_timezone'];
       for (const k of allowed) {
         if (body[k] === undefined) continue;
         if (k === 'metadata_provider_order') {
@@ -6090,6 +6172,8 @@ app.post('/api/settings', requireAuth, (req, res) => {
           serverSettings.output_folders = Array.isArray(body[k]) ? body[k] : [];
         } else if (k === 'delete_hardlinks_on_unapprove') {
           serverSettings.delete_hardlinks_on_unapprove = coerceBoolean(body[k]);
+        } else if (k === 'extract_subtitles') {
+          serverSettings.extract_subtitles = coerceBoolean(body[k]);
         } else {
           serverSettings[k] = body[k];
         }
@@ -6109,7 +6193,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch', 'delete_hardlinks_on_unapprove', 'client_os', 'log_timezone'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'client_os', 'log_timezone'];
     
     // Check if scan_input_path changed to update watcher
     const oldScanPath = users[username].settings.scan_input_path;
@@ -6136,6 +6220,8 @@ app.post('/api/settings', requireAuth, (req, res) => {
         newWatchEnabled = normalized;
       } else if (k === 'delete_hardlinks_on_unapprove') {
         users[username].settings.delete_hardlinks_on_unapprove = coerceBoolean(body[k]);
+      } else if (k === 'extract_subtitles') {
+        users[username].settings.extract_subtitles = coerceBoolean(body[k]);
       } else {
         users[username].settings[k] = body[k];
       }
@@ -9918,6 +10004,12 @@ app.post('/api/jobs/approve', requireAuth, async (req, res) => {
               if (db) { db.setKV('enrichCache', enrichCache); db.setKV('renderedIndex', renderedIndex); }
               appliedFromPaths.add(fromKey);
               appendLog(`JOB_APPROVE_HARDLINK from=${fromPath} to=${toPath}`);
+              // Extract subtitles if enabled
+              if (resolveExtractSubtitlesSetting(username)) {
+                try { await extractSubtitlesToSrt(fromPath, toPath); } catch (e) {
+                  appendLog(`SUBTITLE_EXTRACT_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+                }
+              }
               resultItem.status = 'hardlinked'; resultItem.to = toPath;
             }
           } catch (e) {

@@ -97,6 +97,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   const [outputFoldersDirty, setOutputFoldersDirty] = useState([])
   const [enableFolderWatch, setEnableFolderWatch] = useState(false)
   const [deleteHardlinksOnUnapprove, setDeleteHardlinksOnUnapprove] = useState(true)
+  const [extractSubtitles, setExtractSubtitles] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [clientOS, setClientOS] = useState(typeof window !== 'undefined' ? (localStorage.getItem('client_os') || 'linux') : 'linux')
   const [logTimezone, setLogTimezone] = useState(typeof window !== 'undefined' ? (localStorage.getItem('log_timezone') || '') : '')
@@ -149,6 +150,12 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
             ? (serverDeletePref === undefined ? true : (serverDeletePref === true || serverDeletePref === 'true'))
             : (deleteLinksPref === true || deleteLinksPref === 'true')
           setDeleteHardlinksOnUnapprove(resolvedDeletePref)
+          const extractPref = user.extract_subtitles
+          const serverExtractPref = server.extract_subtitles
+          const resolvedExtractPref = extractPref === undefined
+            ? (serverExtractPref === true || serverExtractPref === 'true')
+            : (extractPref === true || extractPref === 'true')
+          setExtractSubtitles(resolvedExtractPref)
           const folders = Array.isArray(user.output_folders) ? user.output_folders : []
           setOutputFolders(folders)
           setOutputFoldersDirty(new Array(folders.length).fill(false))
@@ -173,6 +180,10 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         const deletePref = storedDeletePref != null
           ? storedDeletePref !== 'false'
           : (serverDeletePref === undefined ? true : (serverDeletePref === true || serverDeletePref === 'true'))
+        const storedExtractPref = localStorage.getItem('extract_subtitles')
+        const extractPref = storedExtractPref != null
+          ? storedExtractPref === 'true'
+          : (server.extract_subtitles === true || server.extract_subtitles === 'true')
         const storedOrder = localStorage.getItem('metadata_provider_order') || localStorage.getItem('default_meta_provider')
         const storedFolders = localStorage.getItem('output_folders')
         setTmdbKey(v)
@@ -187,6 +198,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         setOutputPath(out)
         setEnableFolderWatch(storedWatch)
   setDeleteHardlinksOnUnapprove(deletePref)
+        setExtractSubtitles(extractPref)
           setLogTimezone(server.log_timezone || localStorage.getItem('log_timezone') || '')
         setProviderOrder(sanitizeProviderOrder(storedOrder))
         try {
@@ -213,6 +225,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         const out = localStorage.getItem('scan_output_path') || ''
   const storedOrder = localStorage.getItem('metadata_provider_order') || localStorage.getItem('default_meta_provider')
   const storedDeletePref = localStorage.getItem('delete_hardlinks_on_unapprove')
+        const storedExtractPref2 = localStorage.getItem('extract_subtitles')
         const storedFolders = localStorage.getItem('output_folders')
         setTmdbKey(v)
         setAnilistKey(a)
@@ -226,6 +239,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         setOutputPath(out)
         setProviderOrder(sanitizeProviderOrder(storedOrder))
   setDeleteHardlinksOnUnapprove(storedDeletePref == null ? true : storedDeletePref !== 'false')
+        setExtractSubtitles(storedExtractPref2 === 'true')
           setLogTimezone(localStorage.getItem('log_timezone') || '')
         try {
           const parsedFolders = storedFolders ? JSON.parse(storedFolders) : []
@@ -276,6 +290,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
       localStorage.setItem('scan_output_path', outputPath)
       localStorage.setItem('enable_folder_watch', String(enableFolderWatch))
       localStorage.setItem('delete_hardlinks_on_unapprove', String(deleteHardlinksOnUnapprove))
+      localStorage.setItem('extract_subtitles', String(extractSubtitles))
       try { localStorage.setItem('output_folders', JSON.stringify(outputFolders)) } catch (e) {}
       try { localStorage.setItem('log_timezone', logTimezone) } catch (e) {}
       const firstProvider = providerOrder[0] || 'tmdb'
@@ -295,6 +310,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           scan_output_path: outputPath,
           enable_folder_watch: enableFolderWatch,
           delete_hardlinks_on_unapprove: deleteHardlinksOnUnapprove,
+          extract_subtitles: extractSubtitles,
           output_folders: outputFolders,
           rename_template: renameTemplate,
           client_os: clientOS,
@@ -330,6 +346,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
       setOutputPath('')
   setEnableFolderWatch(false)
   setDeleteHardlinksOnUnapprove(true)
+  setExtractSubtitles(false)
   setOutputFolders([])
   setOutputFoldersDirty([])
       setLogTimezone('')
@@ -346,6 +363,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
       localStorage.removeItem('scan_output_path')
       localStorage.removeItem('enable_folder_watch')
   localStorage.removeItem('delete_hardlinks_on_unapprove')
+      localStorage.removeItem('extract_subtitles')
   localStorage.removeItem('output_folders')
         localStorage.removeItem('client_os')
         localStorage.removeItem('log_timezone')
@@ -782,6 +800,26 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           </label>
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8, marginLeft:32}}>
             Removes generated hardlinks from any configured output folder when you unapprove an item. The original source file is never touched.
+          </div>
+        </div>
+
+        <div style={{marginTop:18}}>
+          <label style={{display:'flex', alignItems:'center', gap:12, cursor:'pointer', userSelect:'none'}}>
+            <input
+              type="checkbox"
+              checked={extractSubtitles}
+              onChange={e => { setExtractSubtitles(e.target.checked); setDirty(true) }}
+              style={{
+                width:20,
+                height:20,
+                cursor:'pointer',
+                accentColor:'var(--hunter-green)'
+              }}
+            />
+            <span style={{fontSize:13, color:'var(--accent)', fontWeight:500}}>Extract subtitles on approve</span>
+          </label>
+          <div style={{fontSize:12, color:'var(--muted)', marginTop:8, marginLeft:32}}>
+            When approving a file, extracts embedded subtitle tracks from the source file using ffmpeg and saves them as <code>.srt</code> files alongside the output. Requires ffmpeg to be installed and available in PATH. The source file is never modified.
           </div>
         </div>
 
