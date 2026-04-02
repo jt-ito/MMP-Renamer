@@ -98,6 +98,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   const [enableFolderWatch, setEnableFolderWatch] = useState(false)
   const [deleteHardlinksOnUnapprove, setDeleteHardlinksOnUnapprove] = useState(true)
   const [extractSubtitles, setExtractSubtitles] = useState(false)
+  const [backfillJob, setBackfillJob] = useState(null) // { status, extracted, skipped, missing, errors, total }
   const [dirty, setDirty] = useState(false)
   const [clientOS, setClientOS] = useState(typeof window !== 'undefined' ? (localStorage.getItem('client_os') || 'linux') : 'linux')
   const [logTimezone, setLogTimezone] = useState(typeof window !== 'undefined' ? (localStorage.getItem('log_timezone') || '') : '')
@@ -380,6 +381,48 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
       const r = await axios.get(API('/path/exists'), { params: { path: p } })
       return r.data || { exists: false }
     } catch (e) { return { exists: false } }
+  }
+
+  async function runBackfill() {
+    setBackfillJob({ status: 'running', total: null })
+    try {
+      const r = await axios.post(API('/jobs/backfill-subtitles'))
+      const jobId = r.data && r.data.jobId
+      const total = r.data && r.data.total != null ? r.data.total : null
+      setBackfillJob({ status: 'running', total })
+      if (!jobId) { setBackfillJob({ status: 'error', message: 'No job ID returned' }); return }
+      // Poll until done
+      const INTERVAL = 1500
+      const TIMEOUT = 60 * 60 * 1000
+      const start = Date.now()
+      await new Promise((resolve) => {
+        const t = setInterval(async () => {
+          try {
+            if (Date.now() - start > TIMEOUT) { clearInterval(t); setBackfillJob(prev => ({ ...prev, status: 'error', message: 'Timed out' })); resolve(); return }
+            const jr = await axios.get(API(`/jobs/${jobId}`)).catch(() => null)
+            if (!jr || !jr.data || !jr.data.job) return
+            const job = jr.data.job
+            setBackfillJob(prev => ({ ...prev, processedItems: job.processedItems, total: job.totalItems }))
+            if (job.status === 'done' || job.status === 'error') {
+              clearInterval(t)
+              const result = (job.results && job.results[0]) || {}
+              setBackfillJob({
+                status: job.status,
+                extracted: result.extracted ?? 0,
+                skipped: result.skipped ?? 0,
+                missing: result.missing ?? 0,
+                errors: result.errors ?? 0,
+                total: result.total ?? job.totalItems,
+                message: job.error || null
+              })
+              resolve()
+            }
+          } catch (e) { /* keep polling */ }
+        }, INTERVAL)
+      })
+    } catch (e) {
+      setBackfillJob({ status: 'error', message: e && e.response && e.response.data && e.response.data.error ? e.response.data.error : (e.message || 'Failed') })
+    }
   }
 
 
@@ -821,6 +864,39 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8, marginLeft:32}}>
             When approving a file, extracts embedded subtitle tracks from the source file using ffmpeg and saves them as <code>.srt</code> files alongside the output. Requires ffmpeg to be installed and available in PATH. The source file is never modified.
           </div>
+          {extractSubtitles && (
+            <div style={{marginTop:12, marginLeft:32}}>
+              <button
+                onClick={runBackfill}
+                disabled={backfillJob && backfillJob.status === 'running'}
+                style={{
+                  padding:'6px 14px', fontSize:12, cursor: backfillJob && backfillJob.status === 'running' ? 'not-allowed' : 'pointer',
+                  background:'var(--hunter-green)', color:'#fff', border:'none', borderRadius:4,
+                  opacity: backfillJob && backfillJob.status === 'running' ? 0.6 : 1
+                }}
+              >
+                {backfillJob && backfillJob.status === 'running' ? 'Running…' : 'Backfill missing subtitles'}
+              </button>
+              <span style={{fontSize:11, color:'var(--muted)', marginLeft:10}}>
+                Scans all approved files and extracts subtitles for any that are missing a .srt file.
+              </span>
+              {backfillJob && backfillJob.status === 'running' && backfillJob.total != null && (
+                <div style={{fontSize:11, color:'var(--muted)', marginTop:4}}>
+                  Processing… {backfillJob.processedItems != null ? `${backfillJob.processedItems} / ${backfillJob.total}` : `${backfillJob.total} items`}
+                </div>
+              )}
+              {backfillJob && backfillJob.status === 'done' && (
+                <div style={{fontSize:11, color:'var(--accent)', marginTop:4}}>
+                  Done — extracted: {backfillJob.extracted}, already had .srt: {backfillJob.skipped}, missing source/output: {backfillJob.missing}{backfillJob.errors > 0 ? `, errors: ${backfillJob.errors}` : ''}
+                </div>
+              )}
+              {backfillJob && backfillJob.status === 'error' && (
+                <div style={{fontSize:11, color:'#e74c3c', marginTop:4}}>
+                  Error: {backfillJob.message || 'Unknown error'}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div style={{marginTop:18}}>

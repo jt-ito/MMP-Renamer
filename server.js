@@ -10045,6 +10045,61 @@ app.post('/api/jobs/approve', requireAuth, async (req, res) => {
   } catch (e) { if (!res.headersSent) res.status(500).json({ error: e.message }); }
 });
 
+// POST /api/jobs/backfill-subtitles — for all approved items, extract subtitles if the .srt is missing
+app.post('/api/jobs/backfill-subtitles', requireAuth, async (req, res) => {
+  try {
+    const username = req.session && req.session.username ? req.session.username : null;
+    if (!resolveExtractSubtitlesSetting(username)) {
+      return res.status(400).json({ error: 'Extract subtitles setting is disabled' });
+    }
+
+    // Collect approved items: enrichCache entries where applied=true and appliedTo exists
+    const candidates = [];
+    for (const [fromKey, entry] of Object.entries(enrichCache || {})) {
+      if (!entry || !entry.applied || !entry.appliedTo) continue;
+      candidates.push({ fromPath: fromKey, toPath: entry.appliedTo });
+    }
+
+    const job = createBgJob('backfill-subtitles', candidates.length);
+    res.json({ jobId: job.id, status: 'running', total: candidates.length });
+
+    ;(async () => {
+      try {
+        let skipped = 0, extracted = 0, missing = 0, errors = 0;
+        for (const { fromPath, toPath } of candidates) {
+          try {
+            // Verify source and output files still exist
+            if (!fs.existsSync(fromPath)) { missing++; job.processedItems++; continue; }
+            if (!fs.existsSync(toPath)) { missing++; job.processedItems++; continue; }
+
+            // Check if at least one .srt already exists alongside toPath
+            const toDir = path.dirname(toPath);
+            const toExt = path.extname(toPath);
+            const toBase = path.basename(toPath, toExt);
+            const existingEntries = fs.readdirSync(toDir).filter(f =>
+              f.startsWith(toBase) && f.endsWith('.srt')
+            );
+            if (existingEntries.length > 0) { skipped++; job.processedItems++; continue; }
+
+            await extractSubtitlesToSrt(fromPath, toPath);
+            extracted++;
+          } catch (e) {
+            errors++;
+            appendLog(`BACKFILL_SUBTITLE_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+          }
+          job.processedItems++;
+        }
+        job.status = 'done'; job.completedAt = Date.now();
+        job.results = [{ extracted, skipped, missing, errors, total: candidates.length }];
+        appendLog(`JOB_BACKFILL_SUBTITLES done extracted=${extracted} skipped=${skipped} missing=${missing} errors=${errors}`);
+      } catch (e) {
+        job.status = 'error'; job.error = e.message; job.completedAt = Date.now();
+        appendLog(`JOB_BACKFILL_SUBTITLES_FAIL err=${e.message}`);
+      }
+    })();
+  } catch (e) { if (!res.headersSent) res.status(500).json({ error: e.message }); }
+});
+
 // POST /api/jobs/bulk-rescan — enrich a list of paths server-side with rate limiting
 // Body: { paths: [...], force, skipAnimeProviders }
 app.post('/api/jobs/bulk-rescan', requireAuth, async (req, res) => {
@@ -10052,7 +10107,6 @@ app.post('/api/jobs/bulk-rescan', requireAuth, async (req, res) => {
     const { paths, force, skipAnimeProviders } = req.body || {};
     if (!paths || !Array.isArray(paths) || !paths.length) return res.status(400).json({ error: 'paths required' });
     const username = req.session && req.session.username ? req.session.username : null;
-
     let tmdbKey = null;
     try {
       if (username && users[username] && users[username].settings && users[username].settings.tmdb_api_key) tmdbKey = users[username].settings.tmdb_api_key;
