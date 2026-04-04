@@ -98,6 +98,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   const [enableFolderWatch, setEnableFolderWatch] = useState(false)
   const [deleteHardlinksOnUnapprove, setDeleteHardlinksOnUnapprove] = useState(true)
   const [extractSubtitles, setExtractSubtitles] = useState(false)
+  const [subtitleFormat, setSubtitleFormat] = useState('ass')
   const [backfillJob, setBackfillJob] = useState(null) // { status, extracted, skipped, missing, errors, total }
   const [dirty, setDirty] = useState(false)
   const [clientOS, setClientOS] = useState(typeof window !== 'undefined' ? (localStorage.getItem('client_os') || 'linux') : 'linux')
@@ -157,6 +158,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
             ? (serverExtractPref === true || serverExtractPref === 'true')
             : (extractPref === true || extractPref === 'true')
           setExtractSubtitles(resolvedExtractPref)
+          setSubtitleFormat(user.extract_subtitle_format || server.extract_subtitle_format || 'ass')
           const folders = Array.isArray(user.output_folders) ? user.output_folders : []
           setOutputFolders(folders)
           setOutputFoldersDirty(new Array(folders.length).fill(false))
@@ -185,6 +187,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         const extractPref = storedExtractPref != null
           ? storedExtractPref === 'true'
           : (server.extract_subtitles === true || server.extract_subtitles === 'true')
+        const storedSubtitleFormat = localStorage.getItem('extract_subtitle_format') || server.extract_subtitle_format || 'ass'
         const storedOrder = localStorage.getItem('metadata_provider_order') || localStorage.getItem('default_meta_provider')
         const storedFolders = localStorage.getItem('output_folders')
         setTmdbKey(v)
@@ -200,6 +203,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         setEnableFolderWatch(storedWatch)
   setDeleteHardlinksOnUnapprove(deletePref)
         setExtractSubtitles(extractPref)
+        setSubtitleFormat(storedSubtitleFormat)
           setLogTimezone(server.log_timezone || localStorage.getItem('log_timezone') || '')
         setProviderOrder(sanitizeProviderOrder(storedOrder))
         try {
@@ -227,6 +231,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   const storedOrder = localStorage.getItem('metadata_provider_order') || localStorage.getItem('default_meta_provider')
   const storedDeletePref = localStorage.getItem('delete_hardlinks_on_unapprove')
         const storedExtractPref2 = localStorage.getItem('extract_subtitles')
+        const storedSubtitleFormat2 = localStorage.getItem('extract_subtitle_format') || 'ass'
         const storedFolders = localStorage.getItem('output_folders')
         setTmdbKey(v)
         setAnilistKey(a)
@@ -241,6 +246,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         setProviderOrder(sanitizeProviderOrder(storedOrder))
   setDeleteHardlinksOnUnapprove(storedDeletePref == null ? true : storedDeletePref !== 'false')
         setExtractSubtitles(storedExtractPref2 === 'true')
+        setSubtitleFormat(storedSubtitleFormat2)
           setLogTimezone(localStorage.getItem('log_timezone') || '')
         try {
           const parsedFolders = storedFolders ? JSON.parse(storedFolders) : []
@@ -292,6 +298,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
       localStorage.setItem('enable_folder_watch', String(enableFolderWatch))
       localStorage.setItem('delete_hardlinks_on_unapprove', String(deleteHardlinksOnUnapprove))
       localStorage.setItem('extract_subtitles', String(extractSubtitles))
+      localStorage.setItem('extract_subtitle_format', subtitleFormat)
       try { localStorage.setItem('output_folders', JSON.stringify(outputFolders)) } catch (e) {}
       try { localStorage.setItem('log_timezone', logTimezone) } catch (e) {}
       const firstProvider = providerOrder[0] || 'tmdb'
@@ -312,6 +319,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           enable_folder_watch: enableFolderWatch,
           delete_hardlinks_on_unapprove: deleteHardlinksOnUnapprove,
           extract_subtitles: extractSubtitles,
+          extract_subtitle_format: subtitleFormat,
           output_folders: outputFolders,
           rename_template: renameTemplate,
           client_os: clientOS,
@@ -348,6 +356,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   setEnableFolderWatch(false)
   setDeleteHardlinksOnUnapprove(true)
   setExtractSubtitles(false)
+  setSubtitleFormat('ass')
   setOutputFolders([])
   setOutputFoldersDirty([])
       setLogTimezone('')
@@ -365,6 +374,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
       localStorage.removeItem('enable_folder_watch')
   localStorage.removeItem('delete_hardlinks_on_unapprove')
       localStorage.removeItem('extract_subtitles')
+      localStorage.removeItem('extract_subtitle_format')
   localStorage.removeItem('output_folders')
         localStorage.removeItem('client_os')
         localStorage.removeItem('log_timezone')
@@ -862,10 +872,27 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
             <span style={{fontSize:13, color:'var(--accent)', fontWeight:500}}>Extract subtitles on approve</span>
           </label>
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8, marginLeft:32}}>
-            When approving a file, extracts embedded subtitle tracks from the source file using ffmpeg and saves them as <code>.srt</code> files alongside the output. Requires ffmpeg to be installed and available in PATH. The source file is never modified.
+            When approving a file, extracts embedded subtitle tracks from the source file using ffmpeg and saves them alongside the output. Also copies external sidecar subtitle files. Requires ffmpeg in PATH. The source file is never modified.
           </div>
           {extractSubtitles && (
             <div style={{marginTop:12, marginLeft:32}}>
+              <label style={{fontSize:12, color:'var(--accent)', display:'flex', alignItems:'center', gap:8, marginBottom:10}}>
+                Output format:
+                <select
+                  value={subtitleFormat}
+                  onChange={e => { setSubtitleFormat(e.target.value); setDirty(true) }}
+                  style={{
+                    fontSize:12, padding:'3px 6px', borderRadius:4,
+                    background:'var(--card-bg,#1e1e1e)', color:'var(--accent)',
+                    border:'1px solid var(--muted)', cursor:'pointer'
+                  }}
+                >
+                  <option value="ass">ASS — Advanced SubStation Alpha (.ass)</option>
+                  <option value="srt">SRT — SubRip Text (.srt)</option>
+                  <option value="ssa">SSA — SubStation Alpha (.ssa)</option>
+                  <option value="vtt">VTT — WebVTT (.vtt)</option>
+                </select>
+              </label>
               <button
                 onClick={runBackfill}
                 disabled={backfillJob && backfillJob.status === 'running'}

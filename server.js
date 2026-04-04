@@ -384,6 +384,9 @@ if (typeof serverSettings.delete_hardlinks_on_unapprove === 'undefined') {
 if (typeof serverSettings.extract_subtitles === 'undefined') {
   serverSettings.extract_subtitles = false;
 }
+if (typeof serverSettings.extract_subtitle_format === 'undefined') {
+  serverSettings.extract_subtitle_format = 'ass';
+}
 
 const envAllowedOrigins = String(process.env.CORS_ALLOWED_ORIGINS || '')
   .split(',')
@@ -550,17 +553,36 @@ function resolveExtractSubtitlesSetting(username) {
   return false;
 }
 
+const VALID_SUBTITLE_FORMATS = new Set(['ass', 'srt', 'ssa', 'vtt']);
+const SUBTITLE_FORMAT_MAP = {
+  ass: { codec: 'ass',    ext: '.ass' },
+  srt: { codec: 'srt',    ext: '.srt' },
+  ssa: { codec: 'ssa',    ext: '.ssa' },
+  vtt: { codec: 'webvtt', ext: '.vtt' },
+};
+
+function resolveExtractSubtitleFormat(username) {
+  try {
+    const userFmt = username && users && users[username] && users[username].settings && users[username].settings.extract_subtitle_format;
+    if (userFmt && VALID_SUBTITLE_FORMATS.has(userFmt)) return userFmt;
+    const serverFmt = serverSettings && serverSettings.extract_subtitle_format;
+    if (serverFmt && VALID_SUBTITLE_FORMATS.has(serverFmt)) return serverFmt;
+  } catch (e) {}
+  return 'ass';
+}
+
 // Tracks SRT output paths currently being written by ffmpeg to prevent concurrent duplicate writes
 const _subtitleExtractionInProgress = new Set();
 
 /**
  * Extracts all subtitle tracks from `fromPath` using ffmpeg and writes each one
- * as a separate .srt file next to `toPath`.
- * Files are named: <toBasename>.<langTag>.srt  (or <toBasename>.srt for a single track).
+ * as a separate file next to `toPath` in the chosen format.
+ * Files are named: <toBasename>.<langTag>.<ext>  (or <toBasename>.<ext> for a single track).
  * Nothing is written to / modified on the source file.
  * Errors are non-fatal — a warning is logged and the approve flow continues.
  */
-async function extractSubtitlesToSrt(fromPath, toPath) {
+async function extractSubtitlesToSrt(fromPath, toPath, format = 'ass') {
+  const fmtInfo = SUBTITLE_FORMAT_MAP[format] || SUBTITLE_FORMAT_MAP.ass;
   // Step 1: probe for subtitle streams
   const probeArgs = [
     '-v', 'quiet', '-print_format', 'json', '-show_streams',
@@ -590,8 +612,8 @@ async function extractSubtitlesToSrt(fromPath, toPath) {
     const streamIndex = stream.index != null ? stream.index : i;
     const lang = (stream.tags && (stream.tags.language || stream.tags.LANGUAGE)) || null;
     const suffix = streams.length === 1
-      ? '.srt'
-      : (lang ? `.${lang}.srt` : `.${i}.srt`);
+      ? fmtInfo.ext
+      : (lang ? `.${lang}${fmtInfo.ext}` : `.${i}${fmtInfo.ext}`);
     const srtPath = path.join(toDir, toBase + suffix);
 
     if (fs.existsSync(srtPath)) continue; // already extracted
@@ -602,7 +624,7 @@ async function extractSubtitlesToSrt(fromPath, toPath) {
       '-v', 'quiet', '-y',
       '-i', fromPath,
       '-map', `0:${streamIndex}`,
-      '-c:s', 'srt',
+      '-c:s', fmtInfo.codec,
       srtPath
     ];
 
@@ -6275,7 +6297,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'client_os', 'log_timezone'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'extract_subtitle_format', 'client_os', 'log_timezone'];
       for (const k of allowed) {
         if (body[k] === undefined) continue;
         if (k === 'metadata_provider_order') {
@@ -6293,6 +6315,8 @@ app.post('/api/settings', requireAuth, (req, res) => {
           serverSettings.delete_hardlinks_on_unapprove = coerceBoolean(body[k]);
         } else if (k === 'extract_subtitles') {
           serverSettings.extract_subtitles = coerceBoolean(body[k]);
+        } else if (k === 'extract_subtitle_format') {
+          if (VALID_SUBTITLE_FORMATS.has(body[k])) serverSettings.extract_subtitle_format = body[k];
         } else {
           serverSettings[k] = body[k];
         }
@@ -6341,6 +6365,8 @@ app.post('/api/settings', requireAuth, (req, res) => {
         users[username].settings.delete_hardlinks_on_unapprove = coerceBoolean(body[k]);
       } else if (k === 'extract_subtitles') {
         users[username].settings.extract_subtitles = coerceBoolean(body[k]);
+      } else if (k === 'extract_subtitle_format') {
+        if (VALID_SUBTITLE_FORMATS.has(body[k])) users[username].settings.extract_subtitle_format = body[k];
       } else {
         users[username].settings[k] = body[k];
       }
@@ -10127,10 +10153,11 @@ app.post('/api/jobs/approve', requireAuth, async (req, res) => {
             }
             // Extract/copy subtitles for both new hardlinks and already-existing outputs
             if ((resultItem.status === 'hardlinked' || resultItem.status === 'exists') && resolveExtractSubtitlesSetting(username)) {
+              const subtitleFmt = resolveExtractSubtitleFormat(username);
               try { copyExternalSubtitles(fromPath, toPath); } catch (e) {
                 appendLog(`SUBTITLE_SIDECAR_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
               }
-              try { await extractSubtitlesToSrt(fromPath, toPath); } catch (e) {
+              try { await extractSubtitlesToSrt(fromPath, toPath, subtitleFmt); } catch (e) {
                 appendLog(`SUBTITLE_EXTRACT_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
               }
             }
@@ -10174,6 +10201,7 @@ app.post('/api/jobs/backfill-subtitles', requireAuth, async (req, res) => {
     if (!resolveExtractSubtitlesSetting(username)) {
       return res.status(400).json({ error: 'Extract subtitles setting is disabled' });
     }
+    const subtitleFmt = resolveExtractSubtitleFormat(username);
 
     // Collect approved items: enrichCache entries where applied=true and appliedTo exists
     const candidates = [];
@@ -10206,7 +10234,7 @@ app.post('/api/jobs/backfill-subtitles', requireAuth, async (req, res) => {
           try { copyExternalSubtitles(fromPath, toPath); } catch (e) {
             appendLog(`BACKFILL_SUBTITLE_SIDECAR_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
           }
-          await extractSubtitlesToSrt(fromPath, toPath);
+          await extractSubtitlesToSrt(fromPath, toPath, subtitleFmt);
           extracted++;
         }
 
