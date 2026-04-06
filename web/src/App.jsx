@@ -1954,14 +1954,17 @@ export default function App() {
     const TIMEOUT = 30 * 60 * 1000
     const start = Date.now()
     return new Promise((resolve, reject) => {
+      let settled = false
       const t = setInterval(async () => {
         try {
-          if (Date.now() - start > TIMEOUT) { clearInterval(t); reject(new Error('job poll timeout')); return }
+          if (settled) return
+          if (Date.now() - start > TIMEOUT) { clearInterval(t); settled = true; reject(new Error('job poll timeout')); return }
           const r = await axios.get(API(`/jobs/${jobId}`)).catch(() => null)
+          if (settled) return
           if (!r || !r.data || !r.data.job) return
           const job = r.data.job
           if (onProgress) onProgress(job)
-          if (job.status === 'done' || job.status === 'error') { clearInterval(t); resolve(job) }
+          if (job.status === 'done' || job.status === 'error') { clearInterval(t); settled = true; resolve(job) }
         } catch (e) { /* keep polling on transient errors */ }
       }, INTERVAL)
     })
