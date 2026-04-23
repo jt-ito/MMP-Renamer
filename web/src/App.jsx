@@ -204,6 +204,7 @@ export default function App() {
   const [searching, setSearching] = useState(false)
   const searchAbortRef = React.useRef(null)
   const searchTimeoutRef = React.useRef(null)
+  const searchQueryRef = React.useRef('')
   const loadingMoreRef = React.useRef(false)
   const [enrichCache, setEnrichCache] = useLocalState('enrichCache', {})
   // Filter state with localStorage persistence
@@ -2398,6 +2399,9 @@ export default function App() {
     return () => { mounted = false; try { clearInterval(id) } catch (e) {} }
   }, [lastLibraryId, scanMeta, searchQuery])
 
+  // Keep a ref in sync with searchQuery so closures in long-lived effects always see the latest value
+  React.useEffect(() => { searchQueryRef.current = searchQuery }, [searchQuery])
+
   // When a scan is active, poll its metadata for a short window after creation
   // to detect server-side updates (new items discovered by background work).
   // If the server scan artifact changes, fetch the first page and merge so the
@@ -2409,6 +2413,10 @@ export default function App() {
     const POLL_DURATION = 30 * 1000 // poll for first 30s
     const start = Date.now()
     const doPoll = async () => {
+      // bail out if user has an active search — same guard as the library poll —
+      // prevents the stale-closure version of updateScanDataAndPreserveView from
+      // running with searchQuery='' and resetting the filtered view to all items.
+      if (searchQueryRef.current && searchQueryRef.current.length) return
       try {
         const metaRes = await axios.get(API(`/scan/${scanId}`)).catch(() => null)
         if (!metaRes || !metaRes.data) return
