@@ -3841,10 +3841,12 @@ function ManualIdInputs({ title, aliasTitles = [], filePath, isOpen, onToggle, o
       // Reset loaded ref to ensure we use the draft data
       manualIdsCache.current = null
       loadedForRef.current = null
-      
+
+      // Collapse the panel immediately before the (potentially slow) rescan
+      onToggle && onToggle(false)
+
       // Trigger callback to force rescan with new manual IDs, passing saved values
       if (onSaved) await onSaved(cachedPayload)
-      onToggle && onToggle(false)
     } catch (e) {
       const msg = e && e.response && e.response.data && e.response.data.error ? e.response.data.error : 'Failed to save manual IDs'
       pushToast && pushToast('Manual IDs', msg)

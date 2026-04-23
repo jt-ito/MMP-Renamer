@@ -103,6 +103,7 @@ export default function ApprovedSeries({ pushToast, parallax = true }) {
   const [clearingCache, setClearingCache] = useState({})
   const [autoFetching, setAutoFetching] = useState({})
   const [sourcePromptOutput, setSourcePromptOutput] = useState(null)
+  const [seriesSearch, setSeriesSearch] = useState('')
   const [showLogs, setShowLogs] = useState(false)
   const [logs, setLogs] = useState('')
   const [contextMenu, setContextMenu] = useState(null)
@@ -194,6 +195,13 @@ export default function ApprovedSeries({ pushToast, parallax = true }) {
   }
 
   const activeOutput = useMemo(() => outputs.find((o) => o.key === activeOutputKey) || null, [outputs, activeOutputKey])
+
+  const filteredSeries = useMemo(() => {
+    if (!activeOutput || !Array.isArray(activeOutput.series)) return []
+    if (!seriesSearch.trim()) return activeOutput.series
+    const q = seriesSearch.trim().toLowerCase()
+    return activeOutput.series.filter((s) => s && s.name && s.name.toLowerCase().includes(q))
+  }, [activeOutput, seriesSearch])
 
   const setOutputSource = async (outputKey, source) => {
     setSavingSource((prev) => ({ ...prev, [outputKey]: true }))
@@ -351,6 +359,7 @@ export default function ApprovedSeries({ pushToast, parallax = true }) {
     logLinesRef.current = []
     lastRenderedLogsRef.current = ''
     setLogs('')
+    setSeriesSearch('')
   }, [activeOutputKey])
 
   useEffect(() => {
@@ -521,17 +530,25 @@ export default function ApprovedSeries({ pushToast, parallax = true }) {
                   </select>
                   <button
                     type="button"
-                    className="btn-ghost"
+                    className="row-match-btn"
                     onClick={() => clearOutputCache(activeOutput)}
                     disabled={!!clearingCache[activeOutput.key]}
                   >
                     {clearingCache[activeOutput.key] ? 'Clearing…' : 'Clear Output Cache'}
                   </button>
                   <span className="small-muted">Images auto-fetch and cache while you scroll.</span>
+                  <input
+                    className="form-input"
+                    type="search"
+                    placeholder="Search series…"
+                    value={seriesSearch}
+                    onChange={(e) => setSeriesSearch(e.target.value)}
+                    style={{ marginLeft: 'auto', width: 200, height: 34, padding: '4px 10px', fontSize: 13 }}
+                  />
                 </div>
 
                 <div className="approved-series-grid">
-                  {activeOutput.series && activeOutput.series.length ? activeOutput.series.map((series) => (
+                  {filteredSeries.length ? filteredSeries.map((series) => (
                     <SeriesCard
                       key={`${activeOutput.key}:${series.key}`}
                       series={series}
@@ -541,7 +558,7 @@ export default function ApprovedSeries({ pushToast, parallax = true }) {
                       parallax={parallax}
                     />
                   )) : (
-                    <p className="small-muted">No approved series found for this output.</p>
+                    <p className="small-muted">{seriesSearch.trim() ? `No series match "${seriesSearch.trim()}"` : 'No approved series found for this output.'}</p>
                   )}
                 </div>
               </>
