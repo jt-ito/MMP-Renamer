@@ -818,8 +818,8 @@ button.folder-option:hover {
 	.header-nav button { flex: 0 0 auto; white-space: nowrap; font-size: 12px; padding: 6px 10px; height: 32px; }
 	.header-nav .icon-only { width: 32px; height: 32px; padding: 0; }
 
-	/* Approved series: show 2 columns instead of 1 on mobile */
-	.approved-series-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+	/* Approved series: 3 columns on mobile so 6 cards (3×2) are visible at once */
+	.approved-series-grid { grid-template-columns: repeat(3, 1fr); gap: 8px; }
 
 	/* Disable absolute-positioned approve buttons on narrow widths */
 	.select-approve-wrap { position: static; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
