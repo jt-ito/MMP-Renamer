@@ -3420,6 +3420,7 @@ function LoadingScreen({ mode = 'incremental', total = 0, loaded = 0, scanProgre
 
 function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
   const [isExpanded, setIsExpanded] = useState(true);
+  const preRef = useRef(null);
   const displayLogs = React.useMemo(() => {
     try {
       if (!logs || !logTimezone) return logs
@@ -3450,7 +3451,14 @@ function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
       return logs
     }
   }, [logs, logTimezone])
-  
+
+  // Scroll to the bottom whenever logs update so most-recent entries are visible
+  useEffect(() => {
+    if (preRef.current) {
+      preRef.current.scrollTop = preRef.current.scrollHeight
+    }
+  }, [displayLogs, isExpanded])
+
   return (
     <div className="logs">
       <h3 
@@ -3467,7 +3475,7 @@ function LogsPanel({ logs, refresh, pushToast, logTimezone }) {
       </h3>
       {isExpanded && (
         <>
-          <pre>{displayLogs || 'No logs yet'}</pre>
+          <pre ref={preRef}>{displayLogs || 'No logs yet'}</pre>
           <div style={{display:'flex',marginTop:8, alignItems:'center'}}>
             <button className="btn-ghost icon-only" onClick={refresh} title="Refresh logs"><IconRefresh/></button>
             <button className="btn-ghost icon-only" onClick={() => { navigator.clipboard?.writeText(logs); pushToast && pushToast('Logs', 'Copied to clipboard') }} title="Copy logs"><IconCopy/></button>

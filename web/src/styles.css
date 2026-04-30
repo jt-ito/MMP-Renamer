@@ -14,7 +14,8 @@
 	--header-button-gap: 12px;
 }
 
-body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 0; background: var(--bg-900); color: var(--accent); -webkit-font-smoothing:antialiased }
+body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 0; background: var(--bg-900); color: var(--accent); -webkit-font-smoothing:antialiased; overflow-x: hidden }
+html { overflow-x: hidden }
 .app, body, header, .list, .row, .side, .logs { transition: background-color 240ms ease, color 240ms ease, border-color 240ms ease }
 
 /* Keyframe animations */
@@ -688,7 +689,7 @@ select.form-input:focus {
 
 .logs { background: var(--bg-800); padding:12px; border-radius:var(--radius); border:1px solid var(--bg-600) }
 .logs h3 { margin-top:0; color:var(--accent) }
-.logs pre { max-height:420px; overflow:auto; background:transparent; color:var(--muted); padding:8px; border-radius:6px; border:1px dashed var(--bg-600) }
+.logs pre { max-height:420px; overflow:auto; background:transparent; color:var(--muted); padding:8px; border-radius:6px; border:1px dashed var(--bg-600); white-space: pre-wrap; word-break: break-all; overflow-wrap: break-word }
 
 /* Buttons - general focus and active states */
 button:focus { outline:2px solid rgba(99,102,241,0.20); outline-offset:2px }
@@ -775,7 +776,15 @@ button.folder-option:hover {
 	.app { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 	.app main { flex: 1 1 0; min-height: 0; height: auto; overflow: hidden; flex-direction: column; padding: 10px; gap: 10px; }
 	/* list fills main, scrolls for login/settings pages; VirtualizedList measures height via ResizeObserver */
-	.list { flex: 1 1 0; min-height: 0; height: auto; overflow-y: auto; }
+	/* overflow-x: hidden prevents page-wide horizontal scroll from any long text/inputs inside */
+	.list { flex: 1 1 0; min-height: 0; height: auto; overflow-y: auto; overflow-x: hidden; }
+	/* Settings cards: ensure inputs and content wrap and don't overflow */
+	.settings-page-content { padding: 12px; }
+	.settings-page-content .form-card { padding: 16px; }
+	.form-input { word-break: break-all; overflow-wrap: break-word; }
+	/* Provider slots wrap on narrow screens */
+	.provider-slots-container { flex-wrap: wrap; }
+	.provider-slot-item { min-width: 80px; }
 	/* Logs panel: compact strip at bottom of dashboard */
 	.side { width: 100%; flex: 0 0 auto; max-height: 180px; overflow-y: auto; }
 	/* Centered login/register forms: remove the large min-height so they don't overflow the list */
@@ -808,6 +817,9 @@ button.folder-option:hover {
 	.header-nav::-webkit-scrollbar { display: none; }
 	.header-nav button { flex: 0 0 auto; white-space: nowrap; font-size: 12px; padding: 6px 10px; height: 32px; }
 	.header-nav .icon-only { width: 32px; height: 32px; padding: 0; }
+
+	/* Approved series: show 2 columns instead of 1 on mobile */
+	.approved-series-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
 
 	/* Disable absolute-positioned approve buttons on narrow widths */
 	.select-approve-wrap { position: static; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
