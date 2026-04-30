@@ -776,12 +776,19 @@ button.folder-option:hover {
 	.app { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 	.app main { flex: 1 1 0; min-height: 0; height: auto; overflow: hidden; flex-direction: column; padding: 10px; gap: 10px; }
 	/* list fills main, scrolls for non-dashboard pages.
-	   overflow-x must NOT be hidden here — it would clip buttons and grid cards.
-	   Page-level horizontal scroll is already prevented by html/body overflow-x:hidden. */
-	.list { flex: 1 1 0; min-height: 0; height: auto; overflow-y: auto; overflow-x: visible; }
-	/* Settings cards: compact padding on mobile */
-	.settings-page-content { padding: 12px; }
+	   overflow-x: clip prevents the horizontal scrollbar without being computed to
+	   'auto' the way 'visible' is when overflow-y is non-visible (CSS spec §overflow). */
+	.list { flex: 1 1 0; min-height: 0; height: auto; overflow-y: auto; overflow-x: clip; }
+	/* Settings / Approved Series: zoom out so dense content fits the narrow viewport
+	   without any horizontal overflow. 'zoom' scales layout dimensions (unlike transform:scale),
+	   so the content truly fits rather than being clipped. */
+	.settings-page-content { padding: 12px; zoom: 0.85; }
+	/* Approved series page shares .settings-page-content — give it slightly more room
+	   (later rule wins when element has both classes). */
+	.approved-series-layout { zoom: 0.9; }
 	.settings-page-content .form-card { padding: 16px; }
+	/* Let the header title + button group wrap to a second line on narrow screens */
+	.approved-series-header { flex-wrap: wrap; }
 	/* Prevent iOS/Android auto-zoom on input focus — browsers zoom when font-size < 16px */
 	input, select, textarea { font-size: 16px !important; }
 	/* Provider slots wrap on narrow screens */
