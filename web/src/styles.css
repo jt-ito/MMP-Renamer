@@ -754,55 +754,108 @@ button.folder-option:hover {
 	to { transform: translateX(0); opacity: 1 }
 }
 
+/* Navigation bar in header: primary nav links (Settings, Hidden, Duplicates, etc.) */
+.header-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--header-button-gap);
+  flex-wrap: nowrap;
+}
+
 /* small responsive tweaks */
 @media (max-width: 900px){ .app main { flex-direction:column } .side{ width:100% } }
 
 /* Tablet and mobile responsiveness */
 @media (max-width: 900px) {
-	.app header { flex-direction: column; align-items: flex-start; gap:10px; padding:12px 14px }
+	/* Fix height calculation: main fills remaining space below header naturally */
+	.app main { height: auto; overflow-y: auto; padding: 10px; gap: 10px; }
+
+	/* List section gets a viewport-relative height so VirtualizedList has a defined container */
+	.list { flex: 0 0 auto; height: 62dvh; min-height: 280px; overflow: hidden; }
+
+	/* Logs side panel: constrained height, scrollable */
+	.side { width: 100%; max-height: 260px; overflow-y: auto; }
+
+	.app header { flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px 14px; }
 	.app header h1 { font-size: 1rem }
-	.app header .header-actions { width:100%; justify-content: flex-end; gap:8px }
+	/* Primary actions row: search + action buttons */
+	.app header .header-actions { width: 100%; justify-content: flex-start; gap: 8px; flex-wrap: wrap; margin-left: 0; }
+
+	/* Nav strip: scrollable horizontal row of secondary nav buttons */
+	.header-nav {
+		width: 100%;
+		overflow-x: auto;
+		scrollbar-width: none;
+		-webkit-overflow-scrolling: touch;
+		flex-wrap: nowrap;
+		gap: 6px;
+		padding-bottom: 2px;
+	}
+	.header-nav::-webkit-scrollbar { display: none; }
+	.header-nav button {
+		flex: 0 0 auto;
+		white-space: nowrap;
+		font-size: 12px;
+		padding: 6px 10px;
+		height: 32px;
+	}
+	/* icon-only buttons in nav keep square shape */
+	.header-nav .icon-only { width: 32px; height: 32px; padding: 0; }
 
 	/* Disable absolute approve positioning and Scan shifting on narrow widths so controls flow naturally */
-	.select-approve-wrap { position: static; display:flex; align-items:center }
-	.approve-button { position: static; right: auto; top: auto; transform: none; opacity: 1; pointer-events: auto; margin-right: 8px }
+	.select-approve-wrap { position: static; display:flex; align-items:center; flex-wrap: wrap; gap: 6px; }
+	.approve-button { position: static; right: auto; top: auto; transform: none; opacity: 1; pointer-events: auto; margin-right: 0; }
 	.approve-button.visible { transform: none }
 	.btn-save.shifted { transform: translateX(0); }
 
-	/* Slightly smaller list rows on tablet */
-	.row { height: 72px; padding:12px }
-	.row .title { font-size:15px }
-	.row .path { font-size:12px }
-	.row input[type="checkbox"] { width:16px; height:16px }
+	/* List rows: stack meta and actions vertically for better readability */
+	.row { flex-direction: column; align-items: stretch; height: auto; min-height: auto; padding: 10px 12px; gap: 8px; }
+	.row .meta { width: 100%; }
+	.row .actions { width: 100%; flex-wrap: wrap; justify-content: flex-start; gap: 6px; }
+	.row .actions button, .row .row-match-btn { flex: 1 1 auto; min-width: 0; font-size: 13px; padding: 8px 10px; }
 
-	/* Make header buttons wrap and grow as needed on small screens */
-	.app header button { height:40px; padding:8px 10px }
+	.row .title { font-size: 15px }
+	.row .path { font-size: 12px }
+	.row input[type="checkbox"] { width: 16px; height: 16px }
+
+	/* Make header buttons appropriately sized for touch */
+	.app header button { height: 38px; padding: 8px 10px }
 
 	/* Header search becomes full-width on small screens */
-	.header-search { width:100%; }
-	.header-search .form-input { width:100%; max-width:100%; }
+	.header-search { width: 100%; max-width: 100%; }
+	.header-search .form-input { width: 100%; max-width: 100%; }
 }
 
 @media (max-width: 480px) {
 	/* Mobile-specific scaling */
-	.app header { padding:10px 12px }
-	.app header h1 { font-size:0.95rem }
-	.app header .header-actions { gap:6px }
+	.app header { padding: 8px 10px; gap: 6px; }
+	.app header h1 { font-size: 0.9rem; }
+	.app header .header-actions { gap: 6px; }
 
-	/* Ensure controls are tappable and laid out vertically if space is tight */
+	/* Tighter main padding on phones */
+	.app main { padding: 6px; gap: 6px; }
+
+	/* Slightly shorter list on phones to leave more room for logs */
+	.list { height: 58dvh; min-height: 240px; }
+	.side { max-height: 200px; }
+
+	/* Ensure controls are tappable */
 	.header-actions { flex-wrap: wrap; }
-	.select-approve-wrap { width:100%; justify-content:flex-end }
-	.approve-button { margin-right:6px }
+	.select-approve-wrap { width: 100%; justify-content: flex-start; gap: 4px; }
+	.approve-button { margin-right: 0; }
+
+	/* Nav strip more compact on phones */
+	.header-nav button { font-size: 11px; padding: 5px 8px; height: 30px; }
+	.header-nav .icon-only { width: 30px; height: 30px; }
 
 	/* Compact rows for phones */
-	.row { height: 60px; padding:8px }
-	.row .title { font-size:14px }
-	.row .path { font-size:11px }
-	.actions button { padding:6px 8px }
-  .row-match-btn { padding:6px 8px }
+	.row { padding: 8px 10px; gap: 6px; }
+	.row .title { font-size: 14px; }
+	.row .path { font-size: 11px; }
+	.row .actions button, .row .row-match-btn { padding: 7px 8px; font-size: 12px; }
 
-	/* Make primary actions easier to tap */
-	.btn-save, .btn-ghost, .btn-cta { padding:10px 12px; min-width:56px }
+	/* Make primary header buttons easier to tap */
+	.app header .header-actions button { height: 36px; }
 }
 
 /* Light theme overrides — soft off-white with indigo accents */

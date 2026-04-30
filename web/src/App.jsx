@@ -2888,6 +2888,7 @@ export default function App() {
                 </>
               )}
             </div>
+            <div className="header-nav">
             <button className="btn-ghost" onClick={() => (window.location.hash = route === '#/settings' ? '#/' : '#/settings')}>Settings</button>
             {auth && auth.role === 'admin' && (
               <button className="btn-ghost" onClick={() => (window.location.hash = route === '#/hidden' ? '#/' : '#/hidden')}>Hidden items</button>
@@ -2905,6 +2906,7 @@ export default function App() {
             <button className="btn-ghost" onClick={() => (window.location.hash = route === '#/approved-series' ? '#/' : '#/approved-series')}>Approved Series</button>
             {auth && auth.role === 'admin' && <button className="btn-ghost" onClick={() => (window.location.hash = '#/users')}>Users</button>}
             {auth && <button className="btn-ghost" onClick={async ()=>{ try { await axios.post(API('/logout')); setAuth(null); pushToast && pushToast('Auth','Logged out') } catch { pushToast && pushToast('Auth','Logout failed') } }}>Logout</button>}
+            </div>
           </div>
         ) : null}
       </header>
