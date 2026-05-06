@@ -3257,7 +3257,14 @@ async function metaLookup(title, apiKey, opts = {}) {
 
       if (!ep && allowTvdb && tvdbCreds && opts && opts.season != null && opts.episode != null) {
         try {
-          const tvdbEpisode = await tvdb.fetchEpisode(tvdbCreds, uniqueTitleVariants, opts.season, opts.episode, {
+          // If AniList identified a season number from the matched title (e.g. "Season 3"),
+          // prefer it over the filename-parsed season which defaults to 1 when no explicit
+          // SxxEyy marker is present (e.g. "Jihanki 3 - 06" parses as season=1).
+          const tvdbSeason = (a && a.detectedSeasonNumber) ? a.detectedSeasonNumber : opts.season;
+          if (tvdbSeason !== opts.season) {
+            try { appendLog(`TVDB_SEASON_OVERRIDE_FROM_ANILIST anilistSeason=${tvdbSeason} filenameSeason=${opts.season}`) } catch (e) {}
+          }
+          const tvdbEpisode = await tvdb.fetchEpisode(tvdbCreds, uniqueTitleVariants, tvdbSeason, opts.episode, {
             log: (line) => {
               try { appendLog(line) } catch (e) {}
             }
