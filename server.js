@@ -6499,6 +6499,7 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
     // the background and the updated cache can be fetched via GET /api/enrich later.
     const ENRICH_HANDLER_TIMEOUT_MS = 50000;
     let enrichHandlerDone = false;
+    activeEnriches.set(key, { startedAt: Date.now(), stage: 'fetching' });
     const enrichHandlerPromise = (async () => {
       const data = await externalEnrich(key, tmdbKey, { username: req.session && req.session.username, tvdbOverride, forceHash, force, skipAnimeProviders });
       // Use centralized renderer and updater so rendering logic is consistent
@@ -6546,6 +6547,7 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
       enrichHandlerDone = true;
       return enrichCache[key];
     })();
+    enrichHandlerPromise.finally(() => { activeEnriches.delete(key); });
     const enrichHandlerTimeout = new Promise(resolve => setTimeout(() => resolve('__timeout__'), ENRICH_HANDLER_TIMEOUT_MS));
     const handlerResult = await Promise.race([enrichHandlerPromise, enrichHandlerTimeout]);
     if (handlerResult === '__timeout__') {
@@ -6946,6 +6948,18 @@ app.get('/api/_health', (req, res) => {
 // Query param: since (timestamp in ms) to receive events occurring after that timestamp.
 // Use a light per-client cache to avoid log spam when clients poll frequently with the same since value.
 const hideEventsClientCache = new Map(); // key -> { ts, resp, lastHit }
+// GET /api/enrich/active — returns paths currently being enriched by POST /api/enrich.
+// Clients use this to restore loading-indicator state after navigation.
+app.get('/api/enrich/active', requireAuth, (req, res) => {
+  try {
+    const active = [];
+    for (const [path, info] of activeEnriches.entries()) {
+      active.push({ path, startedAt: info.startedAt, stage: info.stage });
+    }
+    res.json({ active });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 const HIDE_EVENTS_CACHE_WINDOW_MS = 5000; // 5 seconds - slightly larger to tolerate aggressive polling
 
 app.get('/api/enrich/hide-events', requireAuth, (req, res) => {
@@ -10019,6 +10033,11 @@ function startApprovedSeriesBackgroundWorker() {
 
 // ─── Background Job Queue ─────────────────────────────────────────────────────
 // Jobs survive browser closure because they run entirely in the Node.js process.
+// Tracks single-item enrichment operations currently running in POST /api/enrich.
+// Keyed by canonical path; value is { startedAt, stage }. Cleared when the async
+// work finishes (even if the HTTP response was already sent early via background:true).
+const activeEnriches = new Map();
+
 // Clients submit a job, get back a jobId, then poll GET /api/jobs/:id.
 const bgJobs = new Map();
 let _bgJobIdCounter = 1;

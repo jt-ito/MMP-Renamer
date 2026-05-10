@@ -2200,6 +2200,70 @@ export default function App() {
 
   useEffect(() => () => { isMountedRef.current = false }, [])
 
+  // On mount and whenever the tab becomes visible again, check whether the server
+  // has any single-item enrichments still in progress (e.g. started before the user
+  // pressed Back). Restore the loading indicator state and poll until each one finishes.
+  useEffect(() => {
+    const activeEnrichPollers = new Map() // path → intervalId
+
+    async function syncActiveEnriches() {
+      try {
+        const r = await axios.get(API('/enrich/active')).catch(() => null)
+        if (!r || !r.data || !Array.isArray(r.data.active)) return
+        const activePaths = r.data.active.map(e => e.path).filter(Boolean)
+        if (!activePaths.length) return
+        // Restore loading state for any path we aren't already tracking
+        safeSetLoadingEnrich(prev => {
+          const next = { ...prev }
+          for (const p of activePaths) {
+            if (!next[p]) next[p] = { status: 'Computing hash & fetching metadata...', stage: 'fetching' }
+          }
+          return next
+        })
+        // Start a poller for each active path not already being polled
+        for (const p of activePaths) {
+          if (activeEnrichPollers.has(p)) continue
+          const POLL_INTERVAL = 2500
+          const POLL_TIMEOUT = 10 * 60 * 1000
+          const startedAt = Date.now()
+          const id = setInterval(async () => {
+            try {
+              // Stop if the path is no longer in the server's active list
+              if (Date.now() - startedAt > POLL_TIMEOUT) {
+                clearInterval(id)
+                activeEnrichPollers.delete(p)
+                safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[p]; return n })
+                return
+              }
+              const check = await axios.get(API('/enrich/active')).catch(() => null)
+              const still = check && check.data && Array.isArray(check.data.active)
+                ? check.data.active.some(e => e.path === p)
+                : true // assume still running on error
+              if (!still) {
+                clearInterval(id)
+                activeEnrichPollers.delete(p)
+                // Pick up the completed enrichment result
+                try { await refreshEnrichForPaths([p]) } catch (e) {}
+                safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[p]; return n })
+              }
+            } catch (e) { /* keep polling on transient errors */ }
+          }, POLL_INTERVAL)
+          activeEnrichPollers.set(p, id)
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    syncActiveEnriches()
+
+    const onVisible = () => { if (document.visibilityState === 'visible') syncActiveEnriches() }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      for (const id of activeEnrichPollers.values()) clearInterval(id)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (!confirmFullScanOpen) return
     const handleKey = (ev) => {
