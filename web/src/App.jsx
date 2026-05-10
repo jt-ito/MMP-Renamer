@@ -2304,16 +2304,16 @@ export default function App() {
 
     const onVisible = () => { if (document.visibilityState === 'visible') syncActiveEnriches() }
     document.addEventListener('visibilitychange', onVisible)
-    // hashchange fires when the mouse back/forward buttons navigate the SPA's hash history
-    window.addEventListener('hashchange', syncActiveEnriches)
-    // pageshow fires when the browser restores the page from the bfcache (back/forward that
-    // left and re-entered this URL), which does not trigger visibilitychange
-    window.addEventListener('pageshow', syncActiveEnriches)
+    // pageshow fires when the browser restores the page from the bfcache (user navigated
+    // away to a different origin and came back with the browser back button). Only fire when
+    // the page was restored from cache (persisted=true); the initial load is already handled
+    // by the syncActiveEnriches() call above.
+    const onPageShow = (e) => { if (e.persisted) syncActiveEnriches() }
+    window.addEventListener('pageshow', onPageShow)
 
     return () => {
       document.removeEventListener('visibilitychange', onVisible)
-      window.removeEventListener('hashchange', syncActiveEnriches)
-      window.removeEventListener('pageshow', syncActiveEnriches)
+      window.removeEventListener('pageshow', onPageShow)
       for (const id of activeEnrichPollers.values()) clearInterval(id)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
