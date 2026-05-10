@@ -448,9 +448,12 @@ const resolvedSameSite = (() => {
   if (['lax', 'strict', 'none'].includes(candidate)) return candidate;
   return 'lax';
 })();
+// Default secure to false — tying it to NODE_ENV=production breaks HTTP deployments
+// (Docker containers are commonly served over plain HTTP behind a reverse proxy).
+// Users who terminate TLS at the app level should set SESSION_SECURE=true explicitly.
 let secureCookies = typeof process.env.SESSION_SECURE !== 'undefined'
   ? coerceBoolean(process.env.SESSION_SECURE)
-  : process.env.NODE_ENV === 'production';
+  : false;
 if (resolvedSameSite === 'none' && !secureCookies) {
   secureCookies = true;
   console.warn('SESSION_SECURE forced to true because sameSite="none" requires secure cookies');
@@ -472,7 +475,11 @@ if (SESSION_KEY) {
   app.use(cookieSession({
     name: 'mmp_sess',
     keys: [SESSION_KEY],
-    maxAge: 7 * 24 * 60 * 60 * 1000,
+    // 15-minute inactivity timeout: rolling resets the clock on every request,
+    // so the session stays alive while you're using the app. Close it and come
+    // back after 15 minutes of idle and you'll be asked to log in again.
+    maxAge: 15 * 60 * 1000,
+    rolling: true,
     httpOnly: true,
     sameSite: resolvedSameSite,
     secure: secureCookies
