@@ -6277,6 +6277,20 @@ app.get('/api/settings', requireAuth, (req, res) => {
   serverOut.delete_hardlinks_on_unapprove = resolveDeleteHardlinksSetting(req.session && req.session.username ? req.session.username : null);
   return res.json({ serverSettings: serverOut, userSettings });
 });
+// Session check used by the web client on every page load to restore auth state without
+// requiring the user to log in again. Returns {authenticated, username, role} so the
+// client can skip the login screen if the session cookie is still valid.
+app.get('/api/session', (req, res) => {
+  try {
+    const username = req.session && req.session.username ? req.session.username : null;
+    if (!username || !users[username]) return res.json({ authenticated: false });
+    const role = (users[username] && users[username].role) || 'user';
+    return res.json({ authenticated: true, username, role });
+  } catch (e) {
+    return res.json({ authenticated: false });
+  }
+});
+
 // Diagnostic: expose current session and user presence to help debug auth issues (no secrets)
 app.get('/api/debug/session', requireAuth, (req, res) => {
   try {
