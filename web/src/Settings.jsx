@@ -99,6 +99,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   const [deleteHardlinksOnUnapprove, setDeleteHardlinksOnUnapprove] = useState(true)
   const [extractSubtitles, setExtractSubtitles] = useState(false)
   const [subtitleFormat, setSubtitleFormat] = useState('ass')
+  const [copySidecarSubtitles, setCopySidecarSubtitles] = useState(false)
   const [backfillJob, setBackfillJob] = useState(null) // { status, extracted, skipped, missing, errors, total }
   const [dirty, setDirty] = useState(false)
   const [clientOS, setClientOS] = useState(typeof window !== 'undefined' ? (localStorage.getItem('client_os') || 'linux') : 'linux')
@@ -159,6 +160,12 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
             : (extractPref === true || extractPref === 'true')
           setExtractSubtitles(resolvedExtractPref)
           setSubtitleFormat(user.extract_subtitle_format || server.extract_subtitle_format || 'ass')
+          const sidecarPref = user.copy_sidecar_subtitles
+          const serverSidecarPref = server.copy_sidecar_subtitles
+          const resolvedSidecarPref = sidecarPref === undefined
+            ? (serverSidecarPref === true || serverSidecarPref === 'true')
+            : (sidecarPref === true || sidecarPref === 'true')
+          setCopySidecarSubtitles(resolvedSidecarPref)
           const folders = Array.isArray(user.output_folders) ? user.output_folders : []
           setOutputFolders(folders)
           setOutputFoldersDirty(new Array(folders.length).fill(false))
@@ -188,6 +195,10 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           ? storedExtractPref === 'true'
           : (server.extract_subtitles === true || server.extract_subtitles === 'true')
         const storedSubtitleFormat = localStorage.getItem('extract_subtitle_format') || server.extract_subtitle_format || 'ass'
+        const storedSidecarPref = localStorage.getItem('copy_sidecar_subtitles')
+        const sidecarPref = storedSidecarPref != null
+          ? storedSidecarPref === 'true'
+          : (server.copy_sidecar_subtitles === true || server.copy_sidecar_subtitles === 'true')
         const storedOrder = localStorage.getItem('metadata_provider_order') || localStorage.getItem('default_meta_provider')
         const storedFolders = localStorage.getItem('output_folders')
         setTmdbKey(v)
@@ -204,6 +215,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   setDeleteHardlinksOnUnapprove(deletePref)
         setExtractSubtitles(extractPref)
         setSubtitleFormat(storedSubtitleFormat)
+        setCopySidecarSubtitles(sidecarPref)
           setLogTimezone(server.log_timezone || localStorage.getItem('log_timezone') || '')
         setProviderOrder(sanitizeProviderOrder(storedOrder))
         try {
@@ -232,6 +244,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   const storedDeletePref = localStorage.getItem('delete_hardlinks_on_unapprove')
         const storedExtractPref2 = localStorage.getItem('extract_subtitles')
         const storedSubtitleFormat2 = localStorage.getItem('extract_subtitle_format') || 'ass'
+        const storedSidecarPref2 = localStorage.getItem('copy_sidecar_subtitles')
         const storedFolders = localStorage.getItem('output_folders')
         setTmdbKey(v)
         setAnilistKey(a)
@@ -247,6 +260,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   setDeleteHardlinksOnUnapprove(storedDeletePref == null ? true : storedDeletePref !== 'false')
         setExtractSubtitles(storedExtractPref2 === 'true')
         setSubtitleFormat(storedSubtitleFormat2)
+        setCopySidecarSubtitles(storedSidecarPref2 === 'true')
           setLogTimezone(localStorage.getItem('log_timezone') || '')
         try {
           const parsedFolders = storedFolders ? JSON.parse(storedFolders) : []
@@ -299,6 +313,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
       localStorage.setItem('delete_hardlinks_on_unapprove', String(deleteHardlinksOnUnapprove))
       localStorage.setItem('extract_subtitles', String(extractSubtitles))
       localStorage.setItem('extract_subtitle_format', subtitleFormat)
+      localStorage.setItem('copy_sidecar_subtitles', String(copySidecarSubtitles))
       try { localStorage.setItem('output_folders', JSON.stringify(outputFolders)) } catch (e) {}
       try { localStorage.setItem('log_timezone', logTimezone) } catch (e) {}
       const firstProvider = providerOrder[0] || 'tmdb'
@@ -320,6 +335,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           delete_hardlinks_on_unapprove: deleteHardlinksOnUnapprove,
           extract_subtitles: extractSubtitles,
           extract_subtitle_format: subtitleFormat,
+          copy_sidecar_subtitles: copySidecarSubtitles,
           output_folders: outputFolders,
           rename_template: renameTemplate,
           client_os: clientOS,
@@ -357,6 +373,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   setDeleteHardlinksOnUnapprove(true)
   setExtractSubtitles(false)
   setSubtitleFormat('ass')
+  setCopySidecarSubtitles(false)
   setOutputFolders([])
   setOutputFoldersDirty([])
       setLogTimezone('')
@@ -375,6 +392,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   localStorage.removeItem('delete_hardlinks_on_unapprove')
       localStorage.removeItem('extract_subtitles')
       localStorage.removeItem('extract_subtitle_format')
+      localStorage.removeItem('copy_sidecar_subtitles')
   localStorage.removeItem('output_folders')
         localStorage.removeItem('client_os')
         localStorage.removeItem('log_timezone')
@@ -872,7 +890,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
             <span style={{fontSize:13, color:'var(--accent)', fontWeight:500}}>Extract subtitles on approve</span>
           </label>
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8, marginLeft:32}}>
-            When approving a file, extracts embedded subtitle tracks from the source file using ffmpeg and saves them alongside the output. Also copies external sidecar subtitle files. Requires ffmpeg in PATH. The source file is never modified.
+            When approving a file, extracts embedded subtitle tracks from the source file using ffmpeg and saves them alongside the output. Requires ffmpeg in PATH. The source file is never modified.
           </div>
           {extractSubtitles && (
             <div style={{marginTop:12, marginLeft:32}}>
@@ -924,6 +942,26 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
               )}
             </div>
           )}
+        </div>
+
+        <div style={{marginTop:18}}>
+          <label style={{display:'flex', alignItems:'center', gap:12, cursor:'pointer', userSelect:'none'}}>
+            <input
+              type="checkbox"
+              checked={copySidecarSubtitles}
+              onChange={e => { setCopySidecarSubtitles(e.target.checked); setDirty(true) }}
+              style={{
+                width:20,
+                height:20,
+                cursor:'pointer',
+                accentColor:'var(--hunter-green)'
+              }}
+            />
+            <span style={{fontSize:13, color:'var(--accent)', fontWeight:500}}>Copy sidecar subtitle files on approve</span>
+          </label>
+          <div style={{fontSize:12, color:'var(--muted)', marginTop:8, marginLeft:32}}>
+            When approving a file, copies any external subtitle files found in the same directory as the source (e.g. .srt, .ass, .vtt sidecars) into the output folder alongside the hardlink.
+          </div>
         </div>
 
         <div style={{marginTop:18}}>

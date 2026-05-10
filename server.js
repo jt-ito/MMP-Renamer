@@ -387,6 +387,9 @@ if (typeof serverSettings.extract_subtitles === 'undefined') {
 if (typeof serverSettings.extract_subtitle_format === 'undefined') {
   serverSettings.extract_subtitle_format = 'ass';
 }
+if (typeof serverSettings.copy_sidecar_subtitles === 'undefined') {
+  serverSettings.copy_sidecar_subtitles = false;
+}
 
 const envAllowedOrigins = String(process.env.CORS_ALLOWED_ORIGINS || '')
   .split(',')
@@ -565,6 +568,18 @@ function resolveExtractSubtitlesSetting(username) {
     }
     if (serverSettings && typeof serverSettings.extract_subtitles !== 'undefined') {
       return coerceBoolean(serverSettings.extract_subtitles);
+    }
+  } catch (e) {}
+  return false;
+}
+
+function resolveCopySidecarSubtitlesSetting(username) {
+  try {
+    if (username && users && users[username] && users[username].settings && typeof users[username].settings.copy_sidecar_subtitles !== 'undefined') {
+      return coerceBoolean(users[username].settings.copy_sidecar_subtitles);
+    }
+    if (serverSettings && typeof serverSettings.copy_sidecar_subtitles !== 'undefined') {
+      return coerceBoolean(serverSettings.copy_sidecar_subtitles);
     }
   } catch (e) {}
   return false;
@@ -6335,7 +6350,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'extract_subtitle_format', 'client_os', 'log_timezone'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'extract_subtitle_format', 'copy_sidecar_subtitles', 'client_os', 'log_timezone'];
       for (const k of allowed) {
         if (body[k] === undefined) continue;
         if (k === 'metadata_provider_order') {
@@ -6355,6 +6370,8 @@ app.post('/api/settings', requireAuth, (req, res) => {
           serverSettings.extract_subtitles = coerceBoolean(body[k]);
         } else if (k === 'extract_subtitle_format') {
           if (VALID_SUBTITLE_FORMATS.has(body[k])) serverSettings.extract_subtitle_format = body[k];
+        } else if (k === 'copy_sidecar_subtitles') {
+          serverSettings.copy_sidecar_subtitles = coerceBoolean(body[k]);
         } else {
           serverSettings[k] = body[k];
         }
@@ -6374,7 +6391,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'client_os', 'log_timezone'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'copy_sidecar_subtitles', 'client_os', 'log_timezone'];
     
     // Check if scan_input_path changed to update watcher
     const oldScanPath = users[username].settings.scan_input_path;
@@ -6405,6 +6422,8 @@ app.post('/api/settings', requireAuth, (req, res) => {
         users[username].settings.extract_subtitles = coerceBoolean(body[k]);
       } else if (k === 'extract_subtitle_format') {
         if (VALID_SUBTITLE_FORMATS.has(body[k])) users[username].settings.extract_subtitle_format = body[k];
+      } else if (k === 'copy_sidecar_subtitles') {
+        users[username].settings.copy_sidecar_subtitles = coerceBoolean(body[k]);
       } else {
         users[username].settings[k] = body[k];
       }
@@ -10209,13 +10228,17 @@ app.post('/api/jobs/approve', requireAuth, async (req, res) => {
               resultItem.status = 'hardlinked'; resultItem.to = toPath;
             }
             // Extract/copy subtitles for both new hardlinks and already-existing outputs
-            if ((resultItem.status === 'hardlinked' || resultItem.status === 'exists') && resolveExtractSubtitlesSetting(username)) {
-              const subtitleFmt = resolveExtractSubtitleFormat(username);
-              try { copyExternalSubtitles(fromPath, toPath); } catch (e) {
-                appendLog(`SUBTITLE_SIDECAR_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+            if (resultItem.status === 'hardlinked' || resultItem.status === 'exists') {
+              if (resolveCopySidecarSubtitlesSetting(username)) {
+                try { copyExternalSubtitles(fromPath, toPath); } catch (e) {
+                  appendLog(`SUBTITLE_SIDECAR_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+                }
               }
-              try { await extractSubtitlesToSrt(fromPath, toPath, subtitleFmt); } catch (e) {
-                appendLog(`SUBTITLE_EXTRACT_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+              if (resolveExtractSubtitlesSetting(username)) {
+                const subtitleFmt = resolveExtractSubtitleFormat(username);
+                try { await extractSubtitlesToSrt(fromPath, toPath, subtitleFmt); } catch (e) {
+                  appendLog(`SUBTITLE_EXTRACT_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+                }
               }
             }
           } catch (e) {
@@ -10288,8 +10311,10 @@ app.post('/api/jobs/backfill-subtitles', requireAuth, async (req, res) => {
             return SUBTITLE_EXTS.has(fe);
           }); } catch (e) { existingEntries = []; }
           if (existingEntries.length > 0) { skipped++; return; }
-          try { copyExternalSubtitles(fromPath, toPath); } catch (e) {
-            appendLog(`BACKFILL_SUBTITLE_SIDECAR_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+          if (resolveCopySidecarSubtitlesSetting(username)) {
+            try { copyExternalSubtitles(fromPath, toPath); } catch (e) {
+              appendLog(`BACKFILL_SUBTITLE_SIDECAR_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+            }
           }
           await extractSubtitlesToSrt(fromPath, toPath, subtitleFmt);
           extracted++;
