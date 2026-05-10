@@ -689,7 +689,7 @@ select.form-input:focus {
 
 .logs { background: var(--bg-800); padding:12px; border-radius:var(--radius); border:1px solid var(--bg-600) }
 .logs h3 { margin-top:0; color:var(--accent) }
-.logs pre { max-height:420px; overflow:auto; background:transparent; color:var(--muted); padding:8px; border-radius:6px; border:1px dashed var(--bg-600); white-space: pre-wrap; word-break: break-all; overflow-wrap: break-word }
+.logs pre { max-height:420px; overflow:auto; background:transparent; color:var(--muted); padding:8px; border-radius:6px; border:1px dashed var(--bg-600); white-space: pre; }
 
 /* Buttons - general focus and active states */
 button:focus { outline:2px solid rgba(99,102,241,0.20); outline-offset:2px }
@@ -799,7 +799,7 @@ button.folder-option:hover {
 	.approved-series-layout .approved-series-page { overflow-x: hidden; overflow-y: auto; }
 	/* Logs panel: compact strip at bottom of dashboard */
 	.side { width: 100%; flex: 0 0 auto; max-height: 180px; overflow-y: auto; }
-	.logs pre { overflow-x: hidden; }
+	.logs pre { overflow-x: hidden; white-space: pre-wrap; word-break: break-all; overflow-wrap: break-word; }
 	/* Centered login/register forms: remove the large min-height so they don't overflow the list */
 	.centered-page { min-height: 0; align-items: flex-start; padding: 16px 12px; }
 
