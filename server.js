@@ -475,15 +475,25 @@ if (SESSION_KEY) {
   app.use(cookieSession({
     name: 'mmp_sess',
     keys: [SESSION_KEY],
-    // 15-minute inactivity timeout: rolling resets the clock on every request,
-    // so the session stays alive while you're using the app. Close it and come
-    // back after 15 minutes of idle and you'll be asked to log in again.
+    // 15-minute inactivity timeout. cookie-session v2 only re-sends Set-Cookie when
+    // the session object is "changed" (isChanged === true). A separate middleware below
+    // stamps req.session._t on every authenticated request to force isChanged=true,
+    // so the cookie Expires is refreshed on every response — true rolling behaviour.
     maxAge: 15 * 60 * 1000,
-    rolling: true,
     httpOnly: true,
     sameSite: resolvedSameSite,
     secure: secureCookies
   }));
+  // Rolling inactivity: update a monotone counter in the session on every request so
+  // cookie-session re-issues the cookie with a fresh Expires on each response.
+  app.use((req, res, next) => {
+    if (req.session && req.session.username) {
+      // 10-second resolution — small enough to be imperceptible, large enough to avoid
+      // unnecessary session-object churn when the same second fires multiple requests.
+      req.session._t = Math.floor(Date.now() / 10000);
+    }
+    next();
+  });
 }
 
 app.use(verifyCsrfToken);

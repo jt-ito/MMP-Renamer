@@ -1211,9 +1211,32 @@ export default function App() {
     }
   }
 
+  // ── Pending-rescan persistence helpers ────────────────────────────────────
+  // When a force-rescan is started we write the path to localStorage so that
+  // if the user navigates away before it finishes we can still pick up the
+  // completed result on the next mount.
+  function addPendingRescan(path) {
+    try {
+      const raw = localStorage.getItem('pending_rescans')
+      const set = raw ? JSON.parse(raw) : []
+      if (!set.includes(path)) set.push(path)
+      localStorage.setItem('pending_rescans', JSON.stringify(set))
+    } catch (e) {}
+  }
+  function removePendingRescan(path) {
+    try {
+      const raw = localStorage.getItem('pending_rescans')
+      if (!raw) return
+      const set = JSON.parse(raw).filter(p => p !== path)
+      localStorage.setItem('pending_rescans', JSON.stringify(set))
+    } catch (e) {}
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   async function enrichOne(item, force = false, skipAnimeProviders = false) {
     if (!item) return
     const key = item.canonicalPath
+    if (force) addPendingRescan(key)
     try {
   if (force) safeSetLoadingEnrich(l => ({ ...l, [key]: { status: 'Starting rescan...', stage: 'init' } }))
 
@@ -1297,7 +1320,10 @@ export default function App() {
       setEnrichCache(prev => ({ ...prev, [key]: { error: err?.message || String(err) } }))
       return null
     } finally {
-  if (force) safeSetLoadingEnrich(l => { const n = { ...l }; delete n[key]; return n })
+  if (force) {
+    removePendingRescan(key)
+    safeSetLoadingEnrich(l => { const n = { ...l }; delete n[key]; return n })
+  }
     }
   }
 
@@ -1680,8 +1706,10 @@ export default function App() {
       if (data.missing) {
         deletedFromCache.add(p)
         removeFromItems.add(p)
-      } else if (data.cached || data.enrichment) {
-        const enriched = normalizeEnrichResponse(data.enrichment || data)
+      } else if (data.enrichment != null) {
+        // Accept any non-null enrichment regardless of the cached flag — the server
+        // may mark cached:false for incomplete providers but still return valid data.
+        const enriched = normalizeEnrichResponse(data.enrichment)
         cacheUpdates[p] = enriched
         if (enriched && (enriched.hidden || enriched.applied)) {
           removeFromItems.add(p)
@@ -2211,6 +2239,25 @@ export default function App() {
         const r = await axios.get(API('/enrich/active')).catch(() => null)
         if (!r || !r.data || !Array.isArray(r.data.active)) return
         const activePaths = r.data.active.map(e => e.path).filter(Boolean)
+
+        // Also check paths that were pending when the user last navigated away
+        // — these may have already finished on the server (not in activeEnriches)
+        // but their results haven't been pulled into the local enrichCache yet.
+        let pendingPaths = []
+        try {
+          const raw = localStorage.getItem('pending_rescans')
+          pendingPaths = raw ? JSON.parse(raw) : []
+        } catch (e) { pendingPaths = [] }
+
+        // Paths that finished while away: in pending but no longer active
+        const finishedPaths = pendingPaths.filter(p => !activePaths.includes(p))
+        if (finishedPaths.length) {
+          // Immediately fetch fresh enrichment from server for each finished path
+          try { await refreshEnrichForPaths(finishedPaths) } catch (e) {}
+          // Clear them from the pending list
+          for (const p of finishedPaths) removePendingRescan(p)
+        }
+
         if (!activePaths.length) return
         // Restore loading state for any path we aren't already tracking
         safeSetLoadingEnrich(prev => {
