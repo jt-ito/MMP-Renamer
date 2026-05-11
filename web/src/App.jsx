@@ -2351,8 +2351,13 @@ export default function App() {
     return () => window.removeEventListener('scroll', handleScroll)
   }, [])
 
-  // On mount: if we have a persisted lastScanId, attempt to load it and populate allItems
+  // On mount: if we have a persisted lastScanId, attempt to load it and populate allItems.
+  // Also depends on authChecked so it re-runs once the session cookie check completes —
+  // without this, the initial run fires before auth is confirmed (all scan routes require
+  // auth), the 401 responses bail out early, and the scan never loads after a full browser
+  // restart even though lastScanId is still in localStorage.
   useEffect(() => {
+    if (!authChecked || !auth) return   // wait until we know we're authenticated
     let mounted = true
     async function loadLastScan() {
       try {
@@ -2460,7 +2465,7 @@ export default function App() {
     }
     loadLastScan()
     return () => { mounted = false }
-  }, [lastScanId])
+  }, [lastScanId, authChecked, auth]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Background poll: periodically check for a newer scan artifact for the configured library
   // and merge in its first page non-stompingly so the UI stays up-to-date when scans are
