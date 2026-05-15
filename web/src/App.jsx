@@ -2774,38 +2774,33 @@ export default function App() {
 
         {auth ? (
             <div className="header-actions">
-            {route === '#/' && (
-            <button
-              className={"btn-save" + (selectMode && selectedCount ? ' shifted' : '')}
-              style={{ display: selectMode && selectedCount ? 'none' : '' }}
-              onClick={() => {
-                if (scanning) { pushToast && pushToast('Scan','Scan already in progress'); return }
-                setConfirmFullScanOpen(true)
-              }}
-              disabled={scanning}
-              title="Run a full library scan"
-            >
-              <span className="btn-label">
-                {activeScanKind === 'full' ? (<><Spinner /><span>Scanning…</span></>) : 'Scan'}
-              </span>
-            </button>
-            )}
-            {route === '#/' && (
-            <button
-              className="btn-ghost btn-incremental"
-              style={{ display: selectMode && selectedCount ? 'none' : '' }}
-              onClick={() => {
-                if (scanning) { pushToast && pushToast('Scan','Scan already in progress'); return }
-                void triggerScan(libraries[0], { mode: 'incremental' }).catch(() => {})
-              }}
-              disabled={scanning}
-              title="Incremental scan"
-            >
-              <span className="btn-label">
-                {activeScanKind === 'incremental' ? (<><Spinner /><span>Updating…</span></>) : 'Incremental scan'}
-              </span>
-            </button>
-            )}
+              {route === '#/' && (
+                <button className={"btn-ghost" + (selectMode ? ' active' : '')} onClick={() => { setSelectMode(s => { if (s) setSelected({}); return !s }) }} title={selectMode ? 'Exit select mode (Esc)' : 'Select items'}>Select</button>
+              )}
+              {route === '#/' && selectMode && filteredItems.length > 0 && (
+                <>
+                  <button 
+                    className="btn-ghost"
+                    onClick={() => {
+                      const newSelected = {}
+                      for (const it of filteredItems) {
+                        if (it && it.canonicalPath) newSelected[it.canonicalPath] = true
+                      }
+                      setSelected(newSelected)
+                    }}
+                    title="Select all visible items (Ctrl+A)"
+                  >
+                    Select All
+                  </button>
+                  <button 
+                    className="btn-ghost"
+                    onClick={() => setSelected({})}
+                    title="Deselect all items (Ctrl+D)"
+                  >
+                    Deselect All
+                  </button>
+                </>
+              )}
         {/* Global bulk-enrich indicator (shown when many enrich operations are running) */}
             <div className="select-approve-wrap">
                 {selectMode && selectedCount ? (
@@ -2984,31 +2979,36 @@ export default function App() {
                     >Rescan selected</button>
                 ) : null}
               {route === '#/' && (
-                <button className={"btn-ghost" + (selectMode ? ' active' : '')} onClick={() => { setSelectMode(s => { if (s) setSelected({}); return !s }) }} title={selectMode ? 'Exit select mode (Esc)' : 'Select items'}>Select</button>
+              <button
+                className={"btn-save" + (selectMode && selectedCount ? ' shifted' : '')}
+                style={{ display: selectMode && selectedCount ? 'none' : '' }}
+                onClick={() => {
+                  if (scanning) { pushToast && pushToast('Scan','Scan already in progress'); return }
+                  setConfirmFullScanOpen(true)
+                }}
+                disabled={scanning}
+                title="Run a full library scan"
+              >
+                <span className="btn-label">
+                  {activeScanKind === 'full' ? (<><Spinner /><span>Scanning…</span></>) : 'Scan'}
+                </span>
+              </button>
               )}
-              {route === '#/' && selectMode && filteredItems.length > 0 && (
-                <>
-                  <button 
-                    className="btn-ghost"
-                    onClick={() => {
-                      const newSelected = {}
-                      for (const it of filteredItems) {
-                        if (it && it.canonicalPath) newSelected[it.canonicalPath] = true
-                      }
-                      setSelected(newSelected)
-                    }}
-                    title="Select all visible items (Ctrl+A)"
-                  >
-                    Select All
-                  </button>
-                  <button 
-                    className="btn-ghost"
-                    onClick={() => setSelected({})}
-                    title="Deselect all items (Ctrl+D)"
-                  >
-                    Deselect All
-                  </button>
-                </>
+              {route === '#/' && (
+              <button
+                className="btn-ghost btn-incremental"
+                style={{ display: selectMode && selectedCount ? 'none' : '' }}
+                onClick={() => {
+                  if (scanning) { pushToast && pushToast('Scan','Scan already in progress'); return }
+                  void triggerScan(libraries[0], { mode: 'incremental' }).catch(() => {})
+                }}
+                disabled={scanning}
+                title="Incremental scan"
+              >
+                <span className="btn-label">
+                  {activeScanKind === 'incremental' ? (<><Spinner /><span>Updating…</span></>) : 'Incremental scan'}
+                </span>
+              </button>
               )}
             </div>
             <div className="header-nav">
