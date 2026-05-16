@@ -1728,11 +1728,15 @@ export default function App() {
       })
     }
 
-    // Single items/allItems update
+    // Single items/allItems update.
+    // Use prepend=false so that items being refreshed (upsertPaths) stay at their
+    // original positions in the array. prepend=true would move them to index 0,
+    // which breaks the dateAdded sort (which uses indexOf as an insertion-order
+    // proxy) and causes rescanned items to jump to the wrong place in the list.
     if (removeFromItems.size || upsertPaths.length) {
       const upsertItems = upsertPaths.map(p => ({ id: p, canonicalPath: p }))
-      setItems(prev => mergeItemsUnique(prev.filter(it => !removeFromItems.has(it.canonicalPath)), upsertItems, true))
-      setAllItems(prev => mergeItemsUnique(prev.filter(it => !removeFromItems.has(it.canonicalPath)), upsertItems, true))
+      setItems(prev => mergeItemsUnique(prev.filter(it => !removeFromItems.has(it.canonicalPath)), upsertItems, false))
+      setAllItems(prev => mergeItemsUnique(prev.filter(it => !removeFromItems.has(it.canonicalPath)), upsertItems, false))
     }
   }
 
