@@ -5,9 +5,11 @@ const PROVIDER_OPTIONS = [
   { value: 'tmdb', label: 'TMDB' },
   { value: 'tvdb', label: 'TVDB' },
   { value: 'anidb', label: 'AniDB' },
+  { value: 'anidb-ed2k', label: 'AniDB (ED2K)' },
   { value: 'anilist', label: 'AniList' },
   { value: 'kitsu', label: 'Kitsu' },
-  { value: 'wikipedia', label: 'Wikipedia' }
+  { value: 'wikipedia', label: 'Wikipedia' },
+  { value: 'unknown', label: 'Unknown' }
 ]
 
 const SORT_OPTIONS = [

@@ -50,13 +50,21 @@ const PROVIDER_LABELS = {
   kitsu: 'Kitsu'
 }
 
-function ProviderStats({ filteredItems, enrichCache, total, metaPhase, metaProgress }) {
+function ProviderStats({ filteredItems, enrichCache, total, metaPhase, metaProgress, selectMode, selectedPathsList, filterProvider, setFilterProvider }) {
+  const isSelectionView = !!(selectMode && selectedPathsList && selectedPathsList.length > 1)
+
+  const displayItems = React.useMemo(() => {
+    if (!isSelectionView) return filteredItems
+    const selSet = new Set(selectedPathsList)
+    return filteredItems.filter(it => selSet.has(it.canonicalPath))
+  }, [filteredItems, isSelectionView, selectedPathsList])
+
   const stats = React.useMemo(() => {
-    if (filteredItems.length === 0) return null
+    if (displayItems.length === 0) return null
     const providerCounts = {}
     let withMetadata = 0
     let withoutMetadata = 0
-    for (const it of filteredItems) {
+    for (const it of displayItems) {
       const enriched = enrichCache && enrichCache[it.canonicalPath]
       const norm = normalizeEnrichResponse(enriched)
       if (norm && norm.provider && norm.provider.title) {
@@ -75,23 +83,47 @@ function ProviderStats({ filteredItems, enrichCache, total, metaPhase, metaProgr
       }
     }
     return { providerCounts, withMetadata, withoutMetadata }
-  }, [filteredItems, enrichCache])
+  }, [displayItems, enrichCache])
+
+  const handleBadgeClick = (provider) => {
+    if (!setFilterProvider) return
+    setFilterProvider(filterProvider === provider ? 'all' : provider)
+  }
 
   return (
     <div style={{ padding: '12px 20px', fontSize: '14px', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
       <div>
-        Found {total} items. Showing {filteredItems.length} loaded items.
+        {isSelectionView
+          ? <span>{selectedPathsList.length} items selected</span>
+          : <>Found {total} items. Showing {filteredItems.length} loaded items.</>
+        }
         {metaPhase ? <span className="phase-label">Metadata refresh {metaProgress}%</span> : null}
       </div>
       {stats && (
-        <div style={{ display: 'flex', gap: '12px', fontSize: '12px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '12px', fontSize: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+          {isSelectionView && <span style={{ color: 'var(--muted)', opacity: 0.7, fontSize: '11px', fontStyle: 'italic' }}>selected only:</span>}
           <span style={{ color: 'var(--accent-cta)', fontWeight: 600 }}>{stats.withMetadata} with metadata</span>
           {stats.withoutMetadata > 0 && <span style={{ color: 'var(--muted)' }}>{stats.withoutMetadata} without</span>}
-          {Object.entries(stats.providerCounts).map(([provider, count]) => (
-            <span key={provider} className="item-stats-badge">
-              {provider.toUpperCase()}: {count}
-            </span>
-          ))}
+          {Object.entries(stats.providerCounts).map(([provider, count]) => {
+            const isActive = filterProvider === provider
+            return (
+              <span
+                key={provider}
+                className="item-stats-badge"
+                onClick={() => handleBadgeClick(provider)}
+                style={{
+                  cursor: setFilterProvider ? 'pointer' : undefined,
+                  background: isActive ? 'var(--accent-cta)' : undefined,
+                  color: isActive ? 'var(--bg-900)' : undefined,
+                  fontWeight: isActive ? 700 : undefined,
+                  outline: isActive ? '2px solid var(--accent-cta)' : undefined
+                }}
+                title={isActive ? `Click to clear "${provider.toUpperCase()}" filter` : `Click to filter by ${provider.toUpperCase()}`}
+              >
+                {provider.toUpperCase()}: {count}
+              </span>
+            )
+          })}
         </div>
       )}
     </div>
@@ -671,8 +703,14 @@ export default function App() {
         const norm = getNorm(it)
         const provider = norm?.provider
         if (!provider) return false
-        const providerSource = (provider.source || provider.provider || '').toLowerCase()
-        return providerSource === filterProvider.toLowerCase()
+        const rawSource = (provider.source || provider.provider || '')
+        const firstPart = rawSource.split(/\s*\+\s*/)[0]
+        const cleanedPart = firstPart.split('(')[0].trim()
+        const baseProvider = cleanedPart.split(/\s+/)[0].toLowerCase()
+        if (filterProvider === 'unknown') {
+          return !baseProvider || baseProvider === 'unknown'
+        }
+        return baseProvider === filterProvider.toLowerCase()
       })
     }
     
@@ -1729,14 +1767,22 @@ export default function App() {
     }
 
     // Single items/allItems update.
-    // Use prepend=false so that items being refreshed (upsertPaths) stay at their
-    // original positions in the array. prepend=true would move them to index 0,
-    // which breaks the dateAdded sort (which uses indexOf as an insertion-order
-    // proxy) and causes rescanned items to jump to the wrong place in the list.
+    // NOTE: Do NOT use mergeItemsUnique here. mergeItemsUnique applies a
+    // currentScanPaths guard to existing prev items, which would silently drop
+    // any item not present in the most recent (possibly partial) scan set —
+    // causing unrelated visible items to vanish after a hide or targeted refresh.
+    // Instead, directly filter out removed items and append any new upserts.
     if (removeFromItems.size || upsertPaths.length) {
       const upsertItems = upsertPaths.map(p => ({ id: p, canonicalPath: p }))
-      setItems(prev => mergeItemsUnique(prev.filter(it => !removeFromItems.has(it.canonicalPath)), upsertItems, false))
-      setAllItems(prev => mergeItemsUnique(prev.filter(it => !removeFromItems.has(it.canonicalPath)), upsertItems, false))
+      const applyUpdate = (prev) => {
+        const filtered = prev.filter(it => !removeFromItems.has(it.canonicalPath))
+        if (!upsertItems.length) return filtered
+        const existingSet = new Set(filtered.map(it => it.canonicalPath))
+        const toAdd = upsertItems.filter(it => !existingSet.has(it.canonicalPath))
+        return toAdd.length ? [...filtered, ...toAdd] : filtered
+      }
+      setItems(applyUpdate)
+      setAllItems(applyUpdate)
     }
   }
 
@@ -3108,7 +3154,11 @@ export default function App() {
                         enrichCache={enrichCache} 
                         total={total} 
                         metaPhase={metaPhase} 
-                        metaProgress={metaProgress} 
+                        metaProgress={metaProgress}
+                        selectMode={selectMode}
+                        selectedPathsList={selectedPathsList}
+                        filterProvider={filterProvider}
+                        setFilterProvider={setFilterProvider}
                       />
                     </>
                   ) : (
