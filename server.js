@@ -4084,10 +4084,10 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
     } catch (e) { /* ignore */ }
   }
   // lightweight filename parser to strip common release tags and extract season/episode
-  // Use strippedPath (library root already removed) instead of canonicalPath
+  // Use strippedPath (library root already removed) to preserve parent directory context for series title detection
   const base = path.basename(strippedPath, path.extname(strippedPath));
   const parseFilename = require('./lib/filename-parser');
-  const parsed = parseFilename(base);
+  const parsed = parseFilename(strippedPath);
   const normSeason = (parsed.season == null && parsed.episode != null) ? 1 : parsed.season
   const normEpisode = parsed.episode
   if (normSeason != null || normEpisode != null || parsed.episodeRange) seriesSignal = true;
@@ -5448,7 +5448,7 @@ function doProcessParsedItem(it, session) {
     const prior = parsedCache[key] || null;
     let parsed = null;
     try {
-      const guess = parseFilename(base);
+      const guess = parseFilename(it.canonicalPath);
       parsed = { title: guess.title, parsedName: guess.parsedName, season: guess.season, episode: guess.episode, episodeRange: guess.episodeRange || null, timestamp: Date.now() };
     } catch (parseErr) {
       if (prior) {
