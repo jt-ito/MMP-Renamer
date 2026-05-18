@@ -1073,46 +1073,104 @@ function startFolderWatcher(username, libPath) {
         try {
           appendLog(`WATCHER_TRIGGER_SCAN username=${username} path=${libPath}`);
           const scanLib = require('./lib/scan');
-          const loadScanCacheFn = () => scanLib.loadScanCache(scanCacheFile);
           const saveScanCacheFn = (obj) => scanLib.saveScanCache(scanCacheFile, obj);
-          
-          const result = scanLib.incrementalScanLibrary(libPath, { 
-            scanCacheFile, 
-            ignoredDirs: new Set(['node_modules','.git','.svn','__pycache__']), 
-            videoExts: ['mkv','mp4','avi','mov','m4v','mpg','mpeg','webm','wmv','flv','ts','ogg','ogv','3gp','3g2'], 
-            canonicalize, 
-            uuidv4 
-          });
-          saveScanCacheFn(result.currentCache);
-          
-          // Parse new/changed items so they have basic metadata
-          for (const it of (result.toProcess || [])) {
-            doProcessParsedItem(it, { username });
+
+          let items = [];
+          let allItemsCount = 0;
+
+          // Load prior scan cache; if empty, bootstrap from the most recent scan artifact
+          // so incremental scanning can proceed without a full filesystem walk (same logic
+          // as the manual /api/scan/incremental endpoint).
+          let prior = scanLib.loadScanCache(scanCacheFile);
+          if ((!prior || !prior.files || Object.keys(prior.files).length === 0) && scans && Object.keys(scans || {}).length) {
+            try {
+              const allScanIds = Object.keys(scans || {}).map(k => scans[k]).filter(Boolean);
+              allScanIds.sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0));
+              const recent = allScanIds[0];
+              if (recent && Array.isArray(recent.items) && recent.items.length) {
+                const priorFiles = {};
+                for (const it of recent.items) {
+                  try {
+                    const st = fs.statSync(it.canonicalPath);
+                    priorFiles[it.canonicalPath] = { mtime: st.mtimeMs || Date.now(), size: st.size || 0, id: it.id || (String(st.size || 0) + ':' + String(Math.floor(st.mtimeMs || Date.now()))) };
+                  } catch (e) {
+                    try { priorFiles[it.canonicalPath] = { mtime: Date.now(), size: 0, id: it.id || String(Math.random()).slice(2) }; } catch (ee) {}
+                  }
+                }
+                prior = { files: priorFiles, dirs: {} };
+                try { saveScanCacheFn(prior); appendLog(`WATCHER_BOOTSTRAPPED_CACHE from_scan=${recent.id} entries=${Object.keys(priorFiles).length}`); } catch (e) {}
+              }
+            } catch (e) { /* best-effort */ }
           }
-          
-          // Filter out hidden/applied items before creating scan artifact
-          const allItems = scanLib.buildIncrementalItems(result.scanCache, result.toProcess, uuidv4);
+
+          if (!prior || !prior.files || Object.keys(prior.files).length === 0) {
+            // No prior cache at all — fall back to a full scan so we get everything
+            items = scanLib.fullScanLibrary(libPath, {
+              ignoredDirs: new Set(['node_modules', '.git', '.svn', '__pycache__']),
+              videoExts: ['mkv', 'mp4', 'avi', 'mov', 'm4v', 'mpg', 'mpeg', 'webm', 'wmv', 'flv', 'ts', 'ogg', 'ogv', '3gp', '3g2'],
+              canonicalize,
+              uuidv4
+            });
+            for (const it of items) doProcessParsedItem(it, { username });
+          } else {
+            // incrementalScanLibrary returns { toProcess, currentCache, removed }
+            const inc = scanLib.incrementalScanLibrary(libPath, {
+              scanCacheFile,
+              ignoredDirs: new Set(['node_modules', '.git', '.svn', '__pycache__']),
+              videoExts: ['mkv', 'mp4', 'avi', 'mov', 'm4v', 'mpg', 'mpeg', 'webm', 'wmv', 'flv', 'ts', 'ogg', 'ogv', '3gp', '3g2'],
+              canonicalize,
+              uuidv4
+            });
+            const { toProcess, currentCache, removed } = inc || {};
+
+            // Clean up enrichCache/parsedCache for removed files (don't touch applied/hidden)
+            for (const r of (removed || [])) {
+              try {
+                const e = enrichCache[r] || null;
+                if (!e || (!e.applied && !e.hidden)) delete enrichCache[r];
+                delete parsedCache[r];
+              } catch (e) {}
+            }
+
+            // Parse new/changed files so they have basic metadata
+            for (const it of (toProcess || [])) doProcessParsedItem(it, { username });
+
+            // Persist updated cache — must happen before buildIncrementalItems
+            if (currentCache) saveScanCacheFn(currentCache);
+
+            // Build the full item list from currentCache (all known files), prioritising
+            // new/changed entries first. NOTE: pass currentCache, NOT scanCache — the old
+            // code incorrectly used result.scanCache (undefined) which caused buildIncrementalItems
+            // to return only the new/changed files, missing the entire existing library.
+            items = scanLib.buildIncrementalItems(currentCache, toProcess, uuidv4);
+          }
+
+          allItemsCount = items.length;
           const _appliedSourcesW = buildAppliedSourcesSet();
-          const filteredItems = allItems.filter(it => {
+          const filteredItems = items.filter(it => {
             try {
               const k = canonicalize(it.canonicalPath);
               return !isHiddenOrAppliedPath(k) && !_appliedSourcesW.has(k);
             } catch (e) { return true; }
           });
-          
-          const generatedAt = Date.now();
+
           const scanId = uuidv4();
-          const scanObj = { id: scanId, libraryId: 'local', items: filteredItems, generatedAt, incrementalScanPath: libPath, username, totalCount: filteredItems.length };
-          
-          if (db) {
-            try { db.saveScan(scanObj); } catch (e) {}
-          }
+          const scanObj = { id: scanId, libraryId: 'local', items: filteredItems, generatedAt: Date.now(), incrementalScanPath: libPath, username, totalCount: filteredItems.length };
+
+          // Persist to DB (upsertScan) or JSON fallback; always keep in-memory scans map
+          // so /api/scan/latest can find it without a round-trip.
           scans[scanId] = scanObj;
-          if (!db) writeJson(scanStoreFile, scans);
-          
-          appendLog(`WATCHER_SCAN_COMPLETE username=${username} scanId=${scanId} items=${filteredItems.length} hidden_filtered=${allItems.length - filteredItems.length}`);
+          if (db) {
+            try { db.upsertScan(scanObj); } catch (e) {
+              appendLog(`WATCHER_DB_UPSERT_ERROR username=${username} err=${e && e.message ? e.message : String(e)}`);
+            }
+          } else {
+            writeJson(scanStoreFile, scans);
+          }
+
+          appendLog(`WATCHER_SCAN_COMPLETE username=${username} scanId=${scanId} items=${filteredItems.length} hidden_filtered=${allItemsCount - filteredItems.length}`);
         } catch (err) {
-          appendLog(`WATCHER_SCAN_ERROR username=${username} err=${err.message}`);
+          appendLog(`WATCHER_SCAN_ERROR username=${username} err=${err && err.message ? err.message : String(err)}`);
         }
       }, 3000); // 3 second debounce
     };
