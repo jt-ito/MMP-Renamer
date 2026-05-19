@@ -256,7 +256,22 @@ export default function App() {
   
   // Use deferred value to prevent flickering during filter changes
   const filteredItems = React.useDeferredValue(computedFilteredItems)
-  
+
+  // Auto-deselect items that are no longer visible in filteredItems (e.g. user changed search
+  // or filter after selecting items). In-flight rescan/approve operations are independent of
+  // `selected` state and will complete regardless — only the visual selection is cleared.
+  React.useEffect(() => {
+    if (!selectMode) return
+    const visibleSet = new Set(filteredItems.map(it => it.canonicalPath))
+    setSelected(prev => {
+      const toRemove = Object.keys(prev).filter(p => !visibleSet.has(p))
+      if (!toRemove.length) return prev
+      const next = { ...prev }
+      for (const p of toRemove) delete next[p]
+      return next
+    })
+  }, [filteredItems, selectMode])
+
   const [logs, setLogs] = useState('')
   const [logTimezone, setLogTimezone] = useLocalState('log_timezone', '')
   const [toasts, setToasts] = useState([])
