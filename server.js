@@ -3,6 +3,7 @@ const helmet = require('helmet')
 const cors = require('cors')
 const fs = require('fs')
 const path = require('path')
+const os = require('os')
 const crypto = require('crypto')
 const https = require('https')
 const { execFile } = require('child_process')
@@ -603,6 +604,28 @@ function resolveExtractSubtitleFormat(username) {
   return 'ass';
 }
 
+function resolveHardsubSetting(username) {
+  try {
+    if (username && users && users[username] && users[username].settings && typeof users[username].settings.hardsub_enabled !== 'undefined') {
+      return coerceBoolean(users[username].settings.hardsub_enabled);
+    }
+    if (serverSettings && typeof serverSettings.hardsub_enabled !== 'undefined') {
+      return coerceBoolean(serverSettings.hardsub_enabled);
+    }
+  } catch (e) {}
+  return false;
+}
+
+function resolveHardsubLanguage(username) {
+  try {
+    const userLang = username && users && users[username] && users[username].settings && users[username].settings.hardsub_language;
+    if (userLang) return userLang;
+    const serverLang = serverSettings && serverSettings.hardsub_language;
+    if (serverLang) return serverLang;
+  } catch (e) {}
+  return 'eng';
+}
+
 // Tracks SRT output paths currently being written by ffmpeg to prevent concurrent duplicate writes
 const _subtitleExtractionInProgress = new Set();
 
@@ -673,6 +696,103 @@ async function extractSubtitlesToSrt(fromPath, toPath, format = 'ass') {
     } finally {
       _subtitleExtractionInProgress.delete(srtPath);
     }
+  }
+}
+
+/**
+ * Burns a subtitle track from `fromPath` into a re-encoded video at `toPath`.
+ * `toPath` must already exist (as a hardlink or copy) — it is replaced by the encoded output.
+ * The source file (`fromPath`) is never modified.
+ * Selects the subtitle stream matching `language` (ISO 639-2 code, e.g. 'eng');
+ * falls back to the first available subtitle stream if no match is found.
+ * Non-fatal — on failure the original hardlink at `toPath` is preserved and a warning is logged.
+ */
+async function burnHardsubToFile(fromPath, toPath, language) {
+  // Step 1: probe for subtitle streams
+  const probeArgs = [
+    '-v', 'quiet', '-print_format', 'json', '-show_streams',
+    '-select_streams', 's', fromPath
+  ];
+  let streams;
+  try {
+    streams = await new Promise((resolve, reject) => {
+      execFile('ffprobe', probeArgs, { timeout: 30000 }, (err, stdout) => {
+        if (err) return reject(err);
+        try { resolve(JSON.parse(stdout).streams || []); } catch (e) { reject(e); }
+      });
+    });
+  } catch (e) {
+    appendLog(`HARDSUB_PROBE_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+    return;
+  }
+
+  if (!streams || !streams.length) {
+    appendLog(`HARDSUB_NO_SUBTITLE_STREAMS from=${fromPath}`);
+    return;
+  }
+
+  // Step 2: pick the best matching subtitle stream
+  const langLower = (language || 'eng').toLowerCase();
+  let chosenStream = streams.find(s => {
+    const lang = ((s.tags && (s.tags.language || s.tags.LANGUAGE)) || '').toLowerCase();
+    return lang === langLower;
+  });
+  if (!chosenStream) {
+    chosenStream = streams.find(s => {
+      const lang = ((s.tags && (s.tags.language || s.tags.LANGUAGE)) || '').toLowerCase();
+      return lang.startsWith(langLower.slice(0, 2));
+    });
+  }
+  if (!chosenStream) chosenStream = streams[0];
+
+  const streamIndex = chosenStream.index;
+
+  // Step 3: extract chosen subtitle stream to a temp ASS file (avoids ffmpeg filter path-escaping issues)
+  const tmpId = `${Date.now()}-${process.pid}`;
+  const tmpSubPath = path.join(os.tmpdir(), `hardsub-sub-${tmpId}.ass`);
+  const tmpVideoPath = toPath + `.hardsub-${tmpId}.tmp`;
+
+  try {
+    await new Promise((resolve, reject) => {
+      execFile('ffmpeg', [
+        '-v', 'quiet', '-y',
+        '-i', fromPath,
+        '-map', `0:${streamIndex}`,
+        '-c:s', 'ass',
+        tmpSubPath
+      ], { timeout: 60000 }, (err) => { if (err) reject(err); else resolve(); });
+    });
+
+    // Step 4: burn the extracted subtitle into a new video file
+    // Convert path separators for ffmpeg's subtitles filter (needed on Windows)
+    const filterSubPath = tmpSubPath.replace(/\\/g, '/').replace(/^([A-Za-z]):/, '$1\\:');
+    await new Promise((resolve, reject) => {
+      execFile('ffmpeg', [
+        '-v', 'quiet', '-y',
+        '-i', fromPath,
+        '-vf', `subtitles='${filterSubPath}'`,
+        '-c:v', 'libx264', '-crf', '18', '-preset', 'medium',
+        '-c:a', 'copy',
+        '-sn',
+        tmpVideoPath
+      ], { timeout: 3600000 }, (err) => { if (err) reject(err); else resolve(); });
+    });
+
+    // Step 5: replace the hardlink/copy at toPath with the encoded file
+    try { fs.unlinkSync(toPath); } catch (e) {}
+    fs.renameSync(tmpVideoPath, toPath);
+    appendLog(`HARDSUB_BURNED from=${fromPath} to=${toPath} lang=${language} stream=${streamIndex}`);
+  } catch (e) {
+    appendLog(`HARDSUB_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+    // If toPath was removed before the rename failed, restore the hardlink so output is not lost
+    if (!fs.existsSync(toPath)) {
+      try { fs.linkSync(fromPath, toPath); } catch (e2) {
+        appendLog(`HARDSUB_RESTORE_FAIL from=${fromPath} to=${toPath} err=${e2 && e2.message ? e2.message : String(e2)}`);
+      }
+    }
+  } finally {
+    try { if (fs.existsSync(tmpSubPath)) fs.unlinkSync(tmpSubPath); } catch (e) {}
+    try { if (fs.existsSync(tmpVideoPath)) fs.unlinkSync(tmpVideoPath); } catch (e) {}
   }
 }
 
@@ -10296,6 +10416,12 @@ app.post('/api/jobs/approve', requireAuth, async (req, res) => {
                 const subtitleFmt = resolveExtractSubtitleFormat(username);
                 try { await extractSubtitlesToSrt(fromPath, toPath, subtitleFmt); } catch (e) {
                   appendLog(`SUBTITLE_EXTRACT_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
+                }
+              }
+              if (resolveHardsubSetting(username)) {
+                const hardsubLang = resolveHardsubLanguage(username);
+                try { await burnHardsubToFile(fromPath, toPath, hardsubLang); } catch (e) {
+                  appendLog(`HARDSUB_UNEXPECTED_ERROR from=${fromPath} err=${e && e.message ? e.message : String(e)}`);
                 }
               }
             }
