@@ -864,14 +864,9 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           <label style={{display:'flex', alignItems:'center', gap:12, cursor:'pointer', userSelect:'none'}}>
             <input
               type="checkbox"
+              className="settings-checkbox"
               checked={enableFolderWatch}
               onChange={e => { setEnableFolderWatch(e.target.checked); setDirty(true) }}
-              style={{
-                width:20,
-                height:20,
-                cursor:'pointer',
-                accentColor:'var(--hunter-green)'
-              }}
             />
             <span style={{fontSize:13, color:'var(--accent)', fontWeight:500}}>Enable folder watching</span>
           </label>
@@ -884,14 +879,9 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           <label style={{display:'flex', alignItems:'center', gap:12, cursor:'pointer', userSelect:'none'}}>
             <input
               type="checkbox"
+              className="settings-checkbox"
               checked={deleteHardlinksOnUnapprove}
               onChange={e => { setDeleteHardlinksOnUnapprove(e.target.checked); setDirty(true) }}
-              style={{
-                width:20,
-                height:20,
-                cursor:'pointer',
-                accentColor:'var(--hunter-green)'
-              }}
             />
             <span style={{fontSize:13, color:'var(--accent)', fontWeight:500}}>Delete hardlinks when unapproved</span>
           </label>
@@ -904,14 +894,9 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           <label style={{display:'flex', alignItems:'center', gap:12, cursor:'pointer', userSelect:'none'}}>
             <input
               type="checkbox"
+              className="settings-checkbox"
               checked={extractSubtitles}
               onChange={e => { setExtractSubtitles(e.target.checked); setDirty(true) }}
-              style={{
-                width:20,
-                height:20,
-                cursor:'pointer',
-                accentColor:'var(--hunter-green)'
-              }}
             />
             <span style={{fontSize:13, color:'var(--accent)', fontWeight:500}}>Extract subtitles on approve</span>
           </label>
@@ -974,14 +959,9 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           <label style={{display:'flex', alignItems:'center', gap:12, cursor:'pointer', userSelect:'none'}}>
             <input
               type="checkbox"
+              className="settings-checkbox"
               checked={copySidecarSubtitles}
               onChange={e => { setCopySidecarSubtitles(e.target.checked); setDirty(true) }}
-              style={{
-                width:20,
-                height:20,
-                cursor:'pointer',
-                accentColor:'var(--hunter-green)'
-              }}
             />
             <span style={{fontSize:13, color:'var(--accent)', fontWeight:500}}>Copy sidecar subtitle files on approve</span>
           </label>
@@ -994,14 +974,9 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           <label style={{display:'flex', alignItems:'center', gap:12, cursor:'pointer', userSelect:'none'}}>
             <input
               type="checkbox"
+              className="settings-checkbox"
               checked={hardsubEnabled}
               onChange={e => { setHardsubEnabled(e.target.checked); setDirty(true) }}
-              style={{
-                width:20,
-                height:20,
-                cursor:'pointer',
-                accentColor:'var(--hunter-green)'
-              }}
             />
             <span style={{fontSize:13, color:'var(--accent)', fontWeight:500}}>Hardcode embedded subtitles on approve</span>
           </label>
@@ -1043,14 +1018,9 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           <label style={{display:'flex', alignItems:'center', gap:12, cursor:'pointer', userSelect:'none'}}>
             <input
               type="checkbox"
+              className="settings-checkbox"
               checked={cardParallax !== false}
               onChange={e => { setCardParallax && setCardParallax(e.target.checked) }}
-              style={{
-                width:20,
-                height:20,
-                cursor:'pointer',
-                accentColor:'var(--hunter-green)'
-              }}
             />
             <span style={{fontSize:13, color:'var(--accent)', fontWeight:500}}>3D card parallax on Approved Series</span>
           </label>

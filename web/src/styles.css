@@ -1017,6 +1017,41 @@ button.folder-option:hover {
 	font-weight: 700;
 }
 
+.settings-checkbox {
+	width: 20px;
+	height: 20px;
+	appearance: none;
+	-webkit-appearance: none;
+	border: 2px solid rgba(255,255,255,0.10);
+	background: var(--bg-700);
+	border-radius: 6px;
+	cursor: pointer;
+	display: inline-block;
+	position: relative;
+	box-shadow: inset 0 -1px 0 rgba(0,0,0,0.2);
+	flex-shrink: 0;
+	transition: border-color 0.15s, background 0.15s;
+}
+.settings-checkbox:hover { border-color: rgba(99,102,241,0.45); }
+.settings-checkbox:focus { outline: 2px solid rgba(99,102,241,0.20); outline-offset: 2px; }
+.settings-checkbox:checked { background: var(--accent-cta); border-color: var(--accent-cta); }
+.settings-checkbox:checked::after {
+	content: '\2713';
+	position: absolute;
+	color: #ffffff;
+	font-size: 14px;
+	left: 50%;
+	top: 50%;
+	transform: translate(-50%, -54%);
+}
+.light .settings-checkbox {
+	border: 2px solid rgba(180,181,212,0.6);
+	background: rgba(254,254,254,0.92);
+	box-shadow: inset 0 1px 2px rgba(210,211,232,0.45);
+}
+.light .settings-checkbox:hover { border-color: rgba(79,70,229,0.55); }
+.light .settings-checkbox:checked { background: var(--accent-cta); border-color: var(--accent-cta); }
+
 .light .row input[type="checkbox"],
 .light .hidden-list input[type="checkbox"] {
 	border: 2px solid rgba(180,181,212,0.6);
