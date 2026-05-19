@@ -630,7 +630,7 @@ export default function ApprovedSeries({ pushToast, parallax = true }) {
                           <tr key={i}>
                             <td style={{ color: 'var(--muted)', width: 32, textAlign: 'right' }}>{i + 1}</td>
                             <td style={{ fontFamily: 'Consolas, monospace', fontSize: 11 }} title={item.path}>{item.basename}</td>
-                            <td style={{ color: 'var(--muted)' }}>{item.providerTitle || item.parsedTitle || '—'}{item.providerEpisodeTitle ? ` — ${item.providerEpisodeTitle}` : ''}</td>
+                            <td style={{ color: 'var(--muted)' }}>{item.basename ? item.basename.replace(/\.[^/.]+$/, '') : (item.providerTitle || item.parsedTitle || '—')}</td>
                           </tr>
                         ))}
                       </tbody>
