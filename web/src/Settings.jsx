@@ -100,6 +100,8 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   const [extractSubtitles, setExtractSubtitles] = useState(false)
   const [subtitleFormat, setSubtitleFormat] = useState('ass')
   const [copySidecarSubtitles, setCopySidecarSubtitles] = useState(false)
+  const [hardsubEnabled, setHardsubEnabled] = useState(false)
+  const [hardsubLanguage, setHardsubLanguage] = useState('eng')
   const [backfillJob, setBackfillJob] = useState(null) // { status, extracted, skipped, missing, errors, total }
   const [dirty, setDirty] = useState(false)
   const [clientOS, setClientOS] = useState(typeof window !== 'undefined' ? (localStorage.getItem('client_os') || 'linux') : 'linux')
@@ -166,6 +168,13 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
             ? (serverSidecarPref === true || serverSidecarPref === 'true')
             : (sidecarPref === true || sidecarPref === 'true')
           setCopySidecarSubtitles(resolvedSidecarPref)
+          const hardsubPref = user.hardsub_enabled
+          const serverHardsubPref = server.hardsub_enabled
+          const resolvedHardsubPref = hardsubPref === undefined
+            ? (serverHardsubPref === true || serverHardsubPref === 'true')
+            : (hardsubPref === true || hardsubPref === 'true')
+          setHardsubEnabled(resolvedHardsubPref)
+          setHardsubLanguage(user.hardsub_language || server.hardsub_language || 'eng')
           const folders = Array.isArray(user.output_folders) ? user.output_folders : []
           setOutputFolders(folders)
           setOutputFoldersDirty(new Array(folders.length).fill(false))
@@ -199,6 +208,10 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         const sidecarPref = storedSidecarPref != null
           ? storedSidecarPref === 'true'
           : (server.copy_sidecar_subtitles === true || server.copy_sidecar_subtitles === 'true')
+        const storedHardsubPref = localStorage.getItem('hardsub_enabled')
+        const hardsubPref2 = storedHardsubPref != null
+          ? storedHardsubPref === 'true'
+          : (server.hardsub_enabled === true || server.hardsub_enabled === 'true')
         const storedOrder = localStorage.getItem('metadata_provider_order') || localStorage.getItem('default_meta_provider')
         const storedFolders = localStorage.getItem('output_folders')
         setTmdbKey(v)
@@ -216,6 +229,8 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         setExtractSubtitles(extractPref)
         setSubtitleFormat(storedSubtitleFormat)
         setCopySidecarSubtitles(sidecarPref)
+        setHardsubEnabled(hardsubPref2)
+        setHardsubLanguage(localStorage.getItem('hardsub_language') || server.hardsub_language || 'eng')
           setLogTimezone(server.log_timezone || localStorage.getItem('log_timezone') || '')
         setProviderOrder(sanitizeProviderOrder(storedOrder))
         try {
@@ -245,6 +260,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         const storedExtractPref2 = localStorage.getItem('extract_subtitles')
         const storedSubtitleFormat2 = localStorage.getItem('extract_subtitle_format') || 'ass'
         const storedSidecarPref2 = localStorage.getItem('copy_sidecar_subtitles')
+        const storedHardsubPref2 = localStorage.getItem('hardsub_enabled')
         const storedFolders = localStorage.getItem('output_folders')
         setTmdbKey(v)
         setAnilistKey(a)
@@ -261,6 +277,8 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         setExtractSubtitles(storedExtractPref2 === 'true')
         setSubtitleFormat(storedSubtitleFormat2)
         setCopySidecarSubtitles(storedSidecarPref2 === 'true')
+        setHardsubEnabled(storedHardsubPref2 === 'true')
+        setHardsubLanguage(localStorage.getItem('hardsub_language') || 'eng')
           setLogTimezone(localStorage.getItem('log_timezone') || '')
         try {
           const parsedFolders = storedFolders ? JSON.parse(storedFolders) : []
@@ -314,6 +332,8 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
       localStorage.setItem('extract_subtitles', String(extractSubtitles))
       localStorage.setItem('extract_subtitle_format', subtitleFormat)
       localStorage.setItem('copy_sidecar_subtitles', String(copySidecarSubtitles))
+      localStorage.setItem('hardsub_enabled', String(hardsubEnabled))
+      localStorage.setItem('hardsub_language', hardsubLanguage)
       try { localStorage.setItem('output_folders', JSON.stringify(outputFolders)) } catch (e) {}
       try { localStorage.setItem('log_timezone', logTimezone) } catch (e) {}
       const firstProvider = providerOrder[0] || 'tmdb'
@@ -336,6 +356,8 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           extract_subtitles: extractSubtitles,
           extract_subtitle_format: subtitleFormat,
           copy_sidecar_subtitles: copySidecarSubtitles,
+          hardsub_enabled: hardsubEnabled,
+          hardsub_language: hardsubLanguage,
           output_folders: outputFolders,
           rename_template: renameTemplate,
           client_os: clientOS,
@@ -374,6 +396,8 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   setExtractSubtitles(false)
   setSubtitleFormat('ass')
   setCopySidecarSubtitles(false)
+  setHardsubEnabled(false)
+  setHardsubLanguage('eng')
   setOutputFolders([])
   setOutputFoldersDirty([])
       setLogTimezone('')
@@ -393,6 +417,8 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
       localStorage.removeItem('extract_subtitles')
       localStorage.removeItem('extract_subtitle_format')
       localStorage.removeItem('copy_sidecar_subtitles')
+      localStorage.removeItem('hardsub_enabled')
+      localStorage.removeItem('hardsub_language')
   localStorage.removeItem('output_folders')
         localStorage.removeItem('client_os')
         localStorage.removeItem('log_timezone')
@@ -962,6 +988,55 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8, marginLeft:32}}>
             When approving a file, copies any external subtitle files found in the same directory as the source (e.g. .srt, .ass, .vtt sidecars) into the output folder alongside the hardlink.
           </div>
+        </div>
+
+        <div style={{marginTop:18}}>
+          <label style={{display:'flex', alignItems:'center', gap:12, cursor:'pointer', userSelect:'none'}}>
+            <input
+              type="checkbox"
+              checked={hardsubEnabled}
+              onChange={e => { setHardsubEnabled(e.target.checked); setDirty(true) }}
+              style={{
+                width:20,
+                height:20,
+                cursor:'pointer',
+                accentColor:'var(--hunter-green)'
+              }}
+            />
+            <span style={{fontSize:13, color:'var(--accent)', fontWeight:500}}>Hardcode embedded subtitles on approve</span>
+          </label>
+          <div style={{fontSize:12, color:'var(--muted)', marginTop:8, marginLeft:32}}>
+            Burns subtitle tracks from the video container directly into the video stream on approve. Requires ffmpeg in PATH. The source file is never modified.
+          </div>
+          {hardsubEnabled && (
+            <div style={{marginTop:12, marginLeft:32}}>
+              <label style={{fontSize:12, color:'var(--accent)', display:'flex', alignItems:'center', gap:8}}>
+                Subtitle language:
+                <select
+                  value={hardsubLanguage}
+                  onChange={e => { setHardsubLanguage(e.target.value); setDirty(true) }}
+                  style={{
+                    fontSize:12, padding:'3px 6px', borderRadius:4,
+                    background:'var(--card-bg,#1e1e1e)', color:'var(--accent)',
+                    border:'1px solid var(--muted)', cursor:'pointer'
+                  }}
+                >
+                  <option value="eng">English</option>
+                  <option value="jpn">Japanese</option>
+                  <option value="kor">Korean</option>
+                  <option value="zho">Chinese (Simplified)</option>
+                  <option value="zht">Chinese (Traditional)</option>
+                  <option value="spa">Spanish</option>
+                  <option value="fra">French</option>
+                  <option value="deu">German</option>
+                  <option value="por">Portuguese</option>
+                  <option value="ita">Italian</option>
+                  <option value="ara">Arabic</option>
+                  <option value="rus">Russian</option>
+                </select>
+              </label>
+            </div>
+          )}
         </div>
 
         <div style={{marginTop:18}}>
