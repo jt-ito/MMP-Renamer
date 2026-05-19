@@ -158,8 +158,8 @@ export default function ApprovedSeries({ pushToast, parallax = true }) {
     setContextMenu({ x, y, series, outputKey })
   }
 
-  const refreshSeries = async (series, outputKey) => {
-    const src = (outputs.find(o => o.key === outputKey) || {}).source || 'anilist'
+  const refreshSeries = async (series, outputKey, sourceOverride) => {
+    const src = sourceOverride || (outputs.find(o => o.key === outputKey) || {}).source || 'anilist'
     try {
       pushToast && pushToast('Approved Series', `Refreshing "${series.name}"…`)
       const resp = await axios.post(API('/approved-series/refresh-series'), { outputKey, seriesName: series.name, source: src })
@@ -576,6 +576,9 @@ export default function ApprovedSeries({ pushToast, parallax = true }) {
               {[{
                 label: '↺ Refresh Image',
                 action: () => { refreshSeries(contextMenu.series, contextMenu.outputKey); setContextMenu(null); }
+              }, {
+                label: '⬇ Pull Image from AniDB',
+                action: () => { refreshSeries(contextMenu.series, contextMenu.outputKey, 'anidb'); setContextMenu(null); }
               }, {
                 label: '☰ View Items',
                 action: () => { openItemsModal(contextMenu.series, contextMenu.outputKey); setContextMenu(null); }
