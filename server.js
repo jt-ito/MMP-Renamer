@@ -4899,10 +4899,16 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
             // Check if AniList returned parent series information (for arcs/sequels that should be under parent folder)
             let useParentSeries = false
             let parentSeriesName = null
-            if (res && res.parentSeriesTitle && res.detectedSeasonNumber) {
-              // We have a parent series and detected season - use parent for folder organization
+            if (res && res.parentSeriesTitle) {
+              // We have a parent series - use it for folder organization even without an explicit season number
               parentSeriesName = res.parentSeriesTitle
               useParentSeries = true
+              // If no season number was detected from the title, try the subtitle portion or default to 2
+              if (!res.detectedSeasonNumber) {
+                const colonPart = String(providerPreferred || '').replace(/^[^:]+:\s*/, '')
+                const subtitleSeason = (colonPart !== String(providerPreferred || '')) ? extractSeasonNumberFromTitle(colonPart) : null
+                res.detectedSeasonNumber = subtitleSeason || 2
+              }
               try { 
                 appendLog(`META_USE_PARENT_SERIES child=${String(providerPreferred).slice(0,80)} parent=${String(parentSeriesName).slice(0,80)} season=${res.detectedSeasonNumber}`) 
               } catch (e) {}
@@ -4939,8 +4945,11 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
               }
               
               // store English/romaji separately for later preference logic
-              // Strip "Season X" suffix from stored English title since we use SxxExx notation
-              if (anilistEnglish) {
+              // When using parent series, set English title to parent to ensure correct folder grouping.
+              // Otherwise strip "Season X" suffix from stored English title since we use SxxExx notation.
+              if (useParentSeries && parentSeriesName) {
+                guess.seriesTitleEnglish = parentSeriesName;
+              } else if (anilistEnglish) {
                 let cleanedEnglish = anilistEnglish.replace(/\s+Season\s+\d{1,2}$/i, '').trim();
                 cleanedEnglish = cleanedEnglish.replace(/\s+\(Season\s+\d{1,2}\)$/i, '').trim();
                 guess.seriesTitleEnglish = cleanedEnglish;
@@ -5232,6 +5241,67 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
     guess.isMovie = false;
   }
 
+  // Colon-subtitle library inference: when no provider parent detected but the title has a colon,
+  // check if the subtitle contains a season-like word AND the base title is already in the library.
+  // This catches sequels like "Series: Part II" or "Series: Chapter 2" when provider relations failed.
+  if (!guess.parentSeriesTitle && !guess.isMovie) {
+    try {
+      const colonTitle = guess.seriesTitleEnglish || guess.seriesTitleExact || guess.title || '';
+      const colonIdx = colonTitle.indexOf(':');
+      if (colonIdx >= 3) {
+        const baseTitle = colonTitle.slice(0, colonIdx).trim();
+        const subtitlePart = colonTitle.slice(colonIdx + 1).trim();
+        // Only infer when subtitle looks like a season continuation (ordinal, "Part N", Roman numerals, etc.)
+        const seasonLike =
+          /\b(part|chapter|arc|season)\s+\d+\b/i.test(subtitlePart) ||
+          /\b(second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\b/i.test(subtitlePart) ||
+          /\b\d+(?:st|nd|rd|th)\s+(part|season|cours?|arc)\b/i.test(subtitlePart) ||
+          /\b[IVX]{2,}\b/.test(subtitlePart); // Roman numerals II and above
+        if (seasonLike && baseTitle.length >= 3) {
+          const normalizedBase = baseTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
+          for (const cacheEntry of Object.values(enrichCache || {})) {
+            if (!cacheEntry || cacheEntry.hidden) continue;
+            const candidates = [
+              cacheEntry.seriesTitle, cacheEntry.title,
+              cacheEntry.seriesTitleEnglish, cacheEntry.seriesTitleExact
+            ].filter(Boolean);
+            const matchFound = candidates.some(c =>
+              String(c).toLowerCase().replace(/[^a-z0-9]/g, '') === normalizedBase);
+            if (matchFound) {
+              guess.parentSeriesTitle = baseTitle;
+              guess.childSeriesTitle = colonTitle;
+              if (!guess.season) {
+                // Use max existing season for this base title + 1, minimum 2
+                let maxExistingSeason = 1;
+                for (const e2 of Object.values(enrichCache || {})) {
+                  if (!e2) continue;
+                  const e2match = [e2.seriesTitle, e2.title, e2.seriesTitleEnglish].filter(Boolean)
+                    .some(c => String(c).toLowerCase().replace(/[^a-z0-9]/g, '') === normalizedBase);
+                  if (e2match && e2.season && Number(e2.season) > maxExistingSeason) {
+                    maxExistingSeason = Number(e2.season);
+                  }
+                }
+                guess.season = maxExistingSeason + 1;
+              }
+              try { appendLog(`COLON_INFERENCE_PARENT parent=${baseTitle} child=${colonTitle} season=${guess.season}`); } catch (e) {}
+              break;
+            }
+          }
+        }
+      }
+    } catch (colonErr) { /* colon inference is best-effort */ }
+  }
+
+  // If provider relations (AniList PREQUEL/PARENT, TVDB parent) or colon inference detected a parent
+  // series, override all title fields so the final-resolution block below uses the parent title.
+  // The child series title is preserved in guess.childSeriesTitle for reference.
+  if (guess.parentSeriesTitle && !guess.isMovie) {
+    const parentTitle = String(guess.parentSeriesTitle).trim();
+    guess.seriesTitleEnglish = parentTitle;
+    guess.seriesTitleExact = parentTitle;
+    guess.title = parentTitle;
+  }
+
   {
     const candidateValues = seriesTitleCandidates.map(c => c.value)
     // Prefer AniList English title when available to avoid mixed romaji/english folders
@@ -5290,7 +5360,9 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
     source: guess.source || null,
     language: 'en',
     timestamp: Date.now(),
-    extraGuess: buildExtraGuessSnapshot(guess)
+    extraGuess: buildExtraGuessSnapshot(guess),
+    parentSeriesTitle: guess.parentSeriesTitle || null,
+    childSeriesTitle: guess.childSeriesTitle || null,
   };
 }
 
