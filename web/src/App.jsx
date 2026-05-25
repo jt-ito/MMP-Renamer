@@ -1315,6 +1315,26 @@ export default function App() {
     } catch (e) { return [] }
   }
   // ─────────────────────────────────────────────────────────────────────────
+  // Rescan queue: saves the full set of paths for the "Rescan selected" operation
+  // so the remaining queue can be resumed if the user closes or backgrounds the tab.
+  const RESCAN_QUEUE_KEY = 'mmp_rescan_queue'
+  function saveRescanQueue(paths) {
+    try { localStorage.setItem(RESCAN_QUEUE_KEY, JSON.stringify(Array.from(new Set(paths)))) } catch (e) {}
+  }
+  function getRescanQueue() {
+    try { const raw = localStorage.getItem(RESCAN_QUEUE_KEY); return raw ? JSON.parse(raw) : [] } catch (e) { return [] }
+  }
+  function removeFromRescanQueue(path) {
+    try {
+      const q = getRescanQueue().filter(p => p !== path)
+      if (q.length) localStorage.setItem(RESCAN_QUEUE_KEY, JSON.stringify(q))
+      else localStorage.removeItem(RESCAN_QUEUE_KEY)
+    } catch (e) {}
+  }
+  function clearRescanQueue() {
+    try { localStorage.removeItem(RESCAN_QUEUE_KEY) } catch (e) {}
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   async function enrichOne(item, force = false, skipAnimeProviders = false) {
     if (!item) return
@@ -1405,6 +1425,7 @@ export default function App() {
     } finally {
   if (force) {
     removePendingRescan(key)
+    removeFromRescanQueue(key)
     safeSetLoadingEnrich(l => { const n = { ...l }; delete n[key]; return n })
   }
     }
@@ -2386,8 +2407,8 @@ export default function App() {
         if (finishedPaths.length) {
           // Immediately fetch fresh enrichment from server for each finished path
           try { await refreshEnrichForPaths(finishedPaths) } catch (e) {}
-          // Clear them from the pending list
-          for (const p of finishedPaths) removePendingRescan(p)
+          // Clear them from the pending list and rescan queue
+          for (const p of finishedPaths) { removePendingRescan(p); removeFromRescanQueue(p) }
         }
 
         if (!activePaths.length) return
@@ -2424,6 +2445,7 @@ export default function App() {
                 // Pick up the completed enrichment result
                 try { await refreshEnrichForPaths([p]) } catch (e) {}
                 safeSetLoadingEnrich(prev => { const n = { ...prev }; delete n[p]; return n })
+                removeFromRescanQueue(p)
               }
             } catch (e) { /* keep polling on transient errors */ }
           }, POLL_INTERVAL)
@@ -2555,6 +2577,61 @@ export default function App() {
       }
     }
     recoverPendingBgJobs()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // On mount: resume any "Rescan selected" queue that was interrupted by a tab close.
+  // Items currently being processed are already handled by syncActiveEnriches via
+  // pending_rescans / activeEnriches; this effect only submits items that haven't
+  // reached the server yet.
+  useEffect(() => {
+    async function recoverRescanQueue() {
+      const queue = getRescanQueue()
+      if (!queue.length) return
+
+      // Check what's currently active / pending on the server
+      const r = await axios.get(API('/enrich/active')).catch(() => null)
+      const activePaths = (r && r.data && Array.isArray(r.data.active))
+        ? r.data.active.map(e => e.path).filter(Boolean) : []
+      let pendingPaths = []
+      try { const raw = localStorage.getItem('pending_rescans'); pendingPaths = raw ? JSON.parse(raw) : [] } catch (e) {}
+
+      // Show "Queued" for items not already displaying a loading state
+      safeSetLoadingEnrich(prev => {
+        const next = { ...prev }
+        for (const p of queue) if (!next[p]) next[p] = { status: 'Queued for rescan...', stage: 'init' }
+        return next
+      })
+
+      // Items not yet submitted to the server — submit them now
+      const toProcess = queue.filter(p => !activePaths.includes(p) && !pendingPaths.includes(p))
+      if (!toProcess.length) return // syncActiveEnriches covers the rest
+
+      const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+      let successCount = 0
+      const failed = []
+      for (let i = 0; i < toProcess.length; i++) {
+        const path = toProcess[i]
+        try {
+          const result = await enrichOne({ canonicalPath: path }, true)
+          if (result) successCount += 1
+          else failed.push(path)
+        } catch (err) { failed.push(path) }
+        if (i < toProcess.length - 1) await sleep(350)
+      }
+
+      // Guard: clear any loading indicators enrichOne may not have cleared
+      safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of toProcess) delete n[p]; return n })
+
+      if (toProcess.length > 0) {
+        const failureCount = failed.length
+        if (failureCount) {
+          pushToast && pushToast('Rescan', `Resumed rescan: ${successCount}/${toProcess.length} completed (${failureCount} failed)`)
+        } else {
+          pushToast && pushToast('Rescan', `Resumed rescan: ${successCount} item(s) completed`)
+        }
+      }
+    }
+    recoverRescanQueue()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -3188,9 +3265,45 @@ export default function App() {
                         try {
                           const selectedPaths = [...selectedPathsList]
                           if (!selectedPaths.length) return
-                          // submitBulkRescanJob sets per-item loading spinners and tracks the
-                          // job in localStorage so it survives tab close/backgrounding.
-                          await submitBulkRescanJob(selectedPaths, { force: true })
+                          // Save full queue to localStorage for tab-close recovery
+                          saveRescanQueue(selectedPaths)
+                          pushToast && pushToast('Rescan', `Rescanning ${selectedPaths.length} items...`)
+                          // Mark all items as queued so the user sees which are pending before each starts
+                          safeSetLoadingEnrich(prev => {
+                            const next = { ...prev }
+                            for (const p of selectedPaths) if (!next[p]) next[p] = { status: 'Queued for rescan...', stage: 'init' }
+                            return next
+                          })
+
+                          const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+                          const RATE_DELAY_MS = 350
+                          let successCount = 0
+                          const failed = []
+
+                          for (let i = 0; i < selectedPaths.length; i++) {
+                            const path = selectedPaths[i]
+                            try {
+                              const result = await enrichOne({ canonicalPath: path }, true)
+                              if (result) successCount += 1
+                              else failed.push(path)
+                            } catch (err) {
+                              failed.push(path)
+                            }
+                            // add a brief delay between provider refreshes to avoid rate limiting
+                            if (i < selectedPaths.length - 1) await sleep(RATE_DELAY_MS)
+                          }
+
+                          clearRescanQueue()
+                          // clear loading flags (guard in case enrichOne did not remove them)
+                          safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
+
+                          const failureCount = failed.length
+                          if (failureCount) {
+                            pushToast && pushToast('Rescan', `Rescanned ${successCount}/${selectedPaths.length} items (${failureCount} failed).`)
+                            try { dlog('[client] RESCAN_SELECTED_FAILED', { failed }) } catch (e) {}
+                          } else {
+                            pushToast && pushToast('Rescan', `Rescanned ${selectedPaths.length} items.`)
+                          }
                         } catch (e) {
                           pushToast && pushToast('Rescan', 'Rescan failed')
                         }

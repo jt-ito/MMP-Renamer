@@ -7267,6 +7267,12 @@ function renderProviderName(data, fromPath, session) {
     rawTitle = String(rawTitle || '').trim();
     if (!rawTitle) return null;
 
+    // Strip season-like suffixes from series titles so e.g. "Tower of God Season 2"
+    // renders as "Tower of God". Movies are excluded since "Part X" may be canonical.
+    if (!isMovie && typeof stripSeasonNumberSuffix === 'function') {
+      rawTitle = stripSeasonNumberSuffix(rawTitle);
+    }
+
     // If upstream mapping split a movie subtitle into episodeTitle, stitch it back into title.
     if (isMovie && data.episodeTitle) {
       const movieSubtitle = String(data.episodeTitle || '').trim();
