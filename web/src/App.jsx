@@ -247,6 +247,8 @@ export default function App() {
   const [showScrollTop, setShowScrollTop] = useState(false)
   // Context menu state for rescan buttons
   const [contextMenu, setContextMenu] = useState(null)
+  // Parsed-only approve warning modal
+  const [parsedOnlyWarning, setParsedOnlyWarning] = useState(null) // { count, resolve }
   
   // Compute filtered and sorted items based on active filters
   // Use useMemo to compute the filtered list
@@ -1285,6 +1287,34 @@ export default function App() {
     } catch (e) {}
   }
   // ─────────────────────────────────────────────────────────────────────────
+  // Track server-side background jobs (bulk-rescan, approve) in localStorage so
+  // they can be resumed if the user closes or backgrounds the tab.
+  const BG_JOBS_KEY = 'mmp_bg_jobs'
+  function trackBgJob(jobId, { type, paths, skipAnimeProviders }) {
+    try {
+      const raw = localStorage.getItem(BG_JOBS_KEY)
+      const jobs = raw ? JSON.parse(raw) : []
+      if (!jobs.find(j => j.jobId === jobId)) {
+        jobs.push({ jobId, type, paths: paths || [], skipAnimeProviders: !!skipAnimeProviders, startedAt: Date.now() })
+      }
+      localStorage.setItem(BG_JOBS_KEY, JSON.stringify(jobs))
+    } catch (e) {}
+  }
+  function untrackBgJob(jobId) {
+    try {
+      const raw = localStorage.getItem(BG_JOBS_KEY)
+      if (!raw) return
+      const jobs = JSON.parse(raw).filter(j => j.jobId !== jobId)
+      localStorage.setItem(BG_JOBS_KEY, JSON.stringify(jobs))
+    } catch (e) {}
+  }
+  function getPendingBgJobs() {
+    try {
+      const raw = localStorage.getItem(BG_JOBS_KEY)
+      return raw ? JSON.parse(raw) : []
+    } catch (e) { return [] }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   async function enrichOne(item, force = false, skipAnimeProviders = false) {
     if (!item) return
@@ -2049,23 +2079,43 @@ export default function App() {
     const start = Date.now()
     return new Promise((resolve, reject) => {
       let settled = false
-      const t = setInterval(async () => {
+      const doPoll = async () => {
         try {
           if (settled) return
-          if (Date.now() - start > TIMEOUT) { clearInterval(t); settled = true; reject(new Error('job poll timeout')); return }
+          if (Date.now() - start > TIMEOUT) { cleanup(); reject(new Error('job poll timeout')); return }
           const r = await axios.get(API(`/jobs/${jobId}`)).catch(() => null)
           if (settled) return
           if (!r || !r.data || !r.data.job) return
           const job = r.data.job
           if (onProgress) onProgress(job)
-          if (job.status === 'done' || job.status === 'error') { clearInterval(t); settled = true; resolve(job) }
+          if (job.status === 'done' || job.status === 'error') { cleanup(); resolve(job) }
         } catch (e) { /* keep polling on transient errors */ }
-      }, INTERVAL)
+      }
+      // Wake up immediately when the browser tab becomes visible again —
+      // setInterval is throttled in background tabs (Chrome: up to 1-min wake period).
+      const onVisible = () => { if (document.visibilityState === 'visible') void doPoll() }
+      document.addEventListener('visibilitychange', onVisible)
+      const t = setInterval(doPoll, INTERVAL)
+      function cleanup() { settled = true; clearInterval(t); document.removeEventListener('visibilitychange', onVisible) }
     })
   }
 
   // Submit an approve job and handle the full lifecycle (optimistic UI + toast on completion).
   // Replaces the previewRename + applyRename two-step for bulk operations.
+
+  // Returns a Promise<boolean> — resolves true to proceed, false to cancel.
+  // Shows a warning modal if any of the selected items have no provider metadata (parsed-only).
+  function confirmParsedOnly(selItems) {
+    const count = (selItems || []).filter(it => {
+      const norm = enrichCache && enrichCache[it.canonicalPath]
+      return norm && norm.parsed && (!norm.provider || !norm.provider.title)
+    }).length
+    if (!count) return Promise.resolve(true)
+    return new Promise(resolve => {
+      setParsedOnlyWarning({ count, resolve })
+    })
+  }
+
   async function submitApproveJob(selItems, { outputFolder = null, useFilenameAsTitle = false, skipAnimeProviders } = {}) {
     if (!selItems || !selItems.length) return
     const paths = selItems.map(it => it.canonicalPath)
@@ -2089,6 +2139,8 @@ export default function App() {
       })
       const jobId = r.data && r.data.jobId
       if (!jobId) throw new Error('no jobId returned')
+      // Track in localStorage so tab-close doesn't lose the job
+      trackBgJob(jobId, { type: 'approve', paths })
       // Poll in background — does not block UI and survives page reload (server keeps running)
       const progressToastId = `approve-job-${jobId}`
       pollJob(jobId, {
@@ -2098,6 +2150,7 @@ export default function App() {
           if (total > 1) upsertToast(progressToastId, 'Approve', `Approving… ${done}/${total}`)
         }
       }).then(job => {
+        untrackBgJob(jobId)
         for (const p of paths) pendingHiddenRef.current.delete(p)
         removeToast(progressToastId)
         const applied = (job.results || []).filter(r => r.status === 'hardlinked').length
@@ -2110,6 +2163,7 @@ export default function App() {
           pushToast && pushToast('Approve', `Approved ${applied} item(s)`)
         }
       }).catch(e => {
+        untrackBgJob(jobId)
         for (const p of paths) pendingHiddenRef.current.delete(p)
         removeToast(progressToastId)
         pushToast && pushToast('Approve', `Approve job error: ${e && e.message ? e.message : String(e)}`)
@@ -2120,13 +2174,21 @@ export default function App() {
     }
   }
 
-  // Submit a bulk-rescan job and handle lifecycle (no optimistic UI change — just metadata refresh).
+  // Submit a bulk-rescan job and handle lifecycle.
+  // Sets per-item loading spinners immediately, tracks job in localStorage for tab-close recovery.
   async function submitBulkRescanJob(paths, { force = true, skipAnimeProviders } = {}) {
     if (!paths || !paths.length) return
+    // Mark all paths as loading so spinners appear immediately
+    safeSetLoadingEnrich(prev => {
+      const next = { ...prev }
+      for (const p of paths) if (!next[p]) next[p] = { status: 'Queued for rescan...', stage: 'fetching' }
+      return next
+    })
     try {
       const r = await axios.post(API('/jobs/bulk-rescan'), { paths, force, skipAnimeProviders })
       const jobId = r.data && r.data.jobId
       if (!jobId) throw new Error('no jobId returned')
+      trackBgJob(jobId, { type: 'rescan', paths, skipAnimeProviders })
       const progressToastId = `rescan-job-${jobId}`
       pollJob(jobId, {
         onProgress: (job) => {
@@ -2135,7 +2197,9 @@ export default function App() {
           if (total > 1) upsertToast(progressToastId, 'Rescan', `Rescanning… ${done}/${total}`)
         }
       }).then(async (job) => {
+        untrackBgJob(jobId)
         removeToast(progressToastId)
+        safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of paths) delete n[p]; return n })
         const ok = (job.results || []).filter(r => r.status === 'ok').length
         const errors = (job.results || []).filter(r => r.status === 'error').length
         if (job.status === 'error') {
@@ -2148,10 +2212,13 @@ export default function App() {
         // Refresh enrich cache for all processed paths to pick up new metadata in UI
         try { await refreshEnrichForPaths(paths) } catch (e) {}
       }).catch(e => {
+        untrackBgJob(jobId)
         removeToast(progressToastId)
+        safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of paths) delete n[p]; return n })
         pushToast && pushToast('Rescan', `Rescan job error: ${e && e.message ? e.message : String(e)}`)
       })
     } catch (e) {
+      safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of paths) delete n[p]; return n })
       pushToast && pushToast('Rescan', `Rescan failed: ${e && e.message ? e.message : String(e)}`)
     }
   }
@@ -2381,6 +2448,113 @@ export default function App() {
       window.removeEventListener('pageshow', onPageShow)
       for (const id of activeEnrichPollers.values()) clearInterval(id)
     }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // On mount: check localStorage for any background jobs (rescan/approve) that were
+  // started before the user closed or navigated away from the tab, and resume polling them.
+  useEffect(() => {
+    async function recoverPendingBgJobs() {
+      const jobs = getPendingBgJobs()
+      if (!jobs.length) return
+      const MAX_AGE_MS = 24 * 60 * 60 * 1000 // discard jobs older than 24h
+      for (const trackedJob of jobs) {
+        if (Date.now() - trackedJob.startedAt > MAX_AGE_MS) { untrackBgJob(trackedJob.jobId); continue }
+        try {
+          const r = await axios.get(API(`/jobs/${trackedJob.jobId}`)).catch(() => null)
+          if (!r || !r.data || !r.data.job) { untrackBgJob(trackedJob.jobId); continue }
+          const serverJob = r.data.job
+          if (serverJob.status === 'done' || serverJob.status === 'error') {
+            // Job finished while tab was closed — handle completion and show toast
+            untrackBgJob(trackedJob.jobId)
+            if (trackedJob.type === 'rescan') {
+              safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of trackedJob.paths) delete n[p]; return n })
+              const ok = (serverJob.results || []).filter(r => r.status === 'ok').length
+              const errors = (serverJob.results || []).filter(r => r.status === 'error').length
+              if (serverJob.status === 'error') {
+                pushToast && pushToast('Rescan', `Rescan failed: ${serverJob.error || 'unknown error'}`)
+              } else if (errors) {
+                pushToast && pushToast('Rescan', `Rescanned ${ok} item(s) (${errors} failed)`)
+              } else {
+                pushToast && pushToast('Rescan', `Rescanned ${ok} item(s)`)
+              }
+              try { await refreshEnrichForPaths(trackedJob.paths) } catch (e) {}
+            } else if (trackedJob.type === 'approve') {
+              const applied = (serverJob.results || []).filter(r => r.status === 'hardlinked').length
+              const errors = (serverJob.results || []).filter(r => r.status === 'error').length
+              if (serverJob.status === 'error') {
+                pushToast && pushToast('Approve', `Approve failed: ${serverJob.error || 'unknown error'}`)
+              } else if (errors) {
+                pushToast && pushToast('Approve', `Approved ${applied} item(s) (${errors} failed)`)
+              } else {
+                pushToast && pushToast('Approve', `Approved ${applied} item(s)`)
+              }
+            }
+          } else {
+            // Job still running — restore loading state and resume polling
+            if (trackedJob.type === 'rescan') {
+              safeSetLoadingEnrich(prev => {
+                const next = { ...prev }
+                for (const p of trackedJob.paths) if (!next[p]) next[p] = { status: 'Rescanning...', stage: 'fetching' }
+                return next
+              })
+            } else if (trackedJob.type === 'approve') {
+              // Re-guard against scroll-triggered re-insertion of items being approved
+              for (const p of trackedJob.paths) pendingHiddenRef.current.add(p)
+              setItems(prev => prev.filter(it => !trackedJob.paths.includes(it.canonicalPath)))
+              setAllItems(prev => prev.filter(it => !trackedJob.paths.includes(it.canonicalPath)))
+            }
+            const progressToastId = `${trackedJob.type}-job-${trackedJob.jobId}`
+            pollJob(trackedJob.jobId, {
+              onProgress: (job) => {
+                const done = job.processedItems || 0
+                const total = job.totalItems || 0
+                if (total > 1) {
+                  const label = trackedJob.type === 'rescan' ? 'Rescan' : 'Approve'
+                  const verb = trackedJob.type === 'rescan' ? 'Rescanning' : 'Approving'
+                  upsertToast(progressToastId, label, `${verb}… ${done}/${total}`)
+                }
+              }
+            }).then(async (job) => {
+              untrackBgJob(trackedJob.jobId)
+              removeToast(progressToastId)
+              if (trackedJob.type === 'rescan') {
+                safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of trackedJob.paths) delete n[p]; return n })
+                const ok = (job.results || []).filter(r => r.status === 'ok').length
+                const errors = (job.results || []).filter(r => r.status === 'error').length
+                if (job.status === 'error') {
+                  pushToast && pushToast('Rescan', `Rescan failed: ${job.error || 'unknown error'}`)
+                } else if (errors) {
+                  pushToast && pushToast('Rescan', `Rescanned ${ok} item(s) (${errors} failed)`)
+                } else {
+                  pushToast && pushToast('Rescan', `Rescanned ${ok} item(s)`)
+                }
+                try { await refreshEnrichForPaths(trackedJob.paths) } catch (e) {}
+              } else if (trackedJob.type === 'approve') {
+                for (const p of trackedJob.paths) pendingHiddenRef.current.delete(p)
+                const applied = (job.results || []).filter(r => r.status === 'hardlinked').length
+                const errors = (job.results || []).filter(r => r.status === 'error').length
+                if (job.status === 'error') {
+                  pushToast && pushToast('Approve', `Approve failed: ${job.error || 'unknown error'}`)
+                } else if (errors) {
+                  pushToast && pushToast('Approve', `Approved ${applied} item(s) (${errors} failed)`)
+                } else {
+                  pushToast && pushToast('Approve', `Approved ${applied} item(s)`)
+                }
+              }
+            }).catch(() => {
+              untrackBgJob(trackedJob.jobId)
+              removeToast(progressToastId)
+              if (trackedJob.type === 'rescan') {
+                safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of trackedJob.paths) delete n[p]; return n })
+              } else if (trackedJob.type === 'approve') {
+                for (const p of trackedJob.paths) pendingHiddenRef.current.delete(p)
+              }
+            })
+          }
+        } catch (e) { /* ignore per-job errors, continue */ }
+      }
+    }
+    recoverPendingBgJobs()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -2686,6 +2860,31 @@ export default function App() {
           </div>
         </div>
       ) : null}
+      {parsedOnlyWarning ? (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => { parsedOnlyWarning.resolve(false); setParsedOnlyWarning(null) }}
+        >
+          <div className="modal-card" onClick={ev => ev.stopPropagation()}>
+            <p>
+              <strong>{parsedOnlyWarning.count} item{parsedOnlyWarning.count !== 1 ? 's' : ''}</strong> {parsedOnlyWarning.count !== 1 ? 'have' : 'has'} no provider metadata — {parsedOnlyWarning.count !== 1 ? 'they' : 'it'} will be renamed using the parsed filename only.
+            </p>
+            <p style={{ fontSize: '0.85em', opacity: 0.75 }}>Consider rescanning first to fetch metadata from a provider.</p>
+            <div className="modal-actions">
+              <button
+                className="btn-ghost"
+                onClick={() => { parsedOnlyWarning.resolve(false); setParsedOnlyWarning(null) }}
+              >Cancel</button>
+              <button
+                className="btn-save"
+                onClick={() => { parsedOnlyWarning.resolve(true); setParsedOnlyWarning(null) }}
+              >Approve anyway</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {folderSelectorOpen ? (
         <div
           className="modal-overlay"
@@ -2892,6 +3091,7 @@ export default function App() {
                         const selectedFolderPath = selection.path ?? null
                         const useFilenameAsTitle = selection.applyAsFilename ?? false
                         
+                        if (!await confirmParsedOnly(selItems)) return
                         pushToast && pushToast('Approve', `Queuing ${selItems.length} item(s) for approval...`)
                         await submitApproveJob(selItems, { outputFolder: selectedFolderPath, useFilenameAsTitle })
                         setSelected(prev => {
@@ -2988,43 +3188,9 @@ export default function App() {
                         try {
                           const selectedPaths = [...selectedPathsList]
                           if (!selectedPaths.length) return
-                          pushToast && pushToast('Rescan', `Rescanning ${selectedPaths.length} items...`)
-                          // Mark selected items as loading so their buttons show spinners while processing
-                          const loadingMap = {}
-                          for (const p of selectedPaths) loadingMap[p] = true
-                          safeSetLoadingEnrich(prev => ({ ...prev, ...loadingMap }))
-
-                          const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
-                          const RATE_DELAY_MS = 350
-                          let successCount = 0
-                          const failed = []
-
-                          for (let i = 0; i < selectedPaths.length; i++) {
-                            const path = selectedPaths[i]
-                            try {
-                              const result = await enrichOne({ canonicalPath: path }, true)
-                              if (result) successCount += 1
-                              else failed.push(path)
-                            } catch (err) {
-                              failed.push(path)
-                            }
-                            // add a brief delay between provider refreshes to avoid rate limiting
-                            if (i < selectedPaths.length - 1) await sleep(RATE_DELAY_MS)
-                          }
-
-                          // clear loading flags (guard in case enrichOne did not remove them)
-                          safeSetLoadingEnrich(prev => { const n = { ...prev }; for (const p of selectedPaths) delete n[p]; return n })
-
-                          // Keep items selected after rescan so user can immediately apply
-                          // Enrichment cache has already been refreshed by enrichOne calls above
-
-                          const failureCount = failed.length
-                          if (failureCount) {
-                            pushToast && pushToast('Rescan', `Rescanned ${successCount}/${selectedPaths.length} items (${failureCount} failed).`)
-                            try { dlog('[client] RESCAN_SELECTED_FAILED', { failed }) } catch (e) {}
-                          } else {
-                            pushToast && pushToast('Rescan', `Rescanned ${selectedPaths.length} items.`)
-                          }
+                          // submitBulkRescanJob sets per-item loading spinners and tracks the
+                          // job in localStorage so it survives tab close/backgrounding.
+                          await submitBulkRescanJob(selectedPaths, { force: true })
                         } catch (e) {
                           pushToast && pushToast('Rescan', 'Rescan failed')
                         }
@@ -3290,6 +3456,7 @@ export default function App() {
                     if (!selection || selection.cancelled) return
                     const selectedFolderPath = selection.path ?? null
                     const useFilenameAsTitle = selection.applyAsFilename ?? false
+                    if (!await confirmParsedOnly(selItems)) return
                     pushToast && pushToast('Approve', `Queuing ${selItems.length} item(s) for approval (TV/Movie mode)...`)
                     await submitApproveJob(selItems, { outputFolder: selectedFolderPath, useFilenameAsTitle, skipAnimeProviders: true })
                     setSelected(prev => {
@@ -3329,6 +3496,7 @@ export default function App() {
                     if (!selection || selection.cancelled) return
                     const selectedFolderPath = selection.path ?? null
                     const useFilenameAsTitle = selection.applyAsFilename ?? false
+                    if (!await confirmParsedOnly(selItems)) return
                     pushToast && pushToast('Approve', `Queuing ${selItems.length} item(s) for approval (Anime mode)...`)
                     await submitApproveJob(selItems, { outputFolder: selectedFolderPath, useFilenameAsTitle, skipAnimeProviders: false })
                     setSelected(prev => {
