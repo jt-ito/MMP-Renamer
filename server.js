@@ -6721,9 +6721,14 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
   const key = canonicalize(p || '');
   appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'} forceHash=${forceHash ? 'yes' : 'no'} skipAnimeProviders=${skipAnimeProviders ? 'yes' : 'no'}`);
   try {
-    // On forced rescan, clear cached enrich/parsed/rendered entries while preserving applied/hidden flags
+    // On forced rescan, clear cached enrich/parsed/rendered entries while preserving applied/hidden flags.
+    // Capture the previous enrichment first so we can restore it if the rescan fails — this ensures the
+    // DB always holds either the old (valid) enrichment or a fresh successful result, never an empty entry
+    // left behind by a failed or timed-out rescan.
+    const prevEnrichment = force ? (enrichCache[key] ? Object.assign({}, enrichCache[key]) : null) : null;
     if (force) {
-      purgeCachesForPath(key, { preserveFlags: true, persist: true });
+      // Don't write the purged state to DB yet.  We only write once we have new enrichment.
+      purgeCachesForPath(key, { preserveFlags: true, persist: false });
     }
     // prefer existing enrichment when present and not forcing
     // Only short-circuit to cached provider if it appears to be a complete provider hit
@@ -6815,10 +6820,22 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
           try { logMissingEpisodeTitleIfNeeded(key, providerBlock) } catch (e) {}
           updateEnrichCache(key, Object.assign({}, data, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
         } else {
-          updateEnrichCache(key, Object.assign({}, data, { cachedAt: Date.now() }));
+          // No title found — avoid persisting an empty entry on a force rescan.
+          // Restore the previous enrichment so server memory matches the DB (which was never purged).
+          if (force && prevEnrichment) {
+            enrichCache[key] = prevEnrichment;
+            try { appendLog(`ENRICH_FORCE_FAILED_RESTORED path=${key}`); } catch (e) {}
+          } else {
+            updateEnrichCache(key, Object.assign({}, data, { cachedAt: Date.now() }));
+          }
         }
       } catch (e) {
-        updateEnrichCache(key, Object.assign({}, data, { cachedAt: Date.now() }));
+        if (force && prevEnrichment) {
+          enrichCache[key] = prevEnrichment;
+          try { appendLog(`ENRICH_FORCE_RENDER_FAIL_RESTORED path=${key} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
+        } else {
+          updateEnrichCache(key, Object.assign({}, data, { cachedAt: Date.now() }));
+        }
       }
       // if provider returned authoritative title/parsedName, persist into parsedCache
       try {
@@ -6835,10 +6852,14 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
         updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
       }
       enrichHandlerDone = true;
-      // Explicit belt-and-suspenders: persist enrichCache to DB immediately so a
-      // server restart right after this point does not lose the enrichment.
-      try { persistEnrichCacheNow(); } catch (e) {
-        try { appendLog(`ENRICH_PERSIST_FINAL_FAIL path=${key} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
+      // Persist to DB immediately. Skip when a force rescan failed and we restored the previous
+      // enrichment — the DB was never purged (persist: false above) so it already holds the
+      // correct state. Calling persistEnrichCacheNow() here would overwrite it with the restored
+      // (old) in-memory entry which would be a no-op at best, but skip it to avoid any confusion.
+      if ((data && data.title) || !force) {
+        try { persistEnrichCacheNow(); } catch (e) {
+          try { appendLog(`ENRICH_PERSIST_FINAL_FAIL path=${key} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
+        }
       }
       return enrichCache[key];
     })();
