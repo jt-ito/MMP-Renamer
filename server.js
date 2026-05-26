@@ -6835,6 +6835,11 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
         updateEnrichCache(key, Object.assign({}, enrichCache[key] || {}, data, { cachedAt: Date.now(), sourceId: 'provider' }));
       }
       enrichHandlerDone = true;
+      // Explicit belt-and-suspenders: persist enrichCache to DB immediately so a
+      // server restart right after this point does not lose the enrichment.
+      try { persistEnrichCacheNow(); } catch (e) {
+        try { appendLog(`ENRICH_PERSIST_FINAL_FAIL path=${key} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {}
+      }
       return enrichCache[key];
     })();
     enrichHandlerPromise.finally(() => { activeEnriches.delete(key); });
@@ -8129,7 +8134,7 @@ function updateEnrichCache(key, nextObj) {
     }
     const normalized = normalizeEnrichEntry(merged);
     enrichCache[key] = preserveAppliedFlags(prev, normalized);
-  try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) { /* best-effort persist */ }
+  try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) { try { appendLog(`ENRICH_UPDATE_PERSIST_FAIL key=${key} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {} }
     return enrichCache[key];
   } catch (e) {
     return nextObj;
