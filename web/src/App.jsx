@@ -2616,6 +2616,11 @@ export default function App() {
           if (result) successCount += 1
           else failed.push(path)
         } catch (err) { failed.push(path) }
+        // Remove from queue immediately after processing (success or failure) so a
+        // subsequent tab open does not re-trigger a force rescan (which would purge
+        // the enrichment from the DB and potentially leave the item as "Source: unknown"
+        // if the re-enrich fails due to rate limiting or network errors).
+        removeFromRescanQueue(path)
         if (i < toProcess.length - 1) await sleep(350)
       }
 
@@ -3305,6 +3310,7 @@ export default function App() {
                             pushToast && pushToast('Rescan', `Rescanned ${selectedPaths.length} items.`)
                           }
                         } catch (e) {
+                          clearRescanQueue()
                           pushToast && pushToast('Rescan', 'Rescan failed')
                         }
                       }}
