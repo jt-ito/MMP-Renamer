@@ -1500,20 +1500,10 @@ function cloneProviderRaw(raw) {
 }
 
 // Helper to clean enrichment entries before returning to client
-// Removes stale provider.renderedName so frontend computes it from current provider.title
+// provider.renderedName is kept intact so the frontend always uses the server-computed
+// rendered filename (which uses seriesTitleEnglish, stripSeasonNumberSuffix, templates, etc.)
+// rather than falling back to a simplified client-side computation that can differ.
 function cleanEnrichmentForClient(entry) {
-  if (entry && entry.provider && entry.provider.renderedName) {
-    // Keep renderedName for custom metadata so user sees exactly what they entered
-    const isCustom = entry.provider.source === 'custom' || entry.sourceId === 'custom';
-    if (isCustom) {
-      return entry;
-    }
-    // For other sources, strip renderedName to save bandwidth (client can compute it)
-    const cleaned = Object.assign({}, entry);
-    cleaned.provider = Object.assign({}, entry.provider);
-    delete cleaned.provider.renderedName;
-    return cleaned;
-  }
   return entry;
 }
 
@@ -8121,7 +8111,6 @@ function preserveAppliedFlags(prev, next) {
     if (typeof prev.appliedAt !== 'undefined') next.appliedAt = prev.appliedAt;
     if (typeof prev.appliedTo !== 'undefined') next.appliedTo = prev.appliedTo;
     if (typeof prev.metadataFilename !== 'undefined') next.metadataFilename = prev.metadataFilename;
-    if (typeof prev.renderedName !== 'undefined') next.renderedName = prev.renderedName;
     return next;
   } catch (e) { return next; }
 }
