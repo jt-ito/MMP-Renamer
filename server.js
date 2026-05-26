@@ -3620,7 +3620,7 @@ async function metaLookup(title, apiKey, opts = {}) {
       if (tvdbInfo) {
         try { aniListRawPayload.tvdb = { seriesId: tvdbInfo.seriesId, seriesName: tvdbInfo.seriesName } } catch (e) {}
       }
-      aniListResult = { name: a.name, raw: aniListRawPayload, episode: ep, provider: 'anilist', titleVariants: uniqueTitleVariants }
+      aniListResult = { name: a.name, raw: aniListRawPayload, episode: ep, provider: 'anilist', titleVariants: uniqueTitleVariants, parentSeriesTitle: a.parentSeriesTitle || null, parentSeriesId: a.parentSeriesId || null, detectedSeasonNumber: a.detectedSeasonNumber || null }
       if (tvdbInfo) {
         try { aniListResult.tvdb = tvdbInfo } catch (e) {}
       }
@@ -4525,7 +4525,7 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
           try {
             if (!opts.skipAnimeProviders && sanitizedOrder.includes('anilist')) {
               try { appendLog(`ANILIST_RELATIONSHIP_LOOKUP_AFTER_ANIDB title=${res.name}`); } catch (e) {}
-              const anilistResult = await searchAniList(res.name);
+              const anilistResult = await metaLookup(res.name, null, { providerOrder: ['anilist'], username: opts && opts.username, anilist_key: opts && opts.anilist_key });
               if (anilistResult && anilistResult.parentSeriesTitle) {
                 // Merge AniList relationship data into AniDB result
                 res.parentSeriesTitle = anilistResult.parentSeriesTitle;
