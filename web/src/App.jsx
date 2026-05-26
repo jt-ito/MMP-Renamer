@@ -238,7 +238,7 @@ export default function App() {
   const searchTimeoutRef = React.useRef(null)
   const searchQueryRef = React.useRef('')
   const loadingMoreRef = React.useRef(false)
-  const [enrichCache, setEnrichCache] = useLocalState('enrichCache', {})
+  const [enrichCache, setEnrichCache] = useState({})
   // Filter state with localStorage persistence
   const [filterSortOrder, setFilterSortOrder] = useLocalState('filterSortOrder', 'dateAdded-desc')
   const [filterProvider, setFilterProvider] = useLocalState('filterProvider', 'all')
