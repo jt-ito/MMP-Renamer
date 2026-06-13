@@ -1462,11 +1462,10 @@ export default function App() {
         if (norm) setEnrichCache(prev => ({ ...prev, [key]: mergePreservingHiddenFlag(prev && prev[key], norm) }))
       }
 
-      // if the applied operation (or existing hidden state) marked this item hidden, remove it from visible items
+      // if the applied operation marked this item hidden, remove it from visible items
       try {
         const _norm2 = (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
-        const existingHidden = enrichCache && enrichCache[key] && (enrichCache[key].hidden || enrichCache[key].applied)
-        if ((_norm2 && (_norm2.hidden || _norm2.applied)) || existingHidden) {
+        if (_norm2 && (_norm2.hidden || _norm2.applied)) {
           setItems(prev => prev.filter(it => it.canonicalPath !== key))
           setAllItems(prev => prev.filter(it => it.canonicalPath !== key))
         }

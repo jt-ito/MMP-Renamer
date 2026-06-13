@@ -9759,29 +9759,6 @@ async function findAniDbAidByTitle(seriesName) {
   }
 }
 
-function extractAniDbPageImageUrl(html) {
-  try {
-    const content = String(html || '');
-    const absolute = content.match(/https?:\/\/cdn\.anidb\.net\/images\/main\/[^"'\s>]+/i);
-    if (absolute && absolute[0]) return absolute[0];
-    const relative = content.match(/(?:src|data-src)=["'](\/images\/main\/[^"'\s>]+)["']/i);
-    if (relative && relative[1]) return `https://cdn.anidb.net${relative[1]}`;
-    const protocolLess = content.match(/(?:src|data-src)=["'](\/\/cdn\.anidb\.net\/images\/main\/[^"'\s>]+)["']/i);
-    if (protocolLess && protocolLess[1]) return `https:${protocolLess[1]}`;
-  } catch (e) { /* ignore */ }
-  return null;
-}
-
-function extractAniDbPageSummary(html) {
-  try {
-    const content = String(html || '');
-    const meta1 = content.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["'][^>]*>/i);
-    const meta2 = content.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["'][^>]*>/i);
-    const summaryRaw = (meta1 && meta1[1]) || (meta2 && meta2[1]) || '';
-    const decoded = decodeHtmlEntities(summaryRaw);
-    return stripHtmlSummary(decoded);
-  } catch (e) { return ''; }
-}
 
 async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCandidates) {
   // Image fetch flow:
