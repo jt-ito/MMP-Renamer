@@ -6382,6 +6382,10 @@ app.get('/api/enrich', requireAuth, (req, res) => {
         return res.json({ cached: false, enrichment: cleanEnrichmentForClient(normalized) });
       }
       if (normalized.parsed || normalized.provider) return res.json({ cached: true, enrichment: cleanEnrichmentForClient(normalized) });
+      // Even without a full provider/parsed block, return hidden/applied state so clients
+      // that have lost their in-memory cache (e.g. after page reload) can still see the item
+      // is hidden and won't re-show it in the UI on the next scan.
+      if (normalized.hidden || normalized.applied) return res.json({ cached: true, enrichment: cleanEnrichmentForClient(normalized) });
     }
     return res.json({ cached: false, enrichment: null });
   } catch (e) { return res.status(500).json({ error: e.message }) }

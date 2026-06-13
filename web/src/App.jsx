@@ -529,6 +529,17 @@ export default function App() {
     return enriched && (enriched.hidden === true || enriched.applied === true)
   }
 
+  // Helper: merge a new enrichment object from the server while preserving existing
+  // hidden/applied flags. This prevents a server response (which may omit these flags
+  // during a force-rescan) from accidentally un-hiding an item on the client.
+  function mergePreservingHiddenFlag(existingEntry, newEntry) {
+    if (!newEntry) return newEntry
+    const merged = Object.assign({}, newEntry)
+    if (existingEntry && existingEntry.hidden === true && !merged.hidden) merged.hidden = true
+    if (existingEntry && existingEntry.applied === true && !merged.applied) merged.applied = true
+    return merged
+  }
+
   // Verify cached enrich entries actually exist on disk/server. If server reports missing
   // for a cached path, remove it from local cache and visible items to avoid showing stale rows.
   async function verifyCachePaths(paths = null) {
@@ -1154,7 +1165,26 @@ export default function App() {
       }
       if (!isMountedRef.current) return result.scanId
 
-      const canonicalSet = new Set(aggregated.map(it => it && it.canonicalPath).filter(Boolean))
+      // For incremental scans: build a merged canonical set that includes both the
+      // new scan items AND the previous scan items so existing items remain visible
+      // while new pages load. This prevents items from disappearing during load and
+      // fixes ordering instability when a scan is triggered before the previous one
+      // fully loaded.
+      let canonicalSet
+      if (mode === 'incremental') {
+        const newPaths = new Set(aggregated.map(it => it && it.canonicalPath).filter(Boolean))
+        // Expand the scan path set to also include all previously-known paths
+        // so mergeItemsUnique doesn't drop existing items that aren't in the first sample page.
+        canonicalSet = new Set(newPaths)
+        try {
+          const prevItems = allItems || []
+          for (const it of prevItems) {
+            if (it && it.canonicalPath) canonicalSet.add(it.canonicalPath)
+          }
+        } catch (e) {}
+      } else {
+        canonicalSet = new Set(aggregated.map(it => it && it.canonicalPath).filter(Boolean))
+      }
       setCurrentScanPaths(canonicalSet)
 
       const visibleBaseline = aggregated.filter(it => {
@@ -1163,8 +1193,33 @@ export default function App() {
         return !(enriched && (enriched.hidden === true || enriched.applied === true))
       })
 
-      setAllItems(visibleBaseline)
-      setItems(visibleBaseline)
+      if (mode === 'incremental') {
+        // For incremental scans: prepend new/changed items but keep existing items in place.
+        // This preserves the user's scroll position and avoids order disruption.
+        setAllItems(prev => {
+          const newPathSet = new Set(visibleBaseline.map(it => it && it.canonicalPath).filter(Boolean))
+          const existingFiltered = (prev || []).filter(it => {
+            if (!it || !it.canonicalPath) return false
+            if (newPathSet.has(it.canonicalPath)) return false // will be replaced by new entry
+            const enriched = enrichCache && enrichCache[it.canonicalPath]
+            return !(enriched && (enriched.hidden === true || enriched.applied === true))
+          })
+          return [...visibleBaseline, ...existingFiltered]
+        })
+        setItems(prev => {
+          const newPathSet = new Set(visibleBaseline.map(it => it && it.canonicalPath).filter(Boolean))
+          const existingFiltered = (prev || []).filter(it => {
+            if (!it || !it.canonicalPath) return false
+            if (newPathSet.has(it.canonicalPath)) return false
+            const enriched = enrichCache && enrichCache[it.canonicalPath]
+            return !(enriched && (enriched.hidden === true || enriched.applied === true))
+          })
+          return [...visibleBaseline, ...existingFiltered]
+        })
+      } else {
+        setAllItems(visibleBaseline)
+        setItems(visibleBaseline)
+      }
       setScanLoaded(aggregated.length)
       const denom = reportedTotal || aggregated.length
       setScanProgress(denom ? Math.min(100, Math.round((aggregated.length / Math.max(1, denom)) * 100)) : 100)
@@ -1200,8 +1255,10 @@ export default function App() {
                 } else {
                   const enriched = normalizeEnrichResponse(entry.enrichment || null)
                   if (enriched) {
-                    setEnrichCache(prev => ({ ...prev, [p]: enriched }))
-                    if (enriched.hidden || enriched.applied) {
+                    // Preserve existing hidden/applied flags — server may omit them during bulk enrich
+                    setEnrichCache(prev => ({ ...prev, [p]: mergePreservingHiddenFlag(prev && prev[p], enriched) }))
+                    const effectiveHidden = enriched.hidden || enriched.applied || !!(enrichCache && enrichCache[p] && (enrichCache[p].hidden || enrichCache[p].applied))
+                    if (effectiveHidden) {
                       setItems(prev => prev.filter(it => it.canonicalPath !== p))
                       setAllItems(prev => prev.filter(it => it.canonicalPath !== p))
                     } else {
@@ -1392,7 +1449,7 @@ export default function App() {
             const check = await axios.get(API('/enrich'), { params: { path: key } })
             if (check.data && (check.data.cached || check.data.enrichment)) {
               const norm = normalizeEnrichResponse(check.data.enrichment || check.data)
-              if (norm) setEnrichCache(prev => ({ ...prev, [key]: norm }))
+              if (norm) setEnrichCache(prev => ({ ...prev, [key]: mergePreservingHiddenFlag(prev && prev[key], norm) }))
             }
           } catch (e) {}
         }, 8000)
@@ -1402,13 +1459,14 @@ export default function App() {
       }
       if (w.data) {
         const norm = normalizeEnrichResponse(w.data.enrichment || w.data)
-        if (norm) setEnrichCache(prev => ({ ...prev, [key]: norm }))
+        if (norm) setEnrichCache(prev => ({ ...prev, [key]: mergePreservingHiddenFlag(prev && prev[key], norm) }))
       }
 
-      // if the applied operation marked this item hidden, remove it from visible items
+      // if the applied operation (or existing hidden state) marked this item hidden, remove it from visible items
       try {
         const _norm2 = (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
-        if (_norm2 && (_norm2.hidden || _norm2.applied)) {
+        const existingHidden = enrichCache && enrichCache[key] && (enrichCache[key].hidden || enrichCache[key].applied)
+        if ((_norm2 && (_norm2.hidden || _norm2.applied)) || existingHidden) {
           setItems(prev => prev.filter(it => it.canonicalPath !== key))
           setAllItems(prev => prev.filter(it => it.canonicalPath !== key))
         }
@@ -1537,7 +1595,7 @@ export default function App() {
                 // applied/hidden flags and any partial provider tokens for display.
                 if (er.data && (er.data.cached || er.data.enrichment)) {
                   const norm = normalizeEnrichResponse(er.data.enrichment || er.data)
-                  setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: norm }))
+                  setEnrichCache(prev => ({ ...prev, [it.canonicalPath]: mergePreservingHiddenFlag(prev && prev[it.canonicalPath], norm) }))
                   if (norm && (norm.hidden || norm.applied)) {
                     // remove hidden or applied items from visible list
                     setItems(prev => prev.filter(x => x.canonicalPath !== it.canonicalPath))
@@ -1814,8 +1872,12 @@ export default function App() {
         // Accept any non-null enrichment regardless of the cached flag — the server
         // may mark cached:false for incomplete providers but still return valid data.
         const enriched = normalizeEnrichResponse(data.enrichment)
-        cacheUpdates[p] = enriched
-        if (enriched && (enriched.hidden || enriched.applied)) {
+        // Preserve existing hidden/applied flags from client cache — the server may omit them
+        // (e.g. during a background refresh) but we must not un-hide an already-hidden item.
+        const existing = enrichCache && enrichCache[p]
+        cacheUpdates[p] = mergePreservingHiddenFlag(existing, enriched)
+        const isHiddenNow = (cacheUpdates[p] && (cacheUpdates[p].hidden || cacheUpdates[p].applied))
+        if (isHiddenNow) {
           removeFromItems.add(p)
         } else {
           upsertPaths.push(p)
@@ -1823,10 +1885,13 @@ export default function App() {
       }
     }
 
-    // Single enrich-cache update
+    // Single enrich-cache update — merge updates with existing entries to preserve any flags
     if (deletedFromCache.size || Object.keys(cacheUpdates).length) {
       setEnrichCache(prev => {
-        const n = { ...prev, ...cacheUpdates }
+        const n = { ...prev }
+        for (const [p, upd] of Object.entries(cacheUpdates)) {
+          n[p] = mergePreservingHiddenFlag(prev && prev[p], upd)
+        }
         for (const p of deletedFromCache) delete n[p]
         return n
       })
@@ -3703,8 +3768,18 @@ export default function App() {
                     setContextMenu(null)
                     const selectedPaths = contextMenu.selectedPaths
                     if (!selectedPaths.length) return
+
+                    // Instantly hide all selected items from the UI before the rescan starts
+                    setEnrichCache(prev => {
+                      const n = { ...prev }
+                      for (const p of selectedPaths) n[p] = Object.assign({}, n[p] || {}, { hidden: true })
+                      return n
+                    })
+                    setItems(prev => prev.filter(it => !selectedPaths.includes(it.canonicalPath)))
+                    setAllItems(prev => prev.filter(it => !selectedPaths.includes(it.canonicalPath)))
+                    for (const p of selectedPaths) pendingHiddenRef.current.add(p)
                     
-                    // First rescan in TV/Movie mode
+                    // Then rescan in TV/Movie mode (background — UI already updated)
                     pushToast && pushToast('Hide', `Rescanning ${selectedPaths.length} items (TV/Movie mode)...`)
                     const loadingMap = {}
                     for (const p of selectedPaths) loadingMap[p] = true
@@ -3780,8 +3855,18 @@ export default function App() {
                     setContextMenu(null)
                     const selectedPaths = contextMenu.selectedPaths
                     if (!selectedPaths.length) return
-                    
-                    // First rescan in Anime mode
+
+                    // Instantly hide all selected items from the UI before the rescan starts
+                    setEnrichCache(prev => {
+                      const n = { ...prev }
+                      for (const p of selectedPaths) n[p] = Object.assign({}, n[p] || {}, { hidden: true })
+                      return n
+                    })
+                    setItems(prev => prev.filter(it => !selectedPaths.includes(it.canonicalPath)))
+                    setAllItems(prev => prev.filter(it => !selectedPaths.includes(it.canonicalPath)))
+                    for (const p of selectedPaths) pendingHiddenRef.current.add(p)
+
+                    // Then rescan in Anime mode (background — UI already updated)
                     pushToast && pushToast('Hide', `Rescanning ${selectedPaths.length} items (Anime mode)...`)
                     const loadingMap = {}
                     for (const p of selectedPaths) loadingMap[p] = true
