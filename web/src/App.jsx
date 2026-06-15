@@ -6,7 +6,7 @@ import ToastContainer from './components/Toast'
 import FilterBar from './components/FilterBar'
 import LogsPanel from './components/LogsPanel'
 import CustomMetadataInputs from './components/CustomMetadataInputs'
-import ManualIdInputs, { mergeManualIdDebugLogs } from './components/ManualIdInputs'
+import ManualIdInputs, { mergeManualIdDebugLogs, setManualIdLogSubscriber } from './components/ManualIdInputs'
 import { IconRefresh, IconCopy, IconApply, IconHelp } from './components/Icons'
 import { Spinner, LoadingIndicator } from './components/LoadingComponents'
 import VirtualizedList from './components/VirtualizedList'
@@ -2415,9 +2415,9 @@ export default function App() {
         return lines.slice(0, 1200).join('\n')
       })
     }
-    manualIdLogSubscriber = onManualIdLog
+    setManualIdLogSubscriber(onManualIdLog)
     return () => {
-      if (manualIdLogSubscriber === onManualIdLog) manualIdLogSubscriber = null
+      setManualIdLogSubscriber(null)
     }
   }, [])
 

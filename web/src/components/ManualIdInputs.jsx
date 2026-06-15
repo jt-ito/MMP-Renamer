@@ -7,6 +7,10 @@ const manualIdTouchedKeys = new Set()
 const manualIdClientLogs = []
 let manualIdLogSubscriber = null
 
+export function setManualIdLogSubscriber(fn) {
+  manualIdLogSubscriber = fn
+}
+
 export function pushManualIdClientLog(event, payload = {}) {
   try {
     const ts = new Date().toISOString()
