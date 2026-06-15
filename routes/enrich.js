@@ -19,6 +19,7 @@ module.exports = function createEnrichRoutes(ctx) {
   activeEnriches,
   requireAuth,
   requireAdmin,
+  coerceBoolean,
   appendLog,
   writeJson,
   persistEnrichCacheNow,
