@@ -4112,8 +4112,6 @@ function LoadingScreen({ mode = 'incremental', total = 0, loaded = 0, scanProgre
           <div className="shimmer" />
         </div>
         <div className="loading-footnote">Hang tight — this won’t take long.</div>
-        </div>
-        <div className="loading-footnote">Hang tight — this won’t take long.</div>
       </div>
     </div>
   )
