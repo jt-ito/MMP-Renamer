@@ -1,3 +1,4 @@
+const buildPlanGenerator = require('../lib/plan');
 module.exports = function createJobsRoutes(ctx) {
   const router = require('express').Router();
   const {
