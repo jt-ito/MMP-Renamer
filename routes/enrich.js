@@ -297,6 +297,9 @@ router.post('/api/enrich', requireAuth, async (req, res) => {
     // a reverse-proxy gateway timeout (typically 60s). The enrichment continues in
     // the background and the updated cache can be fetched via GET /api/enrich later.
     const ENRICH_HANDLER_TIMEOUT_MS = 50000;
+    if (activeEnriches.has(key)) {
+      return res.json({ background: true });
+    }
     let enrichHandlerDone = false;
     activeEnriches.set(key, { startedAt: Date.now(), stage: 'fetching' });
     const enrichHandlerPromise = (async () => {
