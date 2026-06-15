@@ -27,7 +27,8 @@ module.exports = function createRenameRoutes(ctx) {
   updateEnrichCache,
   normalizeEnrichEntry,
   externalEnrich,
-  performUnapprove
+  performUnapprove,
+  isProviderComplete
 } = ctx;
 
   router.post('/api/rename/preview', requireAuth, async (req, res) => {

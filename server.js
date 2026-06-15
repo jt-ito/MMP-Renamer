@@ -92,6 +92,11 @@ function requireAdmin(req, res, next) {
   } catch (e) { return res.status(403).json({ error: 'forbidden' }) }
 }
 
+function isProviderComplete(prov) {
+  if (!prov) return false;
+  return !!(prov.matched && prov.renderedName && (prov.episode == null || (prov.episodeTitle && String(prov.episodeTitle).trim())));
+}
+
 function coerceBoolean(value) {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'string') {
@@ -196,6 +201,10 @@ if (!SESSION_KEY) {
 process.on('unhandledRejection', (reason, p) => {
   try { console.error('unhandledRejection', reason) } catch (e) {}
   try { appendLog(`UNHANDLED_REJECTION ${reason && reason.message ? reason.message : String(reason)}`) } catch (e) {}
+})
+process.on('uncaughtException', (err) => {
+  try { console.error('uncaughtException', err) } catch (e) {}
+  try { appendLog(`UNCAUGHT_EXCEPTION ${err && err.message ? err.message : String(err)}`) } catch (e) {}
 })
 
 // Ensure essential data files exist so server can write to them even when they're not in repo
@@ -8741,9 +8750,7 @@ const ctx = {
   cloneProviderRaw, renderProviderName, logMissingEpisodeTitleIfNeeded,
   updateEnrichCache, purgeCachesForPath, normalizeEnrichEntry,
   externalEnrich, buildAppliedSourcesSet, isHiddenOrAppliedPath,
-  resolveDeleteHardlinksSetting, sanitizeMetadataProviderOrder,
-  
-  
+  resolveDeleteHardlinksSetting, sanitizeMetadataProviderOrder, isProviderComplete
   
 };
 

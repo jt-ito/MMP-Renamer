@@ -24,7 +24,8 @@ module.exports = function createJobsRoutes(ctx) {
   cloneProviderRaw,
   renderProviderName,
   updateEnrichCache,
-  externalEnrich
+  externalEnrich,
+  isProviderComplete
 } = ctx;
 
   const resolveMetadataProviderOrder = (username) => {
