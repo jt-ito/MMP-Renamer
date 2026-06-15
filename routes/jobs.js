@@ -227,12 +227,13 @@ router.post('/api/jobs/approve', requireAuth, async (req, res) => {
         // Step 2: Generate rename plans
         const plans = items.map(it => {
           const plan = generatePlanForItem(it, { username, effectiveOutput, applyFilenameAsTitle, template });
+          if (!plan) return null;
           if (it.keepBothTarget && plan.toPath) {
             plan.toPath = path.join(path.dirname(plan.toPath), it.keepBothTarget);
           }
           plan.overwrite = it.overwrite;
           return plan;
-        });
+        }).filter(Boolean);
         try { persistEnrichCacheNow(); } catch (e) {}
 
         // Step 3: Apply each plan (hardlink + cache update)

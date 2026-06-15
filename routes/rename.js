@@ -139,7 +139,7 @@ module.exports = function createRenameRoutes(ctx) {
   // Wait for all enrichments to complete
   await Promise.all(enrichPromises);
 
-  const plans = items.map(it => generatePlanForItem(it, { username, effectiveOutput, applyFilenameAsTitle, template }));
+  const plans = items.map(it => generatePlanForItem(it, { username, effectiveOutput, applyFilenameAsTitle, template })).filter(Boolean);
   // DEBUG: persist a compact preview plan summary to logs for diagnostic purposes
   try {
     const uname = username || '<anon>';
