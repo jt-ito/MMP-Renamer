@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import axios from 'axios'
+import './Settings.css'
 
 const API = (p) => `/api${p}`
 
@@ -70,6 +71,75 @@ function renderPreviewSample(template) {
   .replace('{tmdbId}', sample.tmdbId)
   } catch (e) { return template }
 }
+function ActivityHistory({ pushToast }) {
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchHistory = async () => {
+    try {
+      const r = await axios.get(API('/history'), { params: { limit: 50 } });
+      setHistory(r.data.history || []);
+    } catch(e) {}
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+
+  const handleUndo = async (id) => {
+    try {
+      const r = await axios.post(API('/history/undo'), { id });
+      pushToast && pushToast('Undo', `Reverted ${r.data.unapproved.length} item(s)`);
+      if (r.data.unapproved.length > 0) {
+        window.dispatchEvent(new CustomEvent('renamer:unapproved', { detail: { paths: r.data.unapproved } }));
+      }
+      fetchHistory();
+    } catch(e) {
+      pushToast && pushToast('Error', 'Undo failed');
+    }
+  };
+
+  return (
+    <div style={{marginTop:18}}>
+      <label style={{fontSize:13, color:'var(--muted)'}}>Activity History (Undo Log)</label>
+      <div style={{marginTop:8, background:'var(--bg-800)', borderRadius:8, overflow:'hidden', border:'1px solid var(--bg-600)'}}>
+        {loading ? <div style={{padding:16, fontSize:13, color:'var(--muted)'}}>Loading history...</div> : history.length === 0 ? <div style={{padding:16, fontSize:13, color:'var(--muted)'}}>No actions recorded yet.</div> : (
+          <table style={{width:'100%', borderCollapse:'collapse', fontSize:12, textAlign:'left'}}>
+            <thead>
+              <tr style={{background:'var(--bg-700)', color:'var(--muted)'}}>
+                <th style={{padding:'8px 12px'}}>Time</th>
+                <th style={{padding:'8px 12px'}}>Original File</th>
+                <th style={{padding:'8px 12px'}}>Resolved Path</th>
+                <th style={{padding:'8px 12px', width:60}}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map(item => (
+                <tr key={item.id} style={{borderTop:'1px solid var(--bg-600)'}}>
+                  <td style={{padding:'8px 12px', color:'var(--muted)', whiteSpace:'nowrap'}}>{new Date(item.timestamp).toLocaleString()}</td>
+                  <td style={{padding:'8px 12px', color:'var(--accent)', wordBreak:'break-all'}}>{item.original_path.split(/[\/\\]/).pop()}</td>
+                  <td style={{padding:'8px 12px', color:'var(--accent)', wordBreak:'break-all'}}>{item.resolved_path.split(/[\/\\]/).pop()}</td>
+                  <td style={{padding:'8px 12px'}}>
+                    {item.status === 'applied' ? (
+                      <button className='btn-ghost' style={{padding:'4px 8px', fontSize:11, background:'#e74c3c33', color:'#ffb4b4', border:'1px solid #e74c3c66'}} onClick={() => handleUndo(item.id)}>Undo</button>
+                    ) : (
+                      <span style={{color:'var(--muted)', fontSize:11}}>Reverted</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div style={{display:'flex', gap:8, marginTop:12}}>
+        <button className='btn-ghost' style={{ padding: '8px 12px', fontSize: 12 }} onClick={() => { window.location.hash = '#/hidden' }}>Review hidden items</button>
+        <button className='btn-ghost' style={{ padding: '8px 12px', fontSize: 12 }} onClick={() => { window.location.hash = '#/duplicates' }}>Review duplicates</button>
+      </div>
+    </div>
+  );
+}
 
 export default function Settings({ pushToast, cardParallax, setCardParallax }){
   // keys: tmdb for TMDb (keep backward compatibility with tvdb_api_key)
@@ -95,6 +165,9 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   const [outputPath, setOutputPath] = useState('')
   const [outputFolders, setOutputFolders] = useState([])
   const [outputFoldersDirty, setOutputFoldersDirty] = useState([])
+  const [customRegexes, setCustomRegexes] = useState([])
+  const [customRegexesDirty, setCustomRegexesDirty] = useState([])
+  const [testRegexInput, setTestRegexInput] = useState('')
   const [enableFolderWatch, setEnableFolderWatch] = useState(false)
   const [deleteHardlinksOnUnapprove, setDeleteHardlinksOnUnapprove] = useState(true)
   const [extractSubtitles, setExtractSubtitles] = useState(false)
@@ -178,6 +251,9 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           const folders = Array.isArray(user.output_folders) ? user.output_folders : []
           setOutputFolders(folders)
           setOutputFoldersDirty(new Array(folders.length).fill(false))
+          const regexes = Array.isArray(user.custom_regexes) ? user.custom_regexes : []
+          setCustomRegexes(regexes)
+          setCustomRegexesDirty(new Array(regexes.length).fill(false))
           setLogTimezone(user.log_timezone || '')
           return
         }
@@ -359,6 +435,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           hardsub_enabled: hardsubEnabled,
           hardsub_language: hardsubLanguage,
           output_folders: outputFolders,
+          custom_regexes: customRegexes,
           rename_template: renameTemplate,
           client_os: clientOS,
           log_timezone: logTimezone
@@ -371,6 +448,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         pushToast && pushToast('Settings', 'Saved')
         setDirty(false)
         setOutputFoldersDirty(new Array(outputFolders.length).fill(false))
+        setCustomRegexesDirty(new Array(customRegexes.length).fill(false))
       } catch (err) {
         pushToast && pushToast('Settings', 'Saved locally; failed to save server-side')
       }
@@ -400,6 +478,8 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   setHardsubLanguage('eng')
   setOutputFolders([])
   setOutputFoldersDirty([])
+  setCustomRegexes([])
+  setCustomRegexesDirty([])
       setLogTimezone('')
       localStorage.removeItem('tmdb_api_key')
       localStorage.removeItem('anilist_api_key')
@@ -423,7 +503,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         localStorage.removeItem('client_os')
         localStorage.removeItem('log_timezone')
       localStorage.setItem('rename_template', '{title} - {epLabel} - {episodeTitle}')
-  axios.post(API('/settings'), { tmdb_api_key: '', anilist_api_key: '', anidb_username: '', anidb_password: '', default_meta_provider: 'tmdb', metadata_provider_order: DEFAULT_PROVIDER_ORDER, tvdb_v4_api_key: '', tvdb_v4_user_pin: '', scan_input_path: '', scan_output_path: '', enable_folder_watch: false, rename_template: '{title} - {epLabel} - {episodeTitle}', output_folders: [], log_timezone: '' }).catch(()=>{})
+  axios.post(API('/settings'), { tmdb_api_key: '', anilist_api_key: '', anidb_username: '', anidb_password: '', default_meta_provider: 'tmdb', metadata_provider_order: DEFAULT_PROVIDER_ORDER, tvdb_v4_api_key: '', tvdb_v4_user_pin: '', scan_input_path: '', scan_output_path: '', enable_folder_watch: false, rename_template: '{title} - {epLabel} - {episodeTitle}', output_folders: [], custom_regexes: [], log_timezone: '' }).catch(()=>{})
       setDirty(false)
       pushToast && pushToast('Settings', 'Cleared')
     } catch (e) { pushToast && pushToast('Error', 'Failed to clear') }
@@ -854,6 +934,90 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           </button>
         </div>
 
+        <div style={{marginTop:24}}>
+          <h3 style={{ borderBottom: '1px solid var(--bg-700)', paddingBottom: 8, marginBottom: 16 }}>Custom Regex Parsing</h3>
+          <div style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 12 }}>
+            Define custom regular expressions to extract data from difficult filenames using named capture groups: <code>(?&lt;title&gt;...)</code>, <code>(?&lt;season&gt;...)</code>, <code>(?&lt;episode&gt;...)</code>, <code>(?&lt;episodeTitle&gt;...)</code>. Evaluated in order.
+          </div>
+          {customRegexes.map((regexStr, index) => {
+            const isDirty = !!customRegexesDirty[index]
+            const handleChange = (value) => {
+              setCustomRegexes(prev => {
+                const next = [...prev]
+                next[index] = value
+                return next
+              })
+              setCustomRegexesDirty(prev => {
+                const next = [...prev]
+                next[index] = true
+                return next
+              })
+              setDirty(true)
+            }
+            const handleRemove = () => {
+              setCustomRegexes(prev => prev.filter((_, i) => i !== index))
+              setCustomRegexesDirty(prev => prev.filter((_, i) => i !== index))
+              setDirty(true)
+            }
+            
+            let isValid = true
+            let testMatch = null
+            try {
+              if (regexStr) {
+                const re = new RegExp(regexStr, 'i')
+                if (testRegexInput) testMatch = testRegexInput.match(re)
+              }
+            } catch(e) { isValid = false }
+
+            return (
+              <div key={`regex-${index}`} style={{ display:'flex', flexDirection:'column', gap:8, marginBottom: 16, background: 'var(--bg-800)', padding: 12, borderRadius: 8, border: `1px solid ${isDirty ? 'var(--accent)' : 'var(--bg-600)'}` }}>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    type='text'
+                    className='form-input'
+                    style={{ flex: 1, fontFamily: 'monospace', borderColor: !isValid ? '#e74c3c' : undefined }}
+                    placeholder='e.g., ^(?<title>.*?)\s*-\s*(?<episode>\d+)\.mkv$'
+                    value={regexStr}
+                    onChange={e => handleChange(e.target.value)}
+                  />
+                  <button className='btn-ghost' style={{ color: '#e74c3c', padding: '0 12px' }} onClick={handleRemove}>Remove</button>
+                </div>
+                {!isValid && <div style={{color:'#e74c3c', fontSize:12}}>Invalid Regular Expression</div>}
+                {isValid && regexStr && testRegexInput && (
+                  <div style={{ fontSize: 12, marginTop: 4, background: 'var(--bg-900)', padding: 8, borderRadius: 4, fontFamily: 'monospace' }}>
+                    {testMatch && testMatch.groups ? (
+                      <span style={{ color: '#2ecc71' }}>Matched: {JSON.stringify(testMatch.groups)}</span>
+                    ) : (
+                      <span style={{ color: '#e74c3c' }}>No match</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          <button 
+            className='btn-ghost' 
+            onClick={() => {
+              setCustomRegexes(prev => [...prev, ''])
+              setCustomRegexesDirty(prev => [...prev, true])
+              setDirty(true);
+            }}
+            style={{padding:'10px 14px'}}
+          >+ Add Regex Rule</button>
+          
+          <div style={{ marginTop: 16 }}>
+            <label style={{ fontSize: 12, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>Test Filename (Optional)</label>
+            <input
+              type='text'
+              className='form-input'
+              placeholder='Paste a filename here to test your rules...'
+              value={testRegexInput}
+              onChange={e => setTestRegexInput(e.target.value)}
+              style={{ width: '100%', fontFamily: 'monospace' }}
+            />
+          </div>
+        </div>
+
         <div style={{marginTop:12}}>
           <label style={{fontSize:13, color:'var(--muted)'}}>Input path (scanned)</label>
           <input value={inputPath} onChange={e=>{ setInputPath(e.target.value); setInputExists(null); setDirty(true) }} onBlur={async () => setInputExists((await checkPath(inputPath)).exists)} placeholder="e.g. C:\\Media\\TV" style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)', marginTop:6}} />
@@ -1029,43 +1193,7 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           </div>
         </div>
 
-        <div style={{marginTop:18}}>
-          <label style={{fontSize:13, color:'var(--muted)'}}>Unapprove (unhide) recent applied items</label>
-          <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
-            <select id='unapproveCount' defaultValue='10' className='form-input'>
-              <option value='1'>Last 1</option>
-              <option value='5'>Last 5</option>
-              <option value='10'>Last 10</option>
-              <option value='20'>Last 20</option>
-              <option value='all'>All</option>
-            </select>
-            <button className='btn-ghost' style={{padding:'10px 14px'}} onClick={async () => {
-              const v = document.getElementById('unapproveCount').value
-              const n = v === 'all' ? 0 : parseInt(v,10)
-              try {
-                const r = await axios.post(API('/rename/unapprove'), { count: n })
-                pushToast && pushToast('Unapprove', `Unapproved ${r.data.unapproved || 0} items`)
-                try {
-                  // notify app to refresh items that were unapproved
-                  if (r.data && r.data.unapproved && Array.isArray(r.data.unapproved) && r.data.unapproved.length > 0) {
-                    window.dispatchEvent(new CustomEvent('renamer:unapproved', { detail: { paths: r.data.unapproved } }))
-                  }
-                } catch (e) {}
-              } catch (e) { pushToast && pushToast('Unapprove', 'Unapprove failed') }
-            }}>Unapprove</button>
-            <button
-              className='btn-ghost'
-              style={{ padding: '10px 14px', fontSize: 13, lineHeight: 1.2, whiteSpace: 'nowrap' }}
-              onClick={() => { window.location.hash = '#/hidden' }}
-            >Review hidden items</button>
-            <button
-              className='btn-ghost'
-              style={{ padding: '10px 14px', fontSize: 13, lineHeight: 1.2, whiteSpace: 'nowrap' }}
-              onClick={() => { window.location.hash = '#/duplicates' }}
-            >Review duplicates</button>
-          </div>
-          <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>Unapproving will mark recently applied items as visible again for rescans. Choose the number of recent applied items to unhide.</div>
-        </div>
+        <ActivityHistory pushToast={pushToast} />
           </div>
         </div>
 

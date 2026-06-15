@@ -215,6 +215,13 @@ let serverSettings = {};
 let users = {};
 try { ensureFile(settingsFile, {}); serverSettings = JSON.parse(fs.readFileSync(settingsFile, 'utf8') || '{}') } catch (e) { serverSettings = {} }
 try { ensureFile(usersFile, { admin: { username: 'admin', role: 'admin', passwordHash: null, settings: {} } }); users = JSON.parse(fs.readFileSync(usersFile, 'utf8') || '{}') } catch (e) { users = {} }
+let allRegexesInit = new Set(serverSettings.custom_regexes || []);
+for (const u of Object.values(users)) {
+  if (u.settings && u.settings.custom_regexes) {
+    u.settings.custom_regexes.forEach(r => allRegexesInit.add(r));
+  }
+}
+global.customRegexes = Array.from(allRegexesInit).map(r => { try { return new RegExp(r, 'i') } catch(e) { return null } }).filter(Boolean);
 
 // Log approved series source preferences on startup
 try {
@@ -462,6 +469,11 @@ if (resolvedSameSite === 'none' && !secureCookies) {
   secureCookies = true;
   console.warn('SESSION_SECURE forced to true because sameSite="none" requires secure cookies');
 }
+let lastGlobalActivityTime = Date.now();
+app.use((req, res, next) => {
+  lastGlobalActivityTime = Date.now();
+  next();
+});
 
 app.use(helmet({
   contentSecurityPolicy: false,
@@ -1039,11 +1051,31 @@ let hideEvents = [];
 // Folder watchers by username: { [username]: watcher }
 const folderWatchers = {};
 
+function getEffectiveScanInputPath(username) {
+  if (username && users && users[username] && users[username].settings && users[username].settings.scan_input_path) {
+    return String(users[username].settings.scan_input_path);
+  } else if (serverSettings && serverSettings.scan_input_path) {
+    return String(serverSettings.scan_input_path);
+  } else if (process.env.SCAN_INPUT_PATH) {
+    return String(process.env.SCAN_INPUT_PATH);
+  }
+  return null;
+}
+
 function isFolderWatchEnabledForUser(username) {
   try {
     if (!username || !users || !users[username]) return false;
-    return coerceBoolean(users[username].settings && users[username].settings.enable_folder_watch);
-  } catch (e) { return false; }
+    if (users[username].settings && typeof users[username].settings.enable_folder_watch !== 'undefined') {
+      return coerceBoolean(users[username].settings.enable_folder_watch);
+    }
+    if (serverSettings && typeof serverSettings.enable_folder_watch !== 'undefined') {
+      return coerceBoolean(serverSettings.enable_folder_watch);
+    }
+    if (typeof process.env.ENABLE_FOLDER_WATCH !== 'undefined') {
+      return coerceBoolean(process.env.ENABLE_FOLDER_WATCH);
+    }
+    return true; // Default to true if not explicitly disabled
+  } catch (e) { return true; }
 }
 // Require DB at startup. Fail fast if DB init or cache loads fail so we don't silently fall back to JSON files.
 try {
@@ -1060,7 +1092,14 @@ try {
   }
   if (db) {
     try {
-      enrichCache = db.getKV('enrichCache') || {};
+      // Migrate legacy enrichCache from KV
+      const legacyEnrich = db.getKV('enrichCache');
+      if (legacyEnrich && Object.keys(legacyEnrich).length > 0) {
+        try { appendLog('MIGRATING_ENRICH_CACHE to normalized table...'); } catch (e) {}
+        db.saveEnrichCacheBatch(legacyEnrich);
+        db.deleteKV('enrichCache');
+      }
+      enrichCache = db.loadEnrichCache() || {};
       parsedCache = db.getKV('parsedCache') || {};
       renderedIndex = db.getKV('renderedIndex') || {};
       hideEvents = db.getHideEvents() || [];
@@ -1289,6 +1328,9 @@ function startFolderWatcher(username, libPath) {
           }
 
           appendLog(`WATCHER_SCAN_COMPLETE username=${username} scanId=${scanId} items=${filteredItems.length} hidden_filtered=${allItemsCount - filteredItems.length}`);
+          if (typeof broadcastEvent === 'function') {
+            try { broadcastEvent('scan_updated', { scanId }); } catch(e) {}
+          }
         } catch (err) {
           appendLog(`WATCHER_SCAN_ERROR username=${username} err=${err && err.message ? err.message : String(err)}`);
         }
@@ -1346,9 +1388,9 @@ function stopFolderWatcher(username) {
 function initializeAllWatchers() {
   try {
     for (const username in users) {
-      const user = users[username];
-      if (user && user.settings && user.settings.scan_input_path && isFolderWatchEnabledForUser(username)) {
-        const libPath = path.resolve(user.settings.scan_input_path);
+      const scanPath = getEffectiveScanInputPath(username);
+      if (scanPath && isFolderWatchEnabledForUser(username)) {
+        const libPath = path.resolve(scanPath);
         startFolderWatcher(username, libPath);
       } else {
         stopFolderWatcher(username);
@@ -1396,7 +1438,7 @@ function writeJson(filePath, obj) {
 function persistEnrichCacheNow() {
   try {
     if (db) {
-      db.setKV('enrichCache', enrichCache);
+      db.saveEnrichCacheBatch(enrichCache);
       db.setKV('renderedIndex', renderedIndex);
       db.setKV('parsedCache', parsedCache);
       appendLog('CACHE_PERSIST_NOW db=true');
@@ -4123,14 +4165,7 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
   // Priority: per-user setting -> server setting -> env var.
   let strippedPath = canonicalPath;
   try {
-    let configuredInput = null;
-    if (opts && opts.username && users && users[opts.username] && users[opts.username].settings && users[opts.username].settings.scan_input_path) {
-      configuredInput = String(users[opts.username].settings.scan_input_path);
-    } else if (serverSettings && serverSettings.scan_input_path) {
-      configuredInput = String(serverSettings.scan_input_path);
-    } else if (process.env.SCAN_INPUT_PATH) {
-      configuredInput = String(process.env.SCAN_INPUT_PATH);
-    }
+    let configuredInput = getEffectiveScanInputPath(opts && opts.username);
     if (configuredInput) {
       // Normalize separators and trailing slashes for consistent matching
       const configNorm = configuredInput.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -5771,11 +5806,43 @@ async function backgroundEnrichFirstN(scanId, enrichCandidates, session, libPath
         // keep recent events bounded
         if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
         appendLog(`HIDE_EVENTS_PUSH_BY_BACKGROUND_ENRICH ids=${modified.join(',')}`);
+        if (typeof broadcastEvent === 'function') {
+          try { broadcastEvent('scan_updated', {}); } catch(e) {}
+        }
       }
     } catch (e) {}
     } catch (e) {}
   } catch (e) { appendLog(`BACKGROUND_FIRSTN_ENRICH_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
 }
+// ─── Server-Sent Events (SSE) ────────────────────────────────────────────────
+const sseClients = new Set();
+function broadcastEvent(type, payload) {
+  const data = JSON.stringify({ type, payload });
+  for (const client of sseClients) {
+    try { client.res.write(`data: ${data}\n\n`); } catch(e) {}
+  }
+}
+
+// Send periodic keep-alive to prevent connections from dropping
+setInterval(() => {
+  for (const client of sseClients) {
+    try { client.res.write(`:\n\n`); } catch(e) {}
+  }
+}, 15000);
+
+app.get('/api/events', requireAuth, (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  
+  const client = { res, username: req.session.username };
+  sseClients.add(client);
+  
+  req.on('close', () => {
+    sseClients.delete(client);
+  });
+});
 
 // Endpoint: list libraries (just a sample folder picker)
 app.get('/api/libraries', requireAuth, (req, res) => {
@@ -6594,7 +6661,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'extract_subtitle_format', 'copy_sidecar_subtitles', 'client_os', 'log_timezone'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'extract_subtitle_format', 'copy_sidecar_subtitles', 'client_os', 'log_timezone', 'custom_regexes'];
       for (const k of allowed) {
         if (body[k] === undefined) continue;
         if (k === 'metadata_provider_order') {
@@ -6626,6 +6693,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
       if (!serverSettings.default_meta_provider && serverSettings.metadata_provider_order.length) {
         serverSettings.default_meta_provider = serverSettings.metadata_provider_order[0];
       }
+      global.customRegexes = (serverSettings.custom_regexes || []).map(r => { try { return new RegExp(r, 'i') } catch(e) { return null } }).filter(Boolean);
       writeJson(settingsFile, serverSettings);
       appendLog(`SETTINGS_SAVED_GLOBAL by=${username} keys=${Object.keys(body).join(',')}`);
       return res.json({ ok: true, settings: serverSettings });
@@ -6635,7 +6703,7 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'copy_sidecar_subtitles', 'client_os', 'log_timezone'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'copy_sidecar_subtitles', 'client_os', 'log_timezone', 'custom_regexes'];
     
     // Check if scan_input_path changed to update watcher
     const oldScanPath = users[username].settings.scan_input_path;
@@ -6678,6 +6746,15 @@ app.post('/api/settings', requireAuth, (req, res) => {
     if (!users[username].settings.default_meta_provider && users[username].settings.metadata_provider_order.length) {
       users[username].settings.default_meta_provider = users[username].settings.metadata_provider_order[0];
     }
+    if (body.custom_regexes !== undefined) {
+      let allRegexes = new Set(serverSettings.custom_regexes || []);
+      for (const u of Object.values(users)) {
+        if (u.settings && u.settings.custom_regexes) {
+          u.settings.custom_regexes.forEach(r => allRegexes.add(r));
+        }
+      }
+      global.customRegexes = Array.from(allRegexes).map(r => { try { return new RegExp(r, 'i') } catch(e) { return null } }).filter(Boolean);
+    }
     writeJson(usersFile, users);
     appendLog(`SETTINGS_SAVED_USER user=${username} keys=${Object.keys(body).join(',')}`);
     
@@ -6685,8 +6762,8 @@ app.post('/api/settings', requireAuth, (req, res) => {
     const watchToggled = watchProvided && newWatchEnabled !== oldWatchEnabled;
     if (pathChanged || watchToggled) {
       stopFolderWatcher(username);
-      const finalPath = users[username].settings.scan_input_path;
-      if (newWatchEnabled && finalPath) {
+      const finalPath = getEffectiveScanInputPath(username);
+      if (isFolderWatchEnabledForUser(username) && finalPath) {
         const libPath = path.resolve(finalPath);
         startFolderWatcher(username, libPath);
       }
@@ -6890,8 +6967,7 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
   try {
     enrichCache[key] = enrichCache[key] || {};
     enrichCache[key].hidden = true;
-    // Persist immediately instead of debouncing
-    try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) { appendLog(`HIDE_PERSIST_FAIL path=${p} err=${e && e.message ? e.message : String(e)}`) }
+    try { schedulePersistEnrichCache(50); } catch (e) {}
   } catch (e) { appendLog(`HIDE_UPDATE_FAIL path=${p} err=${e && e.message ? e.message : String(e)}`) }
 
   // respond immediately to the client so UI hides instantly
@@ -6926,10 +7002,18 @@ app.post('/api/enrich/hide', requireAuth, async (req, res) => {
       appendLog(`HIDE path=${p}`)
       try {
         // Record hide event for clients to poll and reconcile UI
-        hideEvents.push({ ts: Date.now(), path: key, originalPath: p, modifiedScanIds });
+        const evt = { ts: Date.now(), path: key, originalPath: p, modifiedScanIds };
+        hideEvents.push(evt);
         try { if (db) db.setHideEvents(hideEvents); } catch (e) {}
         // keep recent events bounded
         if (hideEvents.length > 200) hideEvents.splice(0, hideEvents.length - 200);
+        
+        if (typeof broadcastEvent === 'function') {
+          try { broadcastEvent('hide_event', evt); } catch(e) {}
+          if (modifiedScanIds.length) {
+            try { broadcastEvent('scan_updated', {}); } catch(e) {}
+          }
+        }
       } catch (e) {}
     } catch (e) {
       appendLog(`HIDE_BG_FAIL path=${p} err=${e && e.message ? e.message : String(e)}`)
@@ -8159,7 +8243,7 @@ function updateEnrichCache(key, nextObj) {
     }
     const normalized = normalizeEnrichEntry(merged);
     enrichCache[key] = preserveAppliedFlags(prev, normalized);
-  try { if (db) db.setKV('enrichCache', enrichCache); else writeJson(enrichStoreFile, enrichCache); } catch (e) { try { appendLog(`ENRICH_UPDATE_PERSIST_FAIL key=${key} err=${e && e.message ? e.message : String(e)}`); } catch (ee) {} }
+    try { schedulePersistEnrichCache(50); } catch (e) {}
     return enrichCache[key];
   } catch (e) {
     return nextObj;
@@ -8167,15 +8251,24 @@ function updateEnrichCache(key, nextObj) {
 }
 
 // Fast path updater: update in-memory enrichCache and debounce disk persistence.
+const dirtyEnrichKeys = new Set();
 let _enrichPersistTimeout = null;
 function persistEnrichCacheNow() {
   try {
     const cacheSize = Object.keys(enrichCache || {}).length;
     if (db) {
-      db.setKV('enrichCache', enrichCache);
-      try { appendLog(`ENRICH_CACHE_PERSIST_OK db=true size=${cacheSize}`); } catch (e) {}
+      if (dirtyEnrichKeys.size > 0) {
+        const batch = {};
+        for (const k of dirtyEnrichKeys) {
+           batch[k] = enrichCache[k];
+        }
+        db.saveEnrichCacheBatch(batch);
+        try { appendLog(`ENRICH_CACHE_PERSIST_BATCH_OK db=true items=${dirtyEnrichKeys.size}`); } catch (e) {}
+        dirtyEnrichKeys.clear();
+      }
     } else {
       writeJson(enrichStoreFile, enrichCache);
+      dirtyEnrichKeys.clear();
       try { appendLog(`ENRICH_CACHE_PERSIST_OK file=true size=${cacheSize}`); } catch (e) {}
     }
   } catch (e) { 
@@ -8276,6 +8369,13 @@ function updateEnrichCacheInMemory(key, nextObj) {
     }
     const normalized = normalizeEnrichEntry(merged);
     enrichCache[key] = preserveAppliedFlags(prev, normalized);
+    if (typeof dirtyEnrichKeys !== 'undefined') dirtyEnrichKeys.add(key);
+    
+    // Broadcast real-time update
+    if (typeof broadcastEvent === 'function') {
+      try { broadcastEvent('enrichment_updated', { path: key, data: enrichCache[key] }); } catch(e) {}
+    }
+
     // Persist sooner so rescans show updated values quickly (best-effort, debounced)
     try { schedulePersistEnrichCache(50); } catch (e) {}
     return enrichCache[key];
@@ -10333,6 +10433,87 @@ function startApprovedSeriesBackgroundWorker() {
   }
 }
 
+// ─── Auto-Rescan Background Worker ────────────────────────────────────────────
+
+let autoRescanTimer = null;
+let autoRescanInFlight = false;
+const AUTO_RESCAN_INTERVAL_MS = 30000; 
+const IDLE_THRESHOLD_MS = 15 * 60 * 1000;
+const AUTO_RESCAN_ITEM_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+async function runAutoRescanCycle() {
+  if (autoRescanInFlight) return;
+  if (Date.now() - lastGlobalActivityTime < IDLE_THRESHOLD_MS) return;
+
+  autoRescanInFlight = true;
+  try {
+    const allScans = Object.keys(scans || {}).map(k => scans[k]).filter(Boolean);
+    allScans.sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0));
+    const recentScan = allScans[0];
+    
+    if (recentScan && Array.isArray(recentScan.items)) {
+      for (const item of recentScan.items) {
+        if (Date.now() - lastGlobalActivityTime < IDLE_THRESHOLD_MS) break;
+
+        const p = canonicalize(item.canonicalPath);
+        const existing = enrichCache[p] || {};
+        
+        if (existing.hidden || existing.applied) continue;
+        
+        if (!isProviderComplete(existing.provider)) {
+          if (existing._lastAutoRescan && (Date.now() - existing._lastAutoRescan < AUTO_RESCAN_ITEM_COOLDOWN_MS)) {
+            continue;
+          }
+          
+          appendLog(`AUTO_RESCAN_TRIGGER path=${p}`);
+          existing._lastAutoRescan = Date.now();
+          updateEnrichCacheInMemory(p, existing);
+
+          try {
+            let tmdbKey = serverSettings && serverSettings.tmdb_api_key ? serverSettings.tmdb_api_key : null;
+            if (!tmdbKey && typeof users !== 'undefined' && users) {
+              const usernames = Object.keys(users);
+              if (usernames.length > 0) {
+                 const uSettings = users[usernames[0]].settings;
+                 if (uSettings && uSettings.tmdb_api_key) tmdbKey = uSettings.tmdb_api_key;
+              }
+            }
+            
+            const data = await externalEnrich(p, tmdbKey, { forceHash: false });
+            if (data) {
+              const providerRendered = renderProviderName(data, p, null);
+              const providerRaw = cloneProviderRaw(extractProviderRaw(data));
+              const providerBlock = {
+                title: data.title, year: data.year, season: data.season, episode: data.episode,
+                episodeTitle: data.episodeTitle || '', raw: providerRaw, renderedName: providerRendered,
+                matched: !!data.title, source: data.source || (data.provider && data.provider.source) || null,
+                seriesTitleEnglish: data.seriesTitleEnglish || null, seriesTitleRomaji: data.seriesTitleRomaji || null,
+                seriesTitleExact: data.seriesTitleExact || null, originalSeriesTitle: data.originalSeriesTitle || null
+              };
+              updateEnrichCacheInMemory(p, Object.assign({}, existing, data, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+            }
+          } catch (e) {
+            appendLog(`AUTO_RESCAN_FAIL path=${p} err=${e.message}`);
+          }
+          
+          break; 
+        }
+      }
+    }
+  } catch (err) {
+    appendLog(`AUTO_RESCAN_CYCLE_ERROR err=${err.message}`);
+  } finally {
+    autoRescanInFlight = false;
+  }
+}
+
+function startAutoRescanWorker() {
+  if (autoRescanTimer) return;
+  autoRescanTimer = setInterval(() => {
+    runAutoRescanCycle();
+  }, AUTO_RESCAN_INTERVAL_MS);
+}
+
 // ─── Background Job Queue ─────────────────────────────────────────────────────
 // Jobs survive browser closure because they run entirely in the Node.js process.
 // Tracks single-item enrichment operations currently running in POST /api/enrich.
@@ -10373,7 +10554,99 @@ app.get('/api/jobs/:id', requireAuth, (req, res) => {
 });
 
 // POST /api/jobs/approve — run preview + apply entirely server-side
-// Body: { items: [{canonicalPath}], outputFolder, template, useFilenameAsTitle, skipAnimeProviders }
+app.post('/api/jobs/check-conflicts', requireAuth, async (req, res) => {
+  try {
+    const { items, outputFolder, template, useFilenameAsTitle, skipAnimeProviders } = req.body || {};
+    if (!items || !Array.isArray(items) || !items.length) return res.status(400).json({ error: 'items required' });
+    const username = req.session && req.session.username ? req.session.username : null;
+    const applyFilenameAsTitle = coerceBoolean(useFilenameAsTitle);
+
+    let effectiveOutput = '';
+    try {
+      if (outputFolder) {
+        effectiveOutput = canonicalize(outputFolder);
+      } else if (username && users[username] && users[username].settings && users[username].settings.scan_output_path) {
+        effectiveOutput = canonicalize(users[username].settings.scan_output_path);
+      } else if (serverSettings && serverSettings.scan_output_path) {
+        effectiveOutput = canonicalize(serverSettings.scan_output_path);
+      } else {
+        effectiveOutput = '';
+      }
+    } catch (e) { }
+    if (!effectiveOutput) return res.status(400).json({ error: 'Output path not configured.' });
+
+    const tmpl = template || (username && users[username] && users[username].settings && users[username].settings.rename_template) || serverSettings.rename_template || '{title} - {epLabel} - {episodeTitle}';
+
+    const conflicts = [];
+    for (const reqItem of items) {
+      if (!reqItem || !reqItem.canonicalPath) continue;
+      const fromPath = String(reqItem.canonicalPath);
+      let parsedName = '', epLabel = '', season = null, title = '', episodeTitle = '';
+      try {
+        const enrichment = enrichStore[canonicalize(fromPath)];
+        if (!enrichment) continue;
+
+        if (applyFilenameAsTitle) {
+          const parseFilename = require('./lib/filename-parser');
+          const parsed = parseFilename(fromPath);
+          season = enrichment.season || parsed.season;
+          title = parsed.title || enrichment.title || '';
+        } else {
+          season = enrichment.season;
+          title = enrichment.title || '';
+        }
+        
+        episodeTitle = enrichment.episodeTitle || '';
+        
+        const isMovie = enrichment.type === 'movie';
+        if (isMovie) {
+          const y = enrichment.year ? ` (${enrichment.year})` : '';
+          parsedName = `${title}${y}`;
+          epLabel = '';
+        } else if (enrichment.episodeRange) {
+          epLabel = (season != null) ? `S${String(season).padStart(2,'0')}E${enrichment.episodeRange}` : `E${enrichment.episodeRange}`;
+          parsedName = tmpl.replace('{title}', sanitizeForFilename(title)).replace('{epLabel}', epLabel).replace('{episodeTitle}', sanitizeForFilename(episodeTitle)).replace('{year}', enrichment.year || '').replace('{season}', season != null ? season : '').replace('{episode}', enrichment.episode != null ? enrichment.episode : '').replace('{episodeRange}', enrichment.episodeRange).replace('{tmdbId}', enrichment.tmdbId || '');
+        } else if (enrichment.episode != null) {
+          const pad = n => String(n).padStart(2, '0');
+          epLabel = (season != null) ? `S${pad(season)}E${pad(enrichment.episode)}` : `E${pad(enrichment.episode)}`;
+          parsedName = tmpl.replace('{title}', sanitizeForFilename(title)).replace('{epLabel}', epLabel).replace('{episodeTitle}', sanitizeForFilename(episodeTitle)).replace('{year}', enrichment.year || '').replace('{season}', season != null ? season : '').replace('{episode}', enrichment.episode != null ? enrichment.episode : '').replace('{episodeRange}', '').replace('{tmdbId}', enrichment.tmdbId || '');
+        } else {
+          // Fallback if no episode data is present
+          epLabel = '';
+          const y = enrichment.year ? ` (${enrichment.year})` : '';
+          parsedName = `${sanitizeForFilename(title)}${y}`;
+        }
+
+        parsedName = parsedName.replace(/\s+/g, ' ').replace(/ - \s*$/, '').replace(/^ - /, '').trim();
+        const ext = path.extname(fromPath);
+        
+        // Use keepBothTarget if supplied, otherwise compute toPath
+        const finalName = reqItem.keepBothTarget ? reqItem.keepBothTarget : parsedName + ext;
+        let toPath = path.join(effectiveOutput, sanitizeForFilename(title));
+        if (!isMovie && season != null) {
+          toPath = path.join(toPath, `Season ${String(season).padStart(2,'0')}`);
+        }
+        toPath = path.join(toPath, finalName);
+        
+        if (fs.existsSync(toPath)) {
+          conflicts.push({
+            original: reqItem.canonicalPath,
+            toPath: toPath,
+            title: parsedName
+          });
+        }
+      } catch (e) {
+        // Skip on error
+      }
+    }
+    return res.json({ conflicts });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// App Engine (Approve items and hardlink)
+// Body: { items: [{canonicalPath, overwrite, keepBothTarget}], outputFolder, template, useFilenameAsTitle, skipAnimeProviders }
 app.post('/api/jobs/approve', requireAuth, async (req, res) => {
   try {
     const { items, outputFolder, template, useFilenameAsTitle, skipAnimeProviders } = req.body || {};
@@ -10439,7 +10712,14 @@ app.post('/api/jobs/approve', requireAuth, async (req, res) => {
         }
 
         // Step 2: Generate rename plans
-        const plans = items.map(it => generatePlanForItem(it, { username, effectiveOutput, applyFilenameAsTitle, template }));
+        const plans = items.map(it => {
+          const plan = generatePlanForItem(it, { username, effectiveOutput, applyFilenameAsTitle, template });
+          if (it.keepBothTarget && plan.toPath) {
+            plan.toPath = path.join(path.dirname(plan.toPath), it.keepBothTarget);
+          }
+          plan.overwrite = it.overwrite;
+          return plan;
+        });
         try { persistEnrichCacheNow(); } catch (e) {}
 
         // Step 3: Apply each plan (hardlink + cache update)
@@ -10455,6 +10735,9 @@ app.post('/api/jobs/approve', requireAuth, async (req, res) => {
             if (!fs.existsSync(fromPath)) { resultItem.status = 'error'; resultItem.error = 'Source file not found'; job.results.push(resultItem); continue; }
             const parentDir = path.dirname(toPath);
             if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
+            if (fs.existsSync(toPath) && p.overwrite) {
+              try { fs.unlinkSync(toPath); } catch (e) {}
+            }
             if (fs.existsSync(toPath)) {
               resultItem.status = 'exists'; resultItem.to = toPath;
             } else {
@@ -10474,7 +10757,11 @@ app.post('/api/jobs/approve', requireAuth, async (req, res) => {
               const targetKey = canonicalize(toPath);
               renderedIndex[targetKey] = { source: fromPath, renderedName: finalBasename, appliedTo: toPath,
                 metadataFilename: enrichCache[fromKey].metadataFilename, provider: enrichCache[fromKey].provider || null, parsed: enrichCache[fromKey].parsed || null };
-              if (db) { db.setKV('enrichCache', enrichCache); db.setKV('renderedIndex', renderedIndex); }
+              if (db) { 
+                db.saveEnrichCacheBatch({ [fromKey]: enrichCache[fromKey] });
+                db.setKV('renderedIndex', renderedIndex);
+                db.logAction({ job_id: String(job.id), action_type: 'approve', original_path: fromPath, resolved_path: toPath });
+              }
               appliedFromPaths.add(fromKey);
               appendLog(`JOB_APPROVE_HARDLINK from=${fromPath} to=${toPath}`);
               resultItem.status = 'hardlinked'; resultItem.to = toPath;
@@ -10523,9 +10810,11 @@ app.post('/api/jobs/approve', requireAuth, async (req, res) => {
 
         job.status = 'done';
         job.completedAt = Date.now();
+        if (typeof broadcastEvent === 'function') { try { broadcastEvent('job_updated', job); } catch(e) {} }
         appendLog(`JOB_APPROVE_DONE id=${job.id} applied=${appliedFromPaths.size}/${items.length}`);
       } catch (e) {
         job.status = 'error'; job.error = e.message; job.completedAt = Date.now();
+        if (typeof broadcastEvent === 'function') { try { broadcastEvent('job_updated', job); } catch(e) {} }
         appendLog(`JOB_APPROVE_FAIL id=${job.id} err=${e.message}`);
       }
     })();
@@ -10966,6 +11255,44 @@ app.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
     return res.status(500).json({ error: e && e.message ? e.message : String(e) });
   }
 });
+app.get('/api/history', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit || '100', 10);
+    const history = db ? db.getHistory(limit) : [];
+    res.json({ ok: true, history });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/history/undo', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const username = req.session && req.session.username ? req.session.username : null;
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [req.body.id].filter(Boolean);
+    if (!ids.length) return res.status(400).json({ error: 'Missing action IDs to undo' });
+    
+    const pathsToUnapprove = [];
+    if (db) {
+      for (const id of ids) {
+        const action = db.getActionById(id);
+        if (action && action.status === 'applied') {
+          pathsToUnapprove.push(action.original_path);
+          db.updateActionStatus(id, 'reverted');
+        }
+      }
+    }
+    
+    if (pathsToUnapprove.length > 0) {
+      const { changed, deletedHardlinks, hardlinkErrors } = performUnapprove({ requestedPaths: pathsToUnapprove, username });
+      appendLog(`UNDO_HISTORY ids=${ids.join(',')} unapproved=${changed.length}`);
+      res.json({ ok: true, unapproved: changed, deletedHardlinks, hardlinkErrors });
+    } else {
+      res.json({ ok: true, unapproved: [] });
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Unapprove last N applied renames: mark applied->false, unhide, and optionally remove hardlinks
 app.post('/api/rename/unapprove', requireAuth, requireAdmin, (req, res) => {
@@ -11352,6 +11679,7 @@ if (require.main === module) {
     initializeAllWatchers();
     // Run approved-series image caching in the background regardless of UI route activity.
     startApprovedSeriesBackgroundWorker();
+    startAutoRescanWorker();
   });
 }
 

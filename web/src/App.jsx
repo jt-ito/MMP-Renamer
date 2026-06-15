@@ -197,6 +197,7 @@ export default function App() {
   const [scanMeta, setScanMeta] = useState(null)
   const [lastLibraryId, setLastLibraryId] = useLocalState('lastLibraryId', '')
   const [lastScanId, setLastScanId] = useLocalState('lastScanId', null)
+  const [conflictResolutionState, setConflictResolutionState] = useState(null)
   const [items, setItems] = useState([])
   // allItems is the baseline full listing for the current scan (post-scan).
   // This is the single source of truth for the visible dataset; searches filter this in-memory.
@@ -469,6 +470,25 @@ export default function App() {
   }, [])
   const [auth, setAuth] = useState(null)
   const [authChecked, setAuthChecked] = useState(false)
+
+  // Global SSE EventSource
+  useEffect(() => {
+    if (!auth) return
+    const es = new EventSource(API('/events'), { withCredentials: true })
+    es.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data)
+        if (msg.type === 'scan_updated' || msg.type === 'hide_event') {
+           window.dispatchEvent(new CustomEvent('renamer:sse_trigger_poll'))
+        } else if (msg.type === 'enrichment_updated') {
+           setAllItems(prev => prev.map(it => it.canonicalPath === msg.payload.path ? { ...it, enrichment: msg.payload.data } : it))
+           setItems(prev => prev.map(it => it.canonicalPath === msg.payload.path ? { ...it, enrichment: msg.payload.data } : it))
+           setEnrichCache(prev => ({ ...prev, [msg.payload.path]: msg.payload.data }))
+        }
+      } catch (err) {}
+    }
+    return () => es.close()
+  }, [auth])
   const [renameTemplate, setRenameTemplate] = useLocalState('rename_template', '{title} ({year}) - {epLabel} - {episodeTitle}')
   const [legacyTvdbKey, setLegacyTvdbKey] = useLocalState('tvdb_api_key', '')
   // support modern TMDb key while staying backward-compatible with legacy tvdb_api_key
@@ -2201,8 +2221,29 @@ export default function App() {
     })
   }
 
-  async function submitApproveJob(selItems, { outputFolder = null, useFilenameAsTitle = false, skipAnimeProviders } = {}) {
+  async function submitApproveJob(selItems, { outputFolder = null, useFilenameAsTitle = false, skipAnimeProviders } = {}, skipConflictCheck = false) {
     if (!selItems || !selItems.length) return
+
+    // Conflict Check
+    if (!skipConflictCheck) {
+      try {
+        const checkRes = await axios.post(API('/jobs/check-conflicts'), {
+          items: selItems.map(it => ({ canonicalPath: it.canonicalPath })),
+          outputFolder, useFilenameAsTitle, skipAnimeProviders
+        });
+        if (checkRes.data && checkRes.data.conflicts && checkRes.data.conflicts.length > 0) {
+          setConflictResolutionState({
+            conflicts: checkRes.data.conflicts,
+            originalPayload: { selItems, outputFolder, useFilenameAsTitle, skipAnimeProviders },
+            resolutions: {}
+          });
+          return;
+        }
+      } catch (e) {
+        console.error("Conflict check failed:", e);
+      }
+    }
+
     const paths = selItems.map(it => it.canonicalPath)
     // Optimistic: remove items from UI immediately
     setItems(prev => prev.filter(it => !paths.includes(it.canonicalPath)))
@@ -2219,7 +2260,11 @@ export default function App() {
     for (const p of paths) pendingHiddenRef.current.add(p)
     try {
       const r = await axios.post(API('/jobs/approve'), {
-        items: selItems.map(it => ({ canonicalPath: it.canonicalPath })),
+        items: selItems.map(it => ({
+          canonicalPath: it.canonicalPath,
+          overwrite: it.overwrite,
+          keepBothTarget: it.keepBothTarget
+        })),
         outputFolder, useFilenameAsTitle, skipAnimeProviders
       })
       const jobId = r.data && r.data.jobId
@@ -2901,10 +2946,11 @@ export default function App() {
       } catch (e) { /* ignore */ }
     }
 
-    // run immediately and then on interval
+    // run immediately and then on SSE events
     void pollLatest()
-    id = setInterval(() => { void pollLatest() }, POLL_MS)
-    return () => { mounted = false; try { clearInterval(id) } catch (e) {} }
+    const handleSseTrigger = () => { void pollLatest() }
+    window.addEventListener('renamer:sse_trigger_poll', handleSseTrigger)
+    return () => { mounted = false; window.removeEventListener('renamer:sse_trigger_poll', handleSseTrigger) }
   }, [lastLibraryId, scanMeta, searchQuery])
 
   // Keep a ref in sync with searchQuery so closures in long-lived effects always see the latest value
@@ -3941,8 +3987,98 @@ export default function App() {
           </div>
         </div>
       )}
+      {conflictResolutionState ? (
+        <ConflictResolutionModal
+          state={conflictResolutionState}
+          onClose={() => setConflictResolutionState(null)}
+          onConfirm={(resolvedItems) => {
+            const { originalPayload } = conflictResolutionState;
+            setConflictResolutionState(null);
+            submitApproveJob(resolvedItems, {
+              outputFolder: originalPayload.outputFolder,
+              useFilenameAsTitle: originalPayload.useFilenameAsTitle,
+              skipAnimeProviders: originalPayload.skipAnimeProviders
+            }, true);
+          }}
+        />
+      ) : null}
     </div>
   )
+}
+
+function ConflictResolutionModal({ state, onClose, onConfirm }) {
+  const { conflicts, originalPayload } = state;
+  const [resolutions, setResolutions] = useState({});
+
+  const handleResolve = (originalPath, action) => {
+    setResolutions(prev => ({ ...prev, [originalPath]: action }));
+  };
+
+  const handleConfirm = () => {
+    const resolvedItems = originalPayload.selItems.filter(it => {
+      const conflict = conflicts.find(c => c.original === it.canonicalPath);
+      if (!conflict) return true; // no conflict
+      const action = resolutions[it.canonicalPath] || 'skip';
+      if (action === 'skip') return false;
+      return true;
+    }).map(it => {
+      const conflict = conflicts.find(c => c.original === it.canonicalPath);
+      if (!conflict) return it;
+      const action = resolutions[it.canonicalPath] || 'skip';
+      if (action === 'overwrite') return { ...it, overwrite: true };
+      if (action === 'keep_both') {
+        const ext = it.canonicalPath.slice(it.canonicalPath.lastIndexOf('.'));
+        const newTitle = conflict.title + '_' + Math.random().toString(36).substring(2, 6);
+        return { ...it, keepBothTarget: newTitle + ext };
+      }
+      return it;
+    });
+    onConfirm(resolvedItems);
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 9999 }}>
+      <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 800, width: '100%' }}>
+        <h2>File Conflicts Detected</h2>
+        <p style={{ color: 'var(--muted)', marginBottom: 16 }}>
+          The following files already exist at the destination. Please select how to resolve these conflicts.
+        </p>
+        
+        <div style={{ maxHeight: '60vh', overflowY: 'auto', marginBottom: 24, border: '1px solid var(--bg-600)', borderRadius: 8 }}>
+          {conflicts.map(c => {
+            const currentRes = resolutions[c.original] || 'skip';
+            return (
+              <div key={c.original} style={{ padding: 12, borderBottom: '1px solid var(--bg-600)', display: 'flex', alignItems: 'center', gap: 16 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 'bold', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{c.title}</div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{c.toPath}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <input type="radio" name={`res-${c.original}`} checked={currentRes === 'skip'} onChange={() => handleResolve(c.original, 'skip')} />
+                    Skip
+                  </label>
+                  <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 4, color: '#e74c3c' }}>
+                    <input type="radio" name={`res-${c.original}`} checked={currentRes === 'overwrite'} onChange={() => handleResolve(c.original, 'overwrite')} />
+                    Overwrite
+                  </label>
+                  <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <input type="radio" name={`res-${c.original}`} checked={currentRes === 'keep_both'} onChange={() => handleResolve(c.original, 'keep_both')} />
+                    Keep Both
+                  </label>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+          <button className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={handleConfirm}>Confirm & Approve</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function LoadingScreen({ mode = 'incremental', total = 0, loaded = 0, scanProgress = 0, metaPhase = false, metaProgress = 0, weights = { scanWeight: 0.3, metaWeight: 0.7 } }) {
@@ -3974,6 +4110,8 @@ function LoadingScreen({ mode = 'incremental', total = 0, loaded = 0, scanProgre
         <div className="progress-bar loading-progress-bar">
           <div className="fill" style={{ width: `${combined}%` }} />
           <div className="shimmer" />
+        </div>
+        <div className="loading-footnote">Hang tight — this won’t take long.</div>
         </div>
         <div className="loading-footnote">Hang tight — this won’t take long.</div>
       </div>
