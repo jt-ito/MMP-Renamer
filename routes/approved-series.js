@@ -9,7 +9,17 @@ module.exports = function createApprovedSeriesRoutes(ctx) {
   requireAdmin,
   appendLog,
   writeJson,
-  getSeriesNameForApprovedEntry
+  getSeriesNameForApprovedEntry,
+  normalizeOutputKey,
+  approvedSeriesImages,
+  approvedSeriesImageFetchLocks,
+  buildApprovedSeriesPayload,
+  getApprovedSeriesSourcePreferences,
+  resolveApprovedSeriesSourcePreference,
+  normalizeApprovedSeriesSource,
+  setApprovedSeriesSourcePreference,
+  fetchAndCacheApprovedSeriesImage,
+  deriveAppliedSeriesInfo
 } = ctx;
 
   router.get('/api/approved-series', requireAuth, (req, res) => {

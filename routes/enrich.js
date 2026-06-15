@@ -33,7 +33,12 @@ module.exports = function createEnrichRoutes(ctx) {
   updateEnrichCache,
   purgeCachesForPath,
   normalizeEnrichEntry,
-  externalEnrich
+  externalEnrich,
+  cleanEnrichmentForClient,
+  sanitizeExtraGuess,
+  renderCustomMetadataName,
+  hideEventsClientCache,
+  HIDE_EVENTS_CACHE_WINDOW_MS
 } = ctx;
 
   router.get('/api/enrich', requireAuth, (req, res) => {

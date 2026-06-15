@@ -36,7 +36,9 @@ module.exports = function createScanRoutes(ctx) {
   normalizeEnrichEntry,
   externalEnrich,
   buildAppliedSourcesSet,
-  isHiddenOrAppliedPath
+  isHiddenOrAppliedPath,
+  sweepEnrichCache,
+  updateEnrichCacheInMemory
 } = ctx;
 
   const resolveMetadataProviderOrder = (username) => {
@@ -348,6 +350,7 @@ router.post('/api/scan/incremental', requireAuth, async (req, res) => {
 
   // if no prior cache exists, fall back to full scan to collect candidates
   let items = [];
+  let changedItems = [];
   try {
     let prior = loadScanCache();
     // If scan cache is missing but we have a prior saved scan artifact, bootstrap

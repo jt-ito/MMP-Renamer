@@ -1,5 +1,6 @@
 const buildPlanGenerator = require('../lib/plan');
 module.exports = function createJobsRoutes(ctx) {
+  const generatePlanForItem = buildPlanGenerator(ctx);
   const router = require('express').Router();
   const {
   app,
@@ -26,7 +27,19 @@ module.exports = function createJobsRoutes(ctx) {
   renderProviderName,
   updateEnrichCache,
   externalEnrich,
-  isProviderComplete
+  isProviderComplete,
+  bgJobs,
+  sanitizeForFilename,
+  createBgJob,
+  resolveCopySidecarSubtitlesSetting,
+  copyExternalSubtitles,
+  resolveExtractSubtitlesSetting,
+  resolveExtractSubtitleFormat,
+  extractSubtitlesToSrt,
+  resolveHardsubSetting,
+  resolveHardsubLanguage,
+  burnHardsubToFile,
+  SUBTITLE_EXTS
 } = ctx;
 
   const resolveMetadataProviderOrder = (username) => {
@@ -85,7 +98,7 @@ router.post('/api/jobs/check-conflicts', requireAuth, async (req, res) => {
       const fromPath = String(reqItem.canonicalPath);
       let parsedName = '', epLabel = '', season = null, title = '', episodeTitle = '';
       try {
-        const enrichment = enrichStore[canonicalize(fromPath)];
+        const enrichment = enrichCache[canonicalize(fromPath)];
         if (!enrichment) continue;
 
         if (applyFilenameAsTitle) {

@@ -5,6 +5,7 @@ module.exports = function createDebugRoutes(ctx) {
   fs,
   path,
   enrichStoreFile,
+  scanStoreFile,
   parsedCacheFile,
   renderedIndexFile,
   logsFile,
@@ -44,7 +45,7 @@ router.get('/api/debug/locks', requireAuth, (req, res) => {
       enrichStoreFile: statFor(enrichStoreFile),
       parsedCacheFile: statFor(parsedCacheFile),
       renderedIndexFile: statFor(renderedIndexFile),
-      scansFile: statFor(scansFile)
+      scansFile: statFor(scanStoreFile)
     }
     return res.json({ locks, files });
   } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }) }

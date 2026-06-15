@@ -27,7 +27,8 @@ module.exports = function createSettingsRoutes(ctx) {
   stopFolderWatcher,
   canonicalize,
   resolveDeleteHardlinksSetting,
-  sanitizeMetadataProviderOrder
+  sanitizeMetadataProviderOrder,
+  VALID_SUBTITLE_FORMATS
 } = ctx;
 
   router.get('/api/meta/status', requireAuth, (req, res) => {

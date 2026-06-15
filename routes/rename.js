@@ -1,5 +1,6 @@
 const buildPlanGenerator = require('../lib/plan');
 module.exports = function createRenameRoutes(ctx) {
+  const generatePlanForItem = buildPlanGenerator(ctx);
   const router = require('express').Router();
   const {
   app,
@@ -29,7 +30,9 @@ module.exports = function createRenameRoutes(ctx) {
   normalizeEnrichEntry,
   externalEnrich,
   performUnapprove,
-  isProviderComplete
+  isProviderComplete,
+  resolveMetadataProviderOrder,
+  normalizeForCache
 } = ctx;
 
   router.post('/api/rename/preview', requireAuth, async (req, res) => {

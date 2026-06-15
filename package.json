@@ -15,6 +15,7 @@
     "install:all": "npm install && cd web && npm install"
   },
   "dependencies": {
+    "acorn": "^8.17.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^12.10.1",
     "chokidar": "^4.0.3",
