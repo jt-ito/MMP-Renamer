@@ -41,6 +41,7 @@ COPY --from=builder /usr/src/app/repo/node_modules ./node_modules
 COPY --from=builder /usr/src/app/repo/scripts ./scripts
 COPY --from=builder /usr/src/app/repo/server.js ./server.js
 COPY --from=builder /usr/src/app/repo/lib ./lib
+COPY --from=builder /usr/src/app/repo/routes ./routes
 COPY --from=builder /usr/src/app/repo/README.md ./README.md
 COPY --from=builder /usr/src/app/repo/web/dist ./web/dist
 

@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "^12.4.1",
+    "better-sqlite3": "^12.10.1",
     "chokidar": "^4.0.3",
     "cookie-parser": "^1.4.7",
     "cookie-session": "^2.0.0",
@@ -29,6 +29,9 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.0",
-    "mocha": "^10.2.0"
+    "mocha": "^11.7.6"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.10.1": true
   }
 }
