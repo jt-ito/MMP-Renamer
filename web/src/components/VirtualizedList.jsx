@@ -85,7 +85,7 @@ export default function VirtualizedList({ items = [], enrichCache = {}, setEnric
     }
   }, [index, it, enrichment, isSelected, loading, manualIdsTick, customMetaTick])
   
-  useEffect(() => { if (it && !rawEnrichment) enrichOne && enrichOne(it) }, [it?.canonicalPath, rawEnrichment, enrichOne])
+  useEffect(() => { if (it && !rawEnrichment) enrichOne && enrichOne(it, false, false, true) }, [it?.canonicalPath, rawEnrichment, enrichOne])
 
   // Only use the two canonical outputs: parsed and provider
   const parsed = enrichment?.parsed || null

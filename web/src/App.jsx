@@ -808,11 +808,13 @@ export default function App() {
     return tokens.every(t => searchText.indexOf(t) !== -1)
   }
 
-  function pushToast(title, message) {
+  function pushToast(title, message, silent = false) {
     const id = Math.random().toString(36).slice(2,9)
     const ts = new Date().toISOString()
     const entry = { id, title, message, ts }
-    setToasts(t => [...t, entry])
+    if (!silent) {
+      setToasts(t => [...t, entry])
+    }
     // persist into localStorage for notifications history
     try {
       const existing = JSON.parse(localStorage.getItem('notifications') || '[]')
@@ -820,7 +822,9 @@ export default function App() {
       // keep recent 200 notifications to avoid unbounded growth
       localStorage.setItem('notifications', JSON.stringify(existing.slice(0, 200)))
     } catch (e) {}
-    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 6000)
+    if (!silent) {
+      setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 6000)
+    }
   }
 
   // Update an existing toast in-place (for progress updates) or create one if it doesn't exist yet.
@@ -1351,7 +1355,7 @@ export default function App() {
   }
   // ─────────────────────────────────────────────────────────────────────────
 
-  async function enrichOne(item, force = false, skipAnimeProviders = false) {
+  async function enrichOne(item, force = false, skipAnimeProviders = undefined, silent = false) {
     if (!item) return
     const key = item.canonicalPath
     if (force) addPendingRescan(key)
@@ -1432,7 +1436,7 @@ export default function App() {
       // choose a friendly name for toast from normalized enrichment (prefer parsed then provider)
   const _norm = (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
   const nameForToast = (_norm && (_norm.parsed?.title || _norm.provider?.title)) || (key && key.split('/')?.pop()) || key
-  pushToast && pushToast('Enrich', `Updated metadata for ${nameForToast}`)
+  pushToast && pushToast('Enrich', `Updated metadata for ${nameForToast}`, silent)
   return (w.data && (w.data.enrichment || w.data)) ? normalizeEnrichResponse(w.data.enrichment || w.data) : null
     } catch (err) {
       setEnrichCache(prev => ({ ...prev, [key]: { error: err?.message || String(err) } }))

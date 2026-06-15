@@ -202,7 +202,25 @@ router.post('/api/enrich/bulk', requireAuth, (req, res) => {
 })
 
 router.post('/api/enrich', requireAuth, async (req, res) => {
-  const { path: p, tmdb_api_key: tmdb_override, force, forceHash, tvdb_v4_api_key: tvdb_override_v4_api_key, tvdb_v4_user_pin: tvdb_override_v4_user_pin, skipAnimeProviders } = req.body;
+  const { path: p, tmdb_api_key: tmdb_override, force, tvdb_v4_api_key: tvdb_override_v4_api_key, tvdb_v4_user_pin: tvdb_override_v4_user_pin } = req.body;
+  let { forceHash, skipAnimeProviders } = req.body;
+  
+  const username = req.session && req.session.username;
+  if (typeof forceHash !== 'boolean') {
+    if (username && users[username] && users[username].settings && users[username].settings.default_rescan_force_hash !== undefined) {
+      forceHash = coerceBoolean(users[username].settings.default_rescan_force_hash);
+    } else if (serverSettings && serverSettings.default_rescan_force_hash !== undefined) {
+      forceHash = coerceBoolean(serverSettings.default_rescan_force_hash);
+    }
+  }
+  if (typeof skipAnimeProviders !== 'boolean') {
+    if (username && users[username] && users[username].settings && users[username].settings.default_rescan_skip_anime !== undefined) {
+      skipAnimeProviders = coerceBoolean(users[username].settings.default_rescan_skip_anime);
+    } else if (serverSettings && serverSettings.default_rescan_skip_anime !== undefined) {
+      skipAnimeProviders = coerceBoolean(serverSettings.default_rescan_skip_anime);
+    }
+  }
+
   const key = canonicalize(p || '');
   appendLog(`ENRICH_REQUEST path=${key} force=${force ? 'yes' : 'no'} forceHash=${forceHash ? 'yes' : 'no'} skipAnimeProviders=${skipAnimeProviders ? 'yes' : 'no'}`);
   try {

@@ -178,6 +178,8 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
   const [dirty, setDirty] = useState(false)
   const [clientOS, setClientOS] = useState(typeof window !== 'undefined' ? (localStorage.getItem('client_os') || 'linux') : 'linux')
   const [logTimezone, setLogTimezone] = useState(typeof window !== 'undefined' ? (localStorage.getItem('log_timezone') || '') : '')
+  const [defaultRescanForceHash, setDefaultRescanForceHash] = useState(false)
+  const [defaultRescanSkipAnime, setDefaultRescanSkipAnime] = useState(false)
 
   const timezones = useMemo(() => {
     try {
@@ -247,6 +249,14 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
             : (hardsubPref === true || hardsubPref === 'true')
           setHardsubEnabled(resolvedHardsubPref)
           setHardsubLanguage(user.hardsub_language || server.hardsub_language || 'eng')
+          const forceHashPref = user.default_rescan_force_hash;
+          const serverForceHashPref = server.default_rescan_force_hash;
+          const resolvedForceHashPref = forceHashPref === undefined ? (serverForceHashPref === true || serverForceHashPref === 'true') : (forceHashPref === true || forceHashPref === 'true');
+          setDefaultRescanForceHash(resolvedForceHashPref);
+          const skipAnimePref = user.default_rescan_skip_anime;
+          const serverSkipAnimePref = server.default_rescan_skip_anime;
+          const resolvedSkipAnimePref = skipAnimePref === undefined ? (serverSkipAnimePref === true || serverSkipAnimePref === 'true') : (skipAnimePref === true || skipAnimePref === 'true');
+          setDefaultRescanSkipAnime(resolvedSkipAnimePref);
           const folders = Array.isArray(user.output_folders) ? user.output_folders : []
           setOutputFolders(folders)
           setOutputFoldersDirty(new Array(folders.length).fill(false))
@@ -306,6 +316,12 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         setCopySidecarSubtitles(sidecarPref)
         setHardsubEnabled(hardsubPref2)
         setHardsubLanguage(localStorage.getItem('hardsub_language') || server.hardsub_language || 'eng')
+        const storedForceHashPref = localStorage.getItem('default_rescan_force_hash');
+        const forceHashPref2 = storedForceHashPref != null ? storedForceHashPref === 'true' : (server.default_rescan_force_hash === true || server.default_rescan_force_hash === 'true');
+        setDefaultRescanForceHash(forceHashPref2);
+        const storedSkipAnimePref = localStorage.getItem('default_rescan_skip_anime');
+        const skipAnimePref2 = storedSkipAnimePref != null ? storedSkipAnimePref === 'true' : (server.default_rescan_skip_anime === true || server.default_rescan_skip_anime === 'true');
+        setDefaultRescanSkipAnime(skipAnimePref2);
           setLogTimezone(server.log_timezone || localStorage.getItem('log_timezone') || '')
         setProviderOrder(sanitizeProviderOrder(storedOrder))
         try {
@@ -354,6 +370,8 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
         setCopySidecarSubtitles(storedSidecarPref2 === 'true')
         setHardsubEnabled(storedHardsubPref2 === 'true')
         setHardsubLanguage(localStorage.getItem('hardsub_language') || 'eng')
+        setDefaultRescanForceHash(localStorage.getItem('default_rescan_force_hash') === 'true')
+        setDefaultRescanSkipAnime(localStorage.getItem('default_rescan_skip_anime') === 'true')
           setLogTimezone(localStorage.getItem('log_timezone') || '')
         try {
           const parsedFolders = storedFolders ? JSON.parse(storedFolders) : []
@@ -409,6 +427,8 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
       localStorage.setItem('copy_sidecar_subtitles', String(copySidecarSubtitles))
       localStorage.setItem('hardsub_enabled', String(hardsubEnabled))
       localStorage.setItem('hardsub_language', hardsubLanguage)
+      localStorage.setItem('default_rescan_force_hash', String(defaultRescanForceHash))
+      localStorage.setItem('default_rescan_skip_anime', String(defaultRescanSkipAnime))
       try { localStorage.setItem('output_folders', JSON.stringify(outputFolders)) } catch (e) {}
       try { localStorage.setItem('log_timezone', logTimezone) } catch (e) {}
       const firstProvider = providerOrder[0] || 'tmdb'
@@ -433,6 +453,8 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
           copy_sidecar_subtitles: copySidecarSubtitles,
           hardsub_enabled: hardsubEnabled,
           hardsub_language: hardsubLanguage,
+          default_rescan_force_hash: defaultRescanForceHash,
+          default_rescan_skip_anime: defaultRescanSkipAnime,
           output_folders: outputFolders,
           custom_regexes: customRegexes,
           rename_template: renameTemplate,
@@ -498,6 +520,8 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
       localStorage.removeItem('copy_sidecar_subtitles')
       localStorage.removeItem('hardsub_enabled')
       localStorage.removeItem('hardsub_language')
+      localStorage.removeItem('default_rescan_force_hash')
+      localStorage.removeItem('default_rescan_skip_anime')
   localStorage.removeItem('output_folders')
         localStorage.removeItem('client_os')
         localStorage.removeItem('log_timezone')
@@ -805,8 +829,21 @@ export default function Settings({ pushToast, cardParallax, setCardParallax }){
                 </div>
               ))}
             </div>
+
+            <div style={{marginTop:16, borderTop:'1px solid var(--bg-600)', paddingTop:16}}>
+              <label style={{fontSize:13, color:'var(--muted)', fontWeight:600}}>Default Rescan Options</label>
+              <div style={{display:'flex', alignItems:'center', gap:8, marginTop:10}}>
+                <input type="checkbox" checked={defaultRescanForceHash} onChange={e => { setDefaultRescanForceHash(e.target.checked); setDirty(true) }} id="chkDefaultRescanHash" style={{width:16, height:16, cursor:'pointer'}} />
+                <label htmlFor="chkDefaultRescanHash" style={{fontSize:13, cursor:'pointer'}}>Force AniDB file hashing</label>
+              </div>
+              <div style={{display:'flex', alignItems:'center', gap:8, marginTop:8}}>
+                <input type="checkbox" checked={defaultRescanSkipAnime} onChange={e => { setDefaultRescanSkipAnime(e.target.checked); setDirty(true) }} id="chkDefaultRescanSkipAnime" style={{width:16, height:16, cursor:'pointer'}} />
+                <label htmlFor="chkDefaultRescanSkipAnime" style={{fontSize:13, cursor:'pointer'}}>Skip anime metadata providers (AniList/AniDB)</label>
+              </div>
+              <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>These options apply automatically when you click the "Rescan" or "Rescan All" button.</div>
+            </div>
           </div>
-          <input value={renameTemplate} onChange={e=>{ setRenameTemplate(e.target.value); setDirty(true) }} placeholder="e.g. {title} ({year}) - {epLabel} - {episodeTitle}" style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)', marginTop:6}} />
+          <input value={renameTemplate} onChange={e=>{ setRenameTemplate(e.target.value); setDirty(true) }} placeholder="e.g. {title} ({year}) - {epLabel} - {episodeTitle}" style={{width:'100%', padding:10, borderRadius:8, border:`1px solid var(--bg-600)`, background:'transparent', color:'var(--accent)', marginTop:16}} />
           <div style={{fontSize:12, color:'var(--muted)', marginTop:8}}>Available tokens: <code>{'{title}'}</code>, <code>{'{basename}'}</code>, <code>{'{year}'}</code>, <code>{'{epLabel}'}</code>, <code>{'{episodeTitle}'}</code>, <code>{'{season}'}</code>, <code>{'{episode}'}</code>, <code>{'{episodeRange}'}</code>, <code>{'{tmdbId}'}</code> <span style={{opacity:0.8}}>({'{tmdbId}'} contains the TMDb id)</span></div>
           <div style={{marginTop:10, padding:10, borderRadius:8, background:'var(--bg-700)'}}>
             <strong style={{fontSize:13}}>Live preview</strong>

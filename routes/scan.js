@@ -39,10 +39,86 @@ module.exports = function createScanRoutes(ctx) {
   isHiddenOrAppliedPath
 } = ctx;
 
+  const resolveMetadataProviderOrder = (username) => {
+    try {
+      if (username && users[username] && users[username].settings && Array.isArray(users[username].settings.metadata_provider_order)) {
+        return users[username].settings.metadata_provider_order;
+      }
+      if (serverSettings && Array.isArray(serverSettings.metadata_provider_order)) return serverSettings.metadata_provider_order;
+    } catch (e) {}
+    return ['anidb', 'anilist', 'tmdb', 'tvdb'];
+  };
+
+  const backgroundEnrichAll = async (scanId, enrichCandidates, session, libPath, lockKey) => {
+    const username = session && session.username ? session.username : null;
+    let tmdbKey = null;
+    try {
+      if (username && users[username] && users[username].settings && users[username].settings.tmdb_api_key) tmdbKey = users[username].settings.tmdb_api_key;
+      else if (serverSettings && serverSettings.tmdb_api_key) tmdbKey = serverSettings.tmdb_api_key;
+    } catch (e) {}
+
+    let forcedHash = false;
+    let skipAnime = false;
+    if (username && users[username] && users[username].settings && users[username].settings.default_rescan_force_hash !== undefined) {
+      forcedHash = coerceBoolean(users[username].settings.default_rescan_force_hash);
+    } else if (serverSettings && serverSettings.default_rescan_force_hash !== undefined) {
+      forcedHash = coerceBoolean(serverSettings.default_rescan_force_hash);
+    } else {
+      const _refreshProviderOrder = resolveMetadataProviderOrder(username);
+      forcedHash = (_refreshProviderOrder && _refreshProviderOrder.length && _refreshProviderOrder[0] === 'anidb');
+    }
+
+    if (username && users[username] && users[username].settings && users[username].settings.default_rescan_skip_anime !== undefined) {
+      skipAnime = coerceBoolean(users[username].settings.default_rescan_skip_anime);
+    } else if (serverSettings && serverSettings.default_rescan_skip_anime !== undefined) {
+      skipAnime = coerceBoolean(serverSettings.default_rescan_skip_anime);
+    }
+
+    const RATE_DELAY_MS = 350;
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    appendLog(`BACKGROUND_ENRICH_ALL_START scan=${scanId} items=${enrichCandidates.length}`);
+    for (let i = 0; i < enrichCandidates.length; i++) {
+      const p = enrichCandidates[i];
+      try {
+        const fromPath = canonicalize(p);
+        const opts = { username, force: false };
+        if (forcedHash) opts.forceHash = true;
+        if (skipAnime) opts.skipAnimeProviders = true;
+
+        const data = await externalEnrich(fromPath, tmdbKey, opts);
+        if (data) {
+          const providerRendered = renderProviderName(data, fromPath, session);
+          const providerRaw = cloneProviderRaw(extractProviderRaw(data));
+          const providerBlock = {
+            title: data.title, year: data.year, season: data.season, episode: data.episode,
+            episodeTitle: data.episodeTitle || '', raw: providerRaw, renderedName: providerRendered,
+            matched: !!data.title, source: data.source || (data.provider && data.provider.source) || null,
+            seriesTitleEnglish: data.seriesTitleEnglish || null, seriesTitleRomaji: data.seriesTitleRomaji || null,
+            seriesTitleExact: data.seriesTitleExact || null, originalSeriesTitle: data.originalSeriesTitle || null
+          };
+          updateEnrichCache(fromPath, Object.assign({}, enrichCache[fromPath] || {}, data, { provider: providerBlock, sourceId: 'provider', cachedAt: Date.now() }));
+        }
+      } catch (e) {
+        appendLog(`BACKGROUND_ENRICH_FAIL path=${p} err=${e.message}`);
+      }
+      if (i < enrichCandidates.length - 1) await sleep(RATE_DELAY_MS);
+    }
+    
+    // Save enrich cache when done
+    try {
+      if (db) db.setKV('enrichCache', enrichCache);
+      else writeJson(enrichStoreFile, enrichCache);
+    } catch (e) {}
+
+    appendLog(`BACKGROUND_ENRICH_ALL_DONE scan=${scanId}`);
+    try { activeScans.delete(lockKey); appendLog(`SCAN_LOCK_RELEASED path=${libPath}`); } catch (ee) {}
+  };
+
   router.get('/api/libraries', requireAuth, (req, res) => {
-  // Let user choose an existing folder under cwd or provide custom path via config later
-  res.json([{ id: 'local', name: 'Local folder', canonicalPath: path.resolve('.') }]);
-});
+    // Let user choose an existing folder under cwd or provide custom path via config later
+    res.json([{ id: 'local', name: 'Local folder', canonicalPath: path.resolve('.') }]);
+  });
 
 router.post('/api/scan', requireAuth, async (req, res) => {
   const { libraryId, path: libraryPath } = req.body || {};
@@ -240,10 +316,10 @@ router.post('/api/scan', requireAuth, async (req, res) => {
     // Auto-sweep stale enrich cache entries after a scan completes
     try { const removed = sweepEnrichCache(); if (removed && removed.length) appendLog(`AUTOSWEEP_AFTER_SCAN removed=${removed.length}`); } catch (e) {}
     res.json({ scanId, totalCount: items.length });
-    // Launch background enrichment (first N items) using centralized helper. Keep behavior identical.
+    // Launch background enrichment using centralized helper.
     try {
       backgroundStarted = true;
-      void backgroundEnrichFirstN(scanId, enrichCandidates, req.session, libPath, lockKey, 12);
+      void backgroundEnrichAll(scanId, enrichCandidates, req.session, libPath, lockKey);
     } catch (e) { appendLog(`BACKGROUND_FIRSTN_LAUNCH_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); activeScans.delete(lockKey); appendLog(`SCAN_LOCK_RELEASED path=${libPath}`); }
   } catch (err) {
     try { appendLog(`SCAN_HANDLER_FAIL scan=${scanId} err=${err && err.message ? err.message : String(err)}`); } catch (e) {}
@@ -587,12 +663,27 @@ router.post('/api/scan/:scanId/refresh', requireAuth, async (req, res) => {
           const fallbackParsed = entryAfterParse && entryAfterParse.parsed ? Object.assign({}, entryAfterParse.parsed) : null;
           try { appendLog(`REFRESH_ITEM_FORCE_LOOKUP path=${key}`); } catch (e) {}
           try {
-            // Respect user's provider order: if AniDB is configured first, force hash so
-            // AniDB lookups wait for ED2K computation instead of falling back immediately.
-            const _refreshProviderOrder = resolveMetadataProviderOrder(username);
-            const _refreshForceHash = (_refreshProviderOrder && _refreshProviderOrder.length && _refreshProviderOrder[0] === 'anidb');
             const _refreshOpts = Object.assign({}, { username, force: true });
-            if (_refreshForceHash) _refreshOpts.forceHash = true;
+            let forcedHash = false;
+            let skipAnime = false;
+            
+            if (username && users[username] && users[username].settings && users[username].settings.default_rescan_force_hash !== undefined) {
+              forcedHash = coerceBoolean(users[username].settings.default_rescan_force_hash);
+            } else if (serverSettings && serverSettings.default_rescan_force_hash !== undefined) {
+              forcedHash = coerceBoolean(serverSettings.default_rescan_force_hash);
+            } else {
+              const _refreshProviderOrder = resolveMetadataProviderOrder(username);
+              forcedHash = (_refreshProviderOrder && _refreshProviderOrder.length && _refreshProviderOrder[0] === 'anidb');
+            }
+
+            if (username && users[username] && users[username].settings && users[username].settings.default_rescan_skip_anime !== undefined) {
+              skipAnime = coerceBoolean(users[username].settings.default_rescan_skip_anime);
+            } else if (serverSettings && serverSettings.default_rescan_skip_anime !== undefined) {
+              skipAnime = coerceBoolean(serverSettings.default_rescan_skip_anime);
+            }
+
+            if (forcedHash) _refreshOpts.forceHash = true;
+            if (skipAnime) _refreshOpts.skipAnimeProviders = true;
             lookup = await externalEnrich(key, tmdbKey, _refreshOpts);
           } catch (err) {
             lookupError = err;

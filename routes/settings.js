@@ -107,7 +107,7 @@ router.post('/api/settings', requireAuth, (req, res) => {
     // if admin requested global update
     if (username && users[username] && users[username].role === 'admin' && body.global) {
       // Admins may set global server settings, but not a global scan_input_path (per-user only)
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'extract_subtitle_format', 'copy_sidecar_subtitles', 'client_os', 'log_timezone', 'custom_regexes'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'extract_subtitle_format', 'copy_sidecar_subtitles', 'client_os', 'log_timezone', 'custom_regexes', 'default_rescan_force_hash', 'default_rescan_skip_anime'];
       for (const k of allowed) {
         if (body[k] === undefined) continue;
         if (k === 'metadata_provider_order') {
@@ -129,6 +129,10 @@ router.post('/api/settings', requireAuth, (req, res) => {
           if (VALID_SUBTITLE_FORMATS.has(body[k])) serverSettings.extract_subtitle_format = body[k];
         } else if (k === 'copy_sidecar_subtitles') {
           serverSettings.copy_sidecar_subtitles = coerceBoolean(body[k]);
+        } else if (k === 'default_rescan_force_hash') {
+          serverSettings.default_rescan_force_hash = coerceBoolean(body[k]);
+        } else if (k === 'default_rescan_skip_anime') {
+          serverSettings.default_rescan_skip_anime = coerceBoolean(body[k]);
         } else {
           serverSettings[k] = body[k];
         }
@@ -149,7 +153,7 @@ router.post('/api/settings', requireAuth, (req, res) => {
     if (!username) return res.status(401).json({ error: 'unauthenticated' });
     users[username] = users[username] || {};
     users[username].settings = users[username].settings || {};
-  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'copy_sidecar_subtitles', 'client_os', 'log_timezone', 'custom_regexes'];
+  const allowed = ['tmdb_api_key', 'anilist_api_key', 'anidb_username', 'anidb_password', 'anidb_client_name', 'anidb_client_version', 'scan_input_path', 'scan_output_path', 'rename_template', 'default_meta_provider', 'metadata_provider_order', 'tvdb_v4_api_key', 'tvdb_v4_user_pin', 'output_folders', 'enable_folder_watch', 'delete_hardlinks_on_unapprove', 'extract_subtitles', 'copy_sidecar_subtitles', 'client_os', 'log_timezone', 'custom_regexes', 'default_rescan_force_hash', 'default_rescan_skip_anime'];
     
     // Check if scan_input_path changed to update watcher
     const oldScanPath = users[username].settings.scan_input_path;
@@ -182,6 +186,10 @@ router.post('/api/settings', requireAuth, (req, res) => {
         if (VALID_SUBTITLE_FORMATS.has(body[k])) users[username].settings.extract_subtitle_format = body[k];
       } else if (k === 'copy_sidecar_subtitles') {
         users[username].settings.copy_sidecar_subtitles = coerceBoolean(body[k]);
+      } else if (k === 'default_rescan_force_hash') {
+        users[username].settings.default_rescan_force_hash = coerceBoolean(body[k]);
+      } else if (k === 'default_rescan_skip_anime') {
+        users[username].settings.default_rescan_skip_anime = coerceBoolean(body[k]);
       } else {
         users[username].settings[k] = body[k];
       }

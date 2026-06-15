@@ -27,6 +27,16 @@ module.exports = function createJobsRoutes(ctx) {
   externalEnrich
 } = ctx;
 
+  const resolveMetadataProviderOrder = (username) => {
+    try {
+      if (username && users[username] && users[username].settings && Array.isArray(users[username].settings.metadata_provider_order)) {
+        return users[username].settings.metadata_provider_order;
+      }
+      if (serverSettings && Array.isArray(serverSettings.metadata_provider_order)) return serverSettings.metadata_provider_order;
+    } catch (e) {}
+    return ['anidb', 'anilist', 'tmdb', 'tvdb'];
+  };
+
   router.get('/api/jobs', requireAuth, (req, res) => {
   try {
     const now = Date.now();
@@ -411,6 +421,23 @@ router.post('/api/jobs/bulk-rescan', requireAuth, async (req, res) => {
     res.json({ jobId: job.id, status: 'running' });
 
     ;(async () => {
+      let forcedHash = false;
+      let globalSkipAnime = false;
+      if (username && users[username] && users[username].settings && users[username].settings.default_rescan_force_hash !== undefined) {
+        forcedHash = coerceBoolean(users[username].settings.default_rescan_force_hash);
+      } else if (serverSettings && serverSettings.default_rescan_force_hash !== undefined) {
+        forcedHash = coerceBoolean(serverSettings.default_rescan_force_hash);
+      } else {
+        const _refreshProviderOrder = resolveMetadataProviderOrder(username);
+        forcedHash = (_refreshProviderOrder && _refreshProviderOrder.length && _refreshProviderOrder[0] === 'anidb');
+      }
+
+      if (username && users[username] && users[username].settings && users[username].settings.default_rescan_skip_anime !== undefined) {
+        globalSkipAnime = coerceBoolean(users[username].settings.default_rescan_skip_anime);
+      } else if (serverSettings && serverSettings.default_rescan_skip_anime !== undefined) {
+        globalSkipAnime = coerceBoolean(serverSettings.default_rescan_skip_anime);
+      }
+
       const RATE_DELAY_MS = 350;
       const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       for (let i = 0; i < paths.length; i++) {
@@ -419,7 +446,12 @@ router.post('/api/jobs/bulk-rescan', requireAuth, async (req, res) => {
         try {
           const fromPath = canonicalize(p);
           const opts = { username, force: coerceBoolean(force) };
-          if (typeof skipAnimeProviders === 'boolean') opts.skipAnimeProviders = skipAnimeProviders;
+          if (forcedHash) opts.forceHash = true;
+          if (typeof skipAnimeProviders === 'boolean') {
+            opts.skipAnimeProviders = skipAnimeProviders;
+          } else if (globalSkipAnime) {
+            opts.skipAnimeProviders = true;
+          }
           const data = await externalEnrich(fromPath, tmdbKey, opts);
           if (data) {
             // Mirror what the POST /enrich route does: build provider block + update cache
