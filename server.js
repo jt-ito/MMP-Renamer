@@ -8718,7 +8718,10 @@ function createBgJob(type, totalItems) {
 const scanLib = require('./lib/scan');
 const tvdbLib = require('./lib/tvdb');
 const { tvdbInfo, tvdbInfoParent } = tvdbLib;
-const { sanitizeForFilename } = require('./lib/filename-parser');
+function sanitizeForFilename(s) {
+  if (s == null) return s;
+  return String(s).replace(/[\\/:*?"<>|]/g, '');
+}
 const lastRequestAt = {};
 
 // --- RESTORED LEGACY FUNCTIONS ---
@@ -9971,7 +9974,7 @@ function createBgJob(type, totalItems) {
 
 
 const ctx = {
-    isMeaningfulTitle, isPlaceholderTitle, extractSeasonNumberFromTitle, fullScanLibrary, searchTmdbAndEpisode, incrementalScanLibrary, loadScanCache, saveScanCache, lookupWikipediaEpisode, cleanEnrichmentForClient, sanitizeExtraGuess, renderCustomMetadataName, updateEnrichCacheInMemory, sweepEnrichCache, normalizeForCache, normalizeOutputKey, buildApprovedSeriesPayload, getApprovedSeriesSourcePreferences, resolveApprovedSeriesSourcePreference, normalizeApprovedSeriesSource, setApprovedSeriesSourcePreference, fetchAndCacheApprovedSeriesImage, createBgJob, resolveMetadataProviderOrder, bgJobs, approvedSeriesImages, approvedSeriesImageFetchLocks, tvdbInfo, tvdbInfoParent, resolveCopySidecarSubtitlesSetting, copyExternalSubtitles, resolveExtractSubtitlesSetting, resolveExtractSubtitleFormat, extractSubtitlesToSrt, resolveHardsubSetting, resolveHardsubLanguage, burnHardsubToFile, sanitizeForFilename, determineIsMovie, ensureRenderedNameHasYear, SUBTITLE_EXTS, VALID_SUBTITLE_FORMATS, hideEventsClientCache, HIDE_EVENTS_CACHE_WINDOW_MS, pace, deriveAppliedSeriesInfo,
+    isMeaningfulTitle, isPlaceholderTitle, extractSeasonNumberFromTitle, fullScanLibrary, searchTmdbAndEpisode, incrementalScanLibrary, loadScanCache, saveScanCache, lookupWikipediaEpisode, cleanEnrichmentForClient, sanitize, sanitizeExtraGuess, renderCustomMetadataName, updateEnrichCacheInMemory, sweepEnrichCache, normalizeForCache, normalizeOutputKey, buildApprovedSeriesPayload, getApprovedSeriesSourcePreferences, resolveApprovedSeriesSourcePreference, normalizeApprovedSeriesSource, setApprovedSeriesSourcePreference, fetchAndCacheApprovedSeriesImage, createBgJob, resolveMetadataProviderOrder, bgJobs, approvedSeriesImages, approvedSeriesImageFetchLocks, tvdbInfo, tvdbInfoParent, resolveCopySidecarSubtitlesSetting, copyExternalSubtitles, resolveExtractSubtitlesSetting, resolveExtractSubtitleFormat, extractSubtitlesToSrt, resolveHardsubSetting, resolveHardsubLanguage, burnHardsubToFile, sanitizeForFilename, determineIsMovie, ensureRenderedNameHasYear, SUBTITLE_EXTS, VALID_SUBTITLE_FORMATS, hideEventsClientCache, HIDE_EVENTS_CACHE_WINDOW_MS, pace, deriveAppliedSeriesInfo,
     
   app, express, fs, path, os, crypto, https, execFile, uuidv4, tvdb, chokidar,
   lookupMetadataWithAniDB, getAniDBCredentials, getAniDBUDPClient, getAniDBClient,
