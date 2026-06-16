@@ -174,7 +174,7 @@ router.post('/api/scan', requireAuth, async (req, res) => {
   }
 
   // Delegate scan helpers to lib/scan.js
-  const scanLib = require('./lib/scan');
+  const scanLib = require('../lib/scan');
   function loadScanCache() { return scanLib.loadScanCache(scanCacheFile); }
   function saveScanCache(obj) { return scanLib.saveScanCache(scanCacheFile, obj); }
 
@@ -344,7 +344,7 @@ router.post('/api/scan/incremental', requireAuth, async (req, res) => {
   } catch (err) { appendLog(`SCAN_VALIDATION_ERROR path=${libPath} err=${err.message}`); return res.status(400).json({ error: 'invalid path', detail: err.message }); }
 
   appendLog(`INCREMENTAL_SCAN_START library=${libraryId || 'local'} path=${libPath}`);
-  const scanLib = require('./lib/scan');
+  const scanLib = require('../lib/scan');
   function loadScanCache() { return scanLib.loadScanCache(scanCacheFile); }
   function saveScanCache(obj) { return scanLib.saveScanCache(scanCacheFile, obj); }
 

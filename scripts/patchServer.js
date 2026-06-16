@@ -32,7 +32,7 @@ if (server.includes('const ctx = {')) {
     'resolveCopySidecarSubtitlesSetting, copyExternalSubtitles, resolveExtractSubtitlesSetting, ' +
     'resolveExtractSubtitleFormat, extractSubtitlesToSrt, resolveHardsubSetting, ' +
     'resolveHardsubLanguage, burnHardsubToFile, sanitizeForFilename, determineIsMovie, ' +
-    'ensureRenderedNameHasYear, SUBTITLE_EXTS, VALID_SUBTITLE_FORMATS, ' +
+    'ensureRenderedNameHasYear, SUBTITLE_EXTS, VALID_SUBTITLE_FORMATS, sanitize, ' +
     'hideEventsClientCache, HIDE_EVENTS_CACHE_WINDOW_MS, pace, deriveAppliedSeriesInfo,\n    ');
   
   // Remove the old IGNORED_DIRS and VIDEO_EXTS to avoid double declaration

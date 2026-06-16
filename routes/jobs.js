@@ -102,7 +102,7 @@ router.post('/api/jobs/check-conflicts', requireAuth, async (req, res) => {
         if (!enrichment) continue;
 
         if (applyFilenameAsTitle) {
-          const parseFilename = require('./lib/filename-parser');
+          const parseFilename = require('../lib/filename-parser');
           const parsed = parseFilename(fromPath);
           season = enrichment.season || parsed.season;
           title = parsed.title || enrichment.title || '';
