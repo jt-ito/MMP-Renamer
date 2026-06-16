@@ -38,8 +38,38 @@ module.exports = function createEnrichRoutes(ctx) {
   sanitizeExtraGuess,
   renderCustomMetadataName,
   hideEventsClientCache,
-  HIDE_EVENTS_CACHE_WINDOW_MS
+  HIDE_EVENTS_CACHE_WINDOW_MS,
+  bgEnrichPaused,
+  resumeBgEnrich,
+  pauseBgEnrich
 } = ctx;
+
+  // Background enrich pause status and control
+  router.get('/api/enrich/bg-status', requireAuth, (req, res) => {
+    try {
+      return res.json({ paused: bgEnrichPaused === true });
+    } catch (e) {
+      return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  router.post('/api/enrich/bg-resume', requireAdmin, (req, res) => {
+    try {
+      if (typeof resumeBgEnrich === 'function') resumeBgEnrich();
+      return res.json({ ok: true, paused: false });
+    } catch (e) {
+      return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+    }
+  });
+
+  router.post('/api/enrich/bg-pause', requireAdmin, (req, res) => {
+    try {
+      if (typeof pauseBgEnrich === 'function') pauseBgEnrich();
+      return res.json({ ok: true, paused: true });
+    } catch (e) {
+      return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+    }
+  });
 
   router.get('/api/enrich', requireAuth, (req, res) => {
   const { path: p } = req.query;

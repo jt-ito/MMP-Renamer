@@ -120,7 +120,7 @@ function truncateProviderDetail(value, maxLength = 120) {
     .replace(REGEX_MULTI_SPACE, ' ')
     .trim()
   if (!clean.length) return ''
-  return clean.length > maxLength ? `${clean.slice(0, maxLength - 1)}…` : clean
+  return clean.length > maxLength ? `${clean.slice(0, maxLength - 1)}â€¦` : clean
 }
 
 function assignProviderSourceMetadata(target, meta = {}) {
@@ -468,7 +468,7 @@ const resolvedSameSite = (() => {
   if (['lax', 'strict', 'none'].includes(candidate)) return candidate;
   return 'lax';
 })();
-// Default secure to false — tying it to NODE_ENV=production breaks HTTP deployments
+// Default secure to false â€” tying it to NODE_ENV=production breaks HTTP deployments
 // (Docker containers are commonly served over plain HTTP behind a reverse proxy).
 // Users who terminate TLS at the app level should set SESSION_SECURE=true explicitly.
 let secureCookies = typeof process.env.SESSION_SECURE !== 'undefined'
@@ -503,7 +503,7 @@ if (SESSION_KEY) {
     // 15-minute inactivity timeout. cookie-session v2 only re-sends Set-Cookie when
     // the session object is "changed" (isChanged === true). A separate middleware below
     // stamps req.session._t on every authenticated request to force isChanged=true,
-    // so the cookie Expires is refreshed on every response — true rolling behaviour.
+    // so the cookie Expires is refreshed on every response â€” true rolling behaviour.
     maxAge: 15 * 60 * 1000,
     httpOnly: true,
     sameSite: resolvedSameSite,
@@ -513,7 +513,7 @@ if (SESSION_KEY) {
   // cookie-session re-issues the cookie with a fresh Expires on each response.
   app.use((req, res, next) => {
     if (req.session && req.session.username) {
-      // 10-second resolution — small enough to be imperceptible, large enough to avoid
+      // 10-second resolution â€” small enough to be imperceptible, large enough to avoid
       // unnecessary session-object churn when the same second fires multiple requests.
       req.session._t = Math.floor(Date.now() / 10000);
     }
@@ -655,7 +655,7 @@ const _subtitleExtractionInProgress = new Set();
  * as a separate file next to `toPath` in the chosen format.
  * Files are named: <toBasename>.<langTag>.<ext>  (or <toBasename>.<ext> for a single track).
  * Nothing is written to / modified on the source file.
- * Errors are non-fatal — a warning is logged and the approve flow continues.
+ * Errors are non-fatal â€” a warning is logged and the approve flow continues.
  */
 async function extractSubtitlesToSrt(fromPath, toPath, format = 'ass') {
   const fmtInfo = SUBTITLE_FORMAT_MAP[format] || SUBTITLE_FORMAT_MAP.ass;
@@ -722,11 +722,11 @@ async function extractSubtitlesToSrt(fromPath, toPath, format = 'ass') {
 
 /**
  * Burns a subtitle track from `fromPath` into a re-encoded video at `toPath`.
- * `toPath` must already exist (as a hardlink or copy) — it is replaced by the encoded output.
+ * `toPath` must already exist (as a hardlink or copy) â€” it is replaced by the encoded output.
  * The source file (`fromPath`) is never modified.
  * Selects the subtitle stream matching `language` (ISO 639-2 code, e.g. 'eng');
  * falls back to the first available subtitle stream if no match is found.
- * Non-fatal — on failure the original hardlink at `toPath` is preserved and a warning is logged.
+ * Non-fatal â€” on failure the original hardlink at `toPath` is preserved and a warning is logged.
  */
 async function burnHardsubToFile(fromPath, toPath, language) {
   // Step 1: probe for subtitle streams
@@ -886,7 +886,7 @@ function findExternalSubtitles(fromPath) {
   }
   if (results.length) return results;
 
-  // Strategy 3: positional match — sort video files and subtitle files, pair by index
+  // Strategy 3: positional match â€” sort video files and subtitle files, pair by index
   const VIDEO_EXTS_SET = new Set(['.mkv','.mp4','.avi','.mov','.m4v','.mpg','.mpeg','.webm','.wmv','.flv','.ts','.ogg','.ogv','.3gp','.3g2']);
   const videoFiles = allFiles
     .filter(f => VIDEO_EXTS_SET.has(path.extname(f).toLowerCase()))
@@ -909,7 +909,7 @@ function findExternalSubtitles(fromPath) {
 /**
  * Copies sidecar subtitle files found next to `fromPath` into the output directory
  * alongside `toPath`, renaming them to match the output basename.
- * e.g. source/video.eng.srt → output/MovieName.S01E01.eng.srt
+ * e.g. source/video.eng.srt â†’ output/MovieName.S01E01.eng.srt
  */
 function copyExternalSubtitles(fromPath, toPath) {
   const found = findExternalSubtitles(fromPath);
@@ -1272,7 +1272,7 @@ function startFolderWatcher(username, libPath) {
           }
 
           if (!prior || !prior.files || Object.keys(prior.files).length === 0) {
-            // No prior cache at all — fall back to a full scan so we get everything
+            // No prior cache at all â€” fall back to a full scan so we get everything
             items = scanLib.fullScanLibrary(libPath, {
               ignoredDirs: new Set(['node_modules', '.git', '.svn', '__pycache__']),
               videoExts: ['mkv', 'mp4', 'avi', 'mov', 'm4v', 'mpg', 'mpeg', 'webm', 'wmv', 'flv', 'ts', 'ogg', 'ogv', '3gp', '3g2'],
@@ -1303,11 +1303,11 @@ function startFolderWatcher(username, libPath) {
             // Parse new/changed files so they have basic metadata
             for (const it of (toProcess || [])) doProcessParsedItem(it, { username });
 
-            // Persist updated cache — must happen before buildIncrementalItems
+            // Persist updated cache â€” must happen before buildIncrementalItems
             if (currentCache) saveScanCacheFn(currentCache);
 
             // Build the full item list from currentCache (all known files), prioritising
-            // new/changed entries first. NOTE: pass currentCache, NOT scanCache — the old
+            // new/changed entries first. NOTE: pass currentCache, NOT scanCache â€” the old
             // code incorrectly used result.scanCache (undefined) which caused buildIncrementalItems
             // to return only the new/changed files, missing the entire existing library.
             items = scanLib.buildIncrementalItems(currentCache, toProcess, uuidv4);
@@ -1985,13 +1985,13 @@ async function fetchTmdbById(id, apiKey, season, episode, mediaTypeHint = null) 
   let parsed = null;
   let isMovie = false;
   if (mediaTypeHint === 'movie') {
-    // User explicitly said this is a movie — skip the TV probe
+    // User explicitly said this is a movie â€” skip the TV probe
     const moviePath = `/3/movie/${encodeURIComponent(tmdbId)}?api_key=${encodeURIComponent(apiKey)}&language=en-US`;
     const res = await httpRequest({ hostname: 'api.themoviedb.org', path: moviePath, method: 'GET', headers: baseHeaders }, null, 8000);
     parsed = res && res.statusCode === 200 ? safeJsonParse(res.body) : null;
     isMovie = true;
   } else if (mediaTypeHint === 'tv') {
-    // User explicitly said this is a TV series — skip the movie probe
+    // User explicitly said this is a TV series â€” skip the movie probe
     const tvPath = `/3/tv/${encodeURIComponent(tmdbId)}?api_key=${encodeURIComponent(apiKey)}&language=en-US`;
     const res = await httpRequest({ hostname: 'api.themoviedb.org', path: tvPath, method: 'GET', headers: baseHeaders }, null, 8000);
     parsed = res && res.statusCode === 200 ? safeJsonParse(res.body) : null;
@@ -2029,7 +2029,7 @@ async function fetchTvdbById(id, creds, season, episode, log, mediaTypeHint = nu
   const seriesId = String(id).trim();
   if (!seriesId) return null;
   if (mediaTypeHint === 'movie') {
-    // User explicitly said this is a TVDB movie — use the movies endpoint
+    // User explicitly said this is a TVDB movie â€” use the movies endpoint
     const movie = await tvdb.fetchMovieById(creds, seriesId, log);
     if (!movie) return null;
     return {
@@ -2295,7 +2295,7 @@ async function metaLookup(title, apiKey, opts = {}) {
       out = out.replace(/\[[^\]]+\]/g, ' ')
     out = out.replace(/\([^\)]*\b(?:1080p|720p|2160p|x264|x265|webrip|web-dl|bluray|hdtv|aac|dual audio)\b[^\)]*\)/ig, ' ')
       // If there's a dash, assume left side may be series and right side episode title; prefer left side
-      const dashSplit = out.split(/\s[-–—]\s/)
+      const dashSplit = out.split(/\s[-â€“â€”]\s/)
       if (dashSplit && dashSplit.length > 1) out = dashSplit[0]
       // remove trailing episode title heuristics: if string begins with season/episode marker, drop following words up to a capitalized stop? conservatively, remove leading ep tokens
       out = out.replace(/^\s*[:\-\_\s]+/, '')
@@ -2459,7 +2459,7 @@ async function metaLookup(title, apiKey, opts = {}) {
         const k = String(m[1] || '').toLowerCase()
         if (map[k]) return map[k]
       }
-      // "Part N" and "Cour N" — AniList frequently labels anime cours/arcs this way.
+      // "Part N" and "Cour N" â€” AniList frequently labels anime cours/arcs this way.
       // Treat these as season/continuation markers so Part 3 entries are not mistaken
       // for the root series when searching for an earlier season.
       m = s.match(/\bPart\s+(\d{1,2})\b/i)
@@ -2468,7 +2468,7 @@ async function metaLookup(title, apiKey, opts = {}) {
       if (m && m[1]) return parseInt(m[1], 10)
       m = s.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+Cour\b/i)
       if (m && m[1]) return parseInt(m[1], 10)
-      // fallback: trailing digits like "Title 2" — only treat as season when
+      // fallback: trailing digits like "Title 2" â€” only treat as season when
       // the title is short (likely an explicit season marker) or contains
       // only 1-2 words (e.g., "Show 2"). This avoids treating long series
       // names with sequel numerals (e.g., "Getsuyoubi no Tawawa 2") as seasons.
@@ -3033,10 +3033,10 @@ async function metaLookup(title, apiKey, opts = {}) {
           if (!raw) return raw
           let s = String(raw).trim()
           // prefer text inside double quotes (straight or curly)
-          const quoteMatch = s.match(/["“”«»\u201C\u201D]([^"“”«»\u201C\u201D]+)["“”«»\u201C\u201D]/)
+          const quoteMatch = s.match(/["â€œâ€Â«Â»\u201C\u201D]([^"â€œâ€Â«Â»\u201C\u201D]+)["â€œâ€Â«Â»\u201C\u201D]/)
           if (quoteMatch && quoteMatch[1]) return quoteMatch[1].trim()
           // prefer single-quoted if double not found
-          const singleMatch = s.match(/[\'‘’]([^\'‘’]+)[\'‘’]/)
+          const singleMatch = s.match(/[\'â€˜â€™]([^\'â€˜â€™]+)[\'â€˜â€™]/)
           if (singleMatch && singleMatch[1]) return singleMatch[1].trim()
           // remove parenthetical Japanese/Language annotations
           s = s.replace(/\(\s*Japanese:[^\)]*\)/i, '').replace(/\(\s*Japanese language[^\)]*\)/i, '')
@@ -4296,7 +4296,7 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
   }
 
   // If parsed title looks like an episode (e.g., filename only contains SxxEyy - Title), prefer a parent-folder as series title
-  // Compute a parent-folder candidate but do NOT prefer it yet — we'll try filename first, then parent if TMDb fails.
+  // Compute a parent-folder candidate but do NOT prefer it yet â€” we'll try filename first, then parent if TMDb fails.
   let parentCandidate = null
   try {
       // Use strippedPath (library root already removed at function entry) for parent derivation
@@ -4781,17 +4781,17 @@ async function _externalEnrichImpl(canonicalPath, providedKey, opts = {}) {
 
             // Enforce season 0 for special/OVA/ONA/music-video animeTypes even when
             // the episode number came back as a plain integer (not an S-prefixed epno).
-            // Movies are not forced to S00 — they get isMovie=true instead.
+            // Movies are not forced to S00 â€” they get isMovie=true instead.
             if (animeType && episodeSeason !== 0) {
               const animeTypeLower = animeType.toLowerCase();
               if (['tv special', 'ova', 'ona', 'music video', 'special'].some(t => animeTypeLower.includes(t))) {
-                console.log(`[Server] AniDB animeType "${animeType}" → overriding season to 0`);
+                console.log(`[Server] AniDB animeType "${animeType}" â†’ overriding season to 0`);
                 try { appendLog(`ANIDB_ANIMETYPE_SPECIAL_S00 type=${animeType} oldSeason=${episodeSeason}`); } catch (e) {}
                 episodeSeason = 0;
               } else if (animeTypeLower === 'movie') {
                 if (typeof guess.isMovie !== 'boolean') {
                   guess.isMovie = true;
-                  console.log(`[Server] AniDB animeType "Movie" → setting isMovie=true`);
+                  console.log(`[Server] AniDB animeType "Movie" â†’ setting isMovie=true`);
                   try { appendLog(`ANIDB_ANIMETYPE_MOVIE isMovie=true`); } catch (e) {}
                 }
               }
@@ -5579,14 +5579,14 @@ function truncateFilenameComponent(name, maxLen) {
     if (prefix.length < maxLen - 5) { // -5 for " - " + ellipsis
       const remainingLen = maxLen - prefix.length - 3; // -3 for " - "
       if (remainingLen > 10) { // Only if we have meaningful space for episode title
-        const truncatedEpTitle = episodeTitle.slice(0, remainingLen - 1) + '…';
+        const truncatedEpTitle = episodeTitle.slice(0, remainingLen - 1) + 'â€¦';
         return `${prefix} - ${truncatedEpTitle}`;
       }
     }
   }
   
   // Fallback: simple truncation with ellipsis
-  const ell = '…';
+  const ell = 'â€¦';
   const keep = Math.max(1, maxLen - ell.length);
   return s.slice(0, keep) + ell;
 }
@@ -5715,7 +5715,7 @@ function doProcessParsedItem(it, session) {
           .replace('{episodeRange}', parsed.episodeRange || '')
           .replace('{tmdbId}', '')
         let parsedRendered = String(nameWithoutExtRaw).replace(/\s{2,}/g, ' ').trim();
-        try { parsedRendered = parsedRendered.replace(/\s*\(\s*\)\s*/g, '').replace(/\s*[-–—]\s*$/g, '').replace(/\s{2,}/g, ' ').trim(); } catch (e) {}
+        try { parsedRendered = parsedRendered.replace(/\s*\(\s*\)\s*/g, '').replace(/\s*[-â€“â€”]\s*$/g, '').replace(/\s{2,}/g, ' ').trim(); } catch (e) {}
         const parsedBlock = { title: parsed.title, parsedName: parsedRendered, season: parsed.season, episode: parsed.episode, episodeRange: parsed.episodeRange || null, timestamp: now };
         parsedCache[key] = Object.assign({}, parsedCache[key] || {}, parsedBlock);
         // Preserve existing provider block if it exists (don't overwrite provider data during rescans)
@@ -5832,7 +5832,7 @@ async function backgroundEnrichFirstN(scanId, enrichCandidates, session, libPath
     } catch (e) {}
   } catch (e) { appendLog(`BACKGROUND_FIRSTN_ENRICH_FAIL scan=${scanId} err=${e && e.message ? e.message : String(e)}`); }
 }
-// ─── Server-Sent Events (SSE) ────────────────────────────────────────────────
+// â”€â”€â”€ Server-Sent Events (SSE) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const sseClients = new Set();
 function broadcastEvent(type, payload) {
   const data = JSON.stringify({ type, payload });
@@ -5909,7 +5909,7 @@ function isHiddenOrAppliedPath(k) {
 // Query param: since (timestamp in ms) to receive events occurring after that timestamp.
 // Use a light per-client cache to avoid log spam when clients poll frequently with the same since value.
 const hideEventsClientCache = new Map(); // key -> { ts, resp, lastHit }
-// GET /api/enrich/active — returns paths currently being enriched by POST /api/enrich.
+// GET /api/enrich/active â€” returns paths currently being enriched by POST /api/enrich.
 // Clients use this to restore loading-indicator state after navigation.
 const HIDE_EVENTS_CACHE_WINDOW_MS = 5000; // 5 seconds - slightly larger to tolerate aggressive polling
 
@@ -6011,7 +6011,7 @@ function renderProviderName(data, fromPath, session) {
 }
 
 // Progress endpoint for long-running scan refreshes
-// Standalone plan generator — used by the preview route and the server-side approve job runner.
+// Standalone plan generator â€” used by the preview route and the server-side approve job runner.
 // All req.session references are replaced with a plain `username` parameter.
 function generatePlanForItem(it, { username, effectiveOutput, applyFilenameAsTitle, template }) {
     const fromPath = canonicalize(it.canonicalPath);
@@ -6068,9 +6068,9 @@ function generatePlanForItem(it, { username, effectiveOutput, applyFilenameAsTit
     try {
       let cleaned = String(baseTitle || '').trim();
       if (!cleaned) return '';
-      cleaned = cleaned.replace(/\s*[-–—:]+\s*S\d{1,2}E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
-      cleaned = cleaned.replace(/\s*[-–—:]+\s*E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
-      cleaned = cleaned.replace(/\s*[-–—:]+\s*Episode\s+\d+.*$/i, '');
+      cleaned = cleaned.replace(/\s*[-â€“â€”:]+\s*S\d{1,2}E\d{1,3}(?:\s*[-â€“â€”:]+\s*.*)?$/i, '');
+      cleaned = cleaned.replace(/\s*[-â€“â€”:]+\s*E\d{1,3}(?:\s*[-â€“â€”:]+\s*.*)?$/i, '');
+      cleaned = cleaned.replace(/\s*[-â€“â€”:]+\s*Episode\s+\d+.*$/i, '');
       return cleaned.trim();
     } catch (e) {
       return String(baseTitle || '').trim();
@@ -6142,7 +6142,7 @@ function generatePlanForItem(it, { username, effectiveOutput, applyFilenameAsTit
     try {
       const shouldStripSeason = !(isMovie === true);
       if (shouldStripSeason) {
-        const parts = providerName.split(/\s[-–—:]\s/);
+        const parts = providerName.split(/\s[-â€“â€”:]\s/);
         if (parts && parts.length > 0) {
           parts[0] = stripSeasonNumberSuffix(parts[0]);
           providerName = parts.join(' - ');
@@ -6236,7 +6236,7 @@ function ensureRenderedNameHasYear(name, year) {
 
     // For TV shows: insert year BEFORE episode markers (S01E08, E01, etc.), not just before first separator
     // This ensures format: "Title (Year) - S01E08 - Episode" not "Title- S01E08 (Year) - Episode"
-    const episodeMarkerPattern = /[\s\-–—]*(?:S\d{1,2}E\d{1,3}|E\d{1,3})\b/i;
+    const episodeMarkerPattern = /[\s\-â€“â€”]*(?:S\d{1,2}E\d{1,3}|E\d{1,3})\b/i;
     const epMatch = result.match(episodeMarkerPattern);
     if (epMatch && epMatch.index != null) {
       // Found episode marker - insert year before it
@@ -6281,9 +6281,9 @@ function stripEpisodeArtifactsForFolder(name) {
   try {
     let out = String(name || '').trim();
     if (!out) return out;
-    out = out.replace(/\s*[-–—:]+\s*S\d{1,2}E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
-    out = out.replace(/\s*[-–—:]+\s*E\d{1,3}(?:\s*[-–—:]+\s*.*)?$/i, '');
-    out = out.replace(/\s*[-–—:]+\s*Episode\s+\d+.*$/i, '');
+    out = out.replace(/\s*[-â€“â€”:]+\s*S\d{1,2}E\d{1,3}(?:\s*[-â€“â€”:]+\s*.*)?$/i, '');
+    out = out.replace(/\s*[-â€“â€”:]+\s*E\d{1,3}(?:\s*[-â€“â€”:]+\s*.*)?$/i, '');
+    out = out.replace(/\s*[-â€“â€”:]+\s*Episode\s+\d+.*$/i, '');
     return out.trim();
   } catch (e) {
     return String(name || '').trim();
@@ -6306,7 +6306,7 @@ function stripSeasonNumberSuffix(name) {
 
     // Remove common season/part patterns at the end (with or without separators/hashes)
     // Match patterns like: "Season 2", "Season #2", "- Season 2", "(Season 2)", etc.
-    s = s.replace(/\s*[\-–—:\/\(]?\s*(?:Season|Series|Part)\s*(?:#\s*)?(?:\b(?:[0-9]{1,2}|[IVXLC]+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|[0-9]{1,2}(?:st|nd|rd|th))\b)\s*\)?$/i, '').trim();
+    s = s.replace(/\s*[\-â€“â€”:\/\(]?\s*(?:Season|Series|Part)\s*(?:#\s*)?(?:\b(?:[0-9]{1,2}|[IVXLC]+|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|[0-9]{1,2}(?:st|nd|rd|th))\b)\s*\)?$/i, '').trim();
     
     // Also strip patterns where the ordinal/number precedes the word 'Season', e.g. '2nd Season' or 'Second Season'
     try {
@@ -6390,7 +6390,7 @@ function looksLikeEpisodeTitleCandidate(title, episodeTitle) {
     const epTrim = String(episodeTitle).trim();
     if (epTrim) {
       try {
-        const suffixRe = new RegExp(`(?:[\-–—:\s]+)?${escapeRegExp(epTrim)}$`, 'i');
+        const suffixRe = new RegExp(`(?:[\-â€“â€”:\s]+)?${escapeRegExp(epTrim)}$`, 'i');
         if (suffixRe.test(candidate)) return true;
       } catch (e) { /* ignore regex issues */ }
     }
@@ -6645,8 +6645,12 @@ function persistEnrichCacheNow() {
         try { appendLog(`ENRICH_CACHE_PERSIST_BATCH_OK db=true items=${dirtyEnrichKeys.size}`); } catch (e) {}
         dirtyEnrichKeys.clear();
       }
+      db.setKV('renderedIndex', renderedIndex);
+      db.setKV('parsedCache', parsedCache);
     } else {
       writeJson(enrichStoreFile, enrichCache);
+      writeJson(renderedIndexFile, renderedIndex);
+      writeJson(parsedCacheFile, parsedCache);
       dirtyEnrichKeys.clear();
       try { appendLog(`ENRICH_CACHE_PERSIST_OK file=true size=${cacheSize}`); } catch (e) {}
     }
@@ -6826,17 +6830,17 @@ function cleanTitleForRender(t, epLabel, epTitle) {
       const lbl = String(epLabel).trim();
       if (lbl) {
         // Remove with various separators: " - S01E01", "- S01E01", " S01E01", "-S01E01"
-        s = s.replace(new RegExp('[\\s\\-–—:]*' + escapeRegExp(lbl) + '(?=[\\s\\-–—:]|$)', 'gi'), '').trim();
+        s = s.replace(new RegExp('[\\s\\-â€“â€”:]*' + escapeRegExp(lbl) + '(?=[\\s\\-â€“â€”:]|$)', 'gi'), '').trim();
       }
     }
     // Also strip any remaining SxxExx patterns anywhere in the string
-    s = s.replace(/[\s\-–—:]*S\d{1,2}E\d{1,3}(?=[\\s\-–—:]|$)/gi, '').trim();
+    s = s.replace(/[\s\-â€“â€”:]*S\d{1,2}E\d{1,3}(?=[\\s\-â€“â€”:]|$)/gi, '').trim();
     s = s.replace(/^\s*S\d{1,2}[\s_\-:\.]*[EPp]?(\d{1,3})?(?:\.\d+)?[\s_\-:\.]*/i, '').trim();
     if (epTitle) {
       const et = String(epTitle).trim();
-      if (et) s = s.replace(new RegExp('[\-–—:\\s]*' + escapeRegExp(et) + '$', 'i'), '').trim();
+      if (et) s = s.replace(new RegExp('[\-â€“â€”:\\s]*' + escapeRegExp(et) + '$', 'i'), '').trim();
     }
-    s = s.replace(/^[\-–—:\s]+|[\-–—:\s]+$/g, '').trim();
+    s = s.replace(/^[\-â€“â€”:\s]+|[\-â€“â€”:\s]+$/g, '').trim();
   } catch (e) { /* best-effort */ }
   return s || String(t).trim();
 }
@@ -7550,8 +7554,8 @@ async function fetchAniListSeriesArtworkWithCandidates(candidates) {
     }
 
     // Step 2: subtitle-stripped and word-prefix variants.
-    //   "Hanamonogatari Suruga Devil" → "Hanamonogatari Suruga" → "Hanamonogatari"
-    //   "Title: Subtitle"             → "Title"
+    //   "Hanamonogatari Suruga Devil" â†’ "Hanamonogatari Suruga" â†’ "Hanamonogatari"
+    //   "Title: Subtitle"             â†’ "Title"
     const prefixVariants = [];
     const seenPrefixes = new Set(tried); // don't re-try what step 1 already tried
     for (const candidate of queue) {
@@ -7559,7 +7563,7 @@ async function fetchAniListSeriesArtworkWithCandidates(candidates) {
       if (!base) continue;
 
       // Strip common subtitle separators (colon, em-dash, en-dash, spaced hyphen)
-      const colonStripped = base.replace(/\s*[:–—]\s*.+$/, '').trim();
+      const colonStripped = base.replace(/\s*[:â€“â€”]\s*.+$/, '').trim();
       if (colonStripped && colonStripped !== base && !seenPrefixes.has(colonStripped.toLowerCase())) {
         seenPrefixes.add(colonStripped.toLowerCase());
         prefixVariants.push(colonStripped);
@@ -7581,7 +7585,7 @@ async function fetchAniListSeriesArtworkWithCandidates(candidates) {
       if (result) return result;
     }
 
-    // Step 3: AniList synonym expansion — query AniList with the best candidate we have
+    // Step 3: AniList synonym expansion â€” query AniList with the best candidate we have
     //   to retrieve official English, romaji and synonym titles, then try those.
     //   If step 1+2 found nothing, the original query may have matched a different series
     //   and returned synonyms we can use as better search keys.
@@ -7833,16 +7837,16 @@ function getSeriesNameForApprovedEntry(entry, targetPath) {
   }
 }
 
-// ─── AniDB Titles Database ──────────────────────────────────────────────────────
+// â”€â”€â”€ AniDB Titles Database â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Mirrors Jellyfin's AniDbTitleMatcher / AniDbTitleDownloader exactly:
 //   1. Download https://anidb.net/api/anime-titles.xml.gz once per week (same TTL as Jellyfin)
-//   2. Parse every <title> element → Map<normalizedTitle, aid>
-//   3. Resolve AID offline — zero HTTP API rate-limit cost for title lookup
+//   2. Parse every <title> element â†’ Map<normalizedTitle, aid>
+//   3. Resolve AID offline â€” zero HTTP API rate-limit cost for title lookup
 const ANIDB_TITLES_URL    = 'https://anidb.net/api/anime-titles.xml.gz';
 const ANIDB_TITLES_FILE   = path.join(DATA_DIR, 'anidb-titles-db.json');
 const ANIDB_TITLES_TTL_MS = 7 * 24 * 60 * 60 * 1000; // refresh weekly (same as Jellyfin)
 
-let _anidbTitlesMap = null;        // plain object { title -> aid } — built once
+let _anidbTitlesMap = null;        // plain object { title -> aid } â€” built once
 let _anidbTitlesLoadPromise = null; // deduplicate concurrent loads
 
 // Direct port of AniDbTitleMatcher.GetComparableName() from the Jellyfin plugin
@@ -7855,7 +7859,7 @@ function _anidbComparableName(name) {
     const cp = ch.codePointAt(0);
     if (cp >= 0x2B0 && cp <= 0x0333) continue;  // skip modifiers / diacritics
     else if (REMOVE.has(ch))  continue;           // drop punctuation
-    else if (SPACERS.has(ch)) sb += ' ';          // spacers → space
+    else if (SPACERS.has(ch)) sb += ' ';          // spacers â†’ space
     else if (ch === '&')      sb += ' and ';
     else                      sb += ch;
   }
@@ -7938,7 +7942,7 @@ function anidbLookupTitle(seriesName) {
   return _anidbTitlesMap[name] || _anidbTitlesMap[_anidbComparableName(name)] || null;
 }
 
-// Per-session per-AID anime cache — avoids duplicate HTTP calls within one server run
+// Per-session per-AID anime cache â€” avoids duplicate HTTP calls within one server run
 const _anidbAnimeCache = new Map(); // aid (number) -> { picture, summary, restricted, fetchedAt }
 const ANIDB_ANIME_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
@@ -7996,7 +8000,7 @@ function findAniDbAidForApprovedSeries(outputKey, seriesName) {
 }
 
 async function findAniDbAidByTitle(seriesName) {
-  // Use the offline titles database — no API calls, no rate-limit cost.
+  // Use the offline titles database â€” no API calls, no rate-limit cost.
   // Mirrors Jellyfin's AniDbTitleMatcher.FindSeries() exactly:
   //   1. try exact match on original name
   //   2. try GetComparableName(name) (lowercased, punctuation stripped)
@@ -8025,7 +8029,7 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
   //   1. Resolve AID via enrich cache or offline titles DB
   //   2. If AID found: check session cache, then HTTP getAnimeInfo(aid)
   //   3. If no AID: HTTP getAnimeInfoByTitle() for each title candidate (title-search fallback)
-  //   4. Parse <picture> element → https://cdn.anidb.net/images/main/{picture}
+  //   4. Parse <picture> element â†’ https://cdn.anidb.net/images/main/{picture}
   try {
     // For the HTTP picture API, always use the Jellyfin/Emby registered client
     // (mediabrowser/1). The anidb_client_name setting is intended for the UDP
@@ -8108,7 +8112,7 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
       return parseAnimeResult(anime, aid);
     }
 
-    // 3. No AID found — fall back to HTTP title search for each candidate title.
+    // 3. No AID found â€” fall back to HTTP title search for each candidate title.
     //    Only try ASCII/latin-script titles; AniDB's aname= endpoint is unreliable for
     //    CJK/native-script characters and wastes time on 500ms-per-call timeouts.
     appendLog(`APPROVED_SERIES_ANIDB_NO_AID_TRYING_TITLE series=${String(seriesName || '').slice(0,80)}`);
@@ -8136,12 +8140,12 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
       }
     }
 
-    // 3b. Offline DB missed for all candidates — fall back to aname= HTTP title search.
+    // 3b. Offline DB missed for all candidates â€” fall back to aname= HTTP title search.
     //     Only try ASCII/latin-script titles; AniDB's aname= endpoint is unreliable for
     //     CJK/native-script characters and wastes time on 500ms-per-call timeouts.
     for (const candidate of candidates) {
       if (!candidate) continue;
-      // Skip non-ASCII titles — AniDB's aname= search doesn't handle them reliably
+      // Skip non-ASCII titles â€” AniDB's aname= search doesn't handle them reliably
       if (/[^\x00-\x7F]/.test(candidate)) {
         appendLog(`APPROVED_SERIES_ANIDB_TITLE_SEARCH_SKIP_NON_ASCII candidate=${String(candidate).slice(0,80)}`);
         continue;
@@ -8166,7 +8170,7 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
 
     // 4. Candidate title searches all missed. Ask AniList for this series' AniDB external
     //    link and do a reliable ?aid= lookup. This is faster and more robust than trying
-    //    native-script title searches — a single AniList call resolves the AID directly.
+    //    native-script title searches â€” a single AniList call resolves the AID directly.
     const anilistResolvedAid = await resolveAniDbAidViaAniList(candidates.slice(0, 3));
     if (anilistResolvedAid) {
       appendLog(`APPROVED_SERIES_ANIDB_AID_VIA_ANILIST series=${String(seriesName || '').slice(0,80)} aid=${anilistResolvedAid}`);
@@ -8184,7 +8188,7 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
     }
 
     // 5. AniList had no AniDB external link for this series. Get synonyms from AniList
-    //    5a. Try ALL synonyms (including native/CJK) against the offline titles DB — free,
+    //    5a. Try ALL synonyms (including native/CJK) against the offline titles DB â€” free,
     //        no API cost, and finds results that aname= HTTP can never match.
     //    5b. Fall back to aname= HTTP for ASCII-only synonyms as a last resort.
     const anilistSynonyms = await getAniListSynonymsForTitle(candidates.slice(0, 2));
@@ -8195,7 +8199,7 @@ async function fetchAniDbSeriesArtwork(seriesName, outputKey, username, titleCan
     if (novelSynonymsAll.length > 0) {
       appendLog(`APPROVED_SERIES_ANIDB_SYNONYM_EXPAND series=${String(seriesName || '').slice(0,80)} count=${novelSynonymsAll.length} first=${String(novelSynonymsAll[0]).slice(0,60)}`);
 
-      // 5a. Offline titles DB lookup for each synonym — handles CJK/native titles too
+      // 5a. Offline titles DB lookup for each synonym â€” handles CJK/native titles too
       for (const synonym of novelSynonymsAll) {
         const synonymDbAid = anidbLookupTitle(synonym);
         if (synonymDbAid) {
@@ -8593,7 +8597,7 @@ function startApprovedSeriesBackgroundWorker() {
   }
 }
 
-// ─── Auto-Rescan Background Worker ────────────────────────────────────────────
+// â”€â”€â”€ Auto-Rescan Background Worker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 let autoRescanTimer = null;
 let autoRescanInFlight = false;
@@ -8705,12 +8709,36 @@ function startAutoRescanWorker() {
   }, AUTO_RESCAN_INTERVAL_MS);
 }
 
-// ─── Background Job Queue ─────────────────────────────────────────────────────
+// â”€â”€â”€ Background Job Queue â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Jobs survive browser closure because they run entirely in the Node.js process.
 // Tracks single-item enrichment operations currently running in POST /api/enrich.
 // Keyed by canonical path; value is { startedAt, stage }. Cleared when the async
 // work finishes (even if the HTTP response was already sent early via background:true).
 const activeEnriches = new Map();
+// Background enrichment pause flag.
+// When set to true, backgroundEnrichAll finishes the current item and then
+// stops picking new items. Set to true on user login for UI responsiveness.
+// Auto-resets after BG_ENRICH_AUTO_RESUME_MS, or immediately via resumeBgEnrich().
+let bgEnrichPaused = false;
+let _bgEnrichPauseTimer = null;
+const BG_ENRICH_AUTO_RESUME_MS = 10 * 60 * 1000; // 10 minutes
+
+function pauseBgEnrich() {
+  bgEnrichPaused = true;
+  if (_bgEnrichPauseTimer) clearTimeout(_bgEnrichPauseTimer);
+  _bgEnrichPauseTimer = setTimeout(() => {
+    bgEnrichPaused = false;
+    _bgEnrichPauseTimer = null;
+    try { appendLog('BG_ENRICH_AUTO_RESUMED after 10 min'); } catch (e) {}
+  }, BG_ENRICH_AUTO_RESUME_MS);
+  try { appendLog('BG_ENRICH_PAUSED auto_resume_in=10min'); } catch (e) {}
+}
+
+function resumeBgEnrich() {
+  bgEnrichPaused = false;
+  if (_bgEnrichPauseTimer) { clearTimeout(_bgEnrichPauseTimer); _bgEnrichPauseTimer = null; }
+  try { appendLog('BG_ENRICH_RESUMED'); } catch (e) {}
+}
 
 // Clients submit a job, get back a jobId, then poll GET /api/jobs/:id.
 const bgJobs = new Map();
@@ -8725,15 +8753,15 @@ function createBgJob(type, totalItems) {
   return job;
 }
 
-// GET /api/jobs — list recent/active jobs (useful for reconnecting clients)
-// GET /api/jobs/:id — poll a specific job
-// POST /api/jobs/approve — run preview + apply entirely server-side
+// GET /api/jobs â€” list recent/active jobs (useful for reconnecting clients)
+// GET /api/jobs/:id â€” poll a specific job
+// POST /api/jobs/approve â€” run preview + apply entirely server-side
 // App Engine (Approve items and hardlink)
 // Body: { items: [{canonicalPath, overwrite, keepBothTarget}], outputFolder, template, useFilenameAsTitle, skipAnimeProviders }
-// POST /api/jobs/backfill-subtitles — for all approved items, extract subtitles if the .srt is missing
-// POST /api/jobs/bulk-rescan — enrich a list of paths server-side with rate limiting
+// POST /api/jobs/backfill-subtitles â€” for all approved items, extract subtitles if the .srt is missing
+// POST /api/jobs/bulk-rescan â€” enrich a list of paths server-side with rate limiting
 // Body: { paths: [...], force, skipAnimeProviders }
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // Returns the individual approved files that make up a given series within an output.
 // Force-refresh a single series image: evicts cache and re-fetches regardless of cooldowns.
@@ -8862,7 +8890,7 @@ function extractSeasonNumberFromTitle(t) {
         const k = String(m[1] || '').toLowerCase()
         if (map[k]) return map[k]
       }
-      // fallback: trailing digits like "Title 2" — only treat as season when
+      // fallback: trailing digits like "Title 2" â€” only treat as season when
       // the title is short (likely an explicit season marker) or contains
       // only 1-2 words (e.g., "Show 2"). This avoids treating long series
       // names with sequel numerals (e.g., "Getsuyoubi no Tawawa 2") as seasons.
@@ -9140,10 +9168,10 @@ async function lookupWikipediaEpisode(seriesTitle, season, episode, options) {
           if (!raw) return raw
           let s = String(raw).trim()
           // prefer text inside double quotes (straight or curly)
-          const quoteMatch = s.match(/["“”«»\u201C\u201D]([^"“”«»\u201C\u201D]+)["“”«»\u201C\u201D]/)
+          const quoteMatch = s.match(/["â€œâ€Â«Â»\u201C\u201D]([^"â€œâ€Â«Â»\u201C\u201D]+)["â€œâ€Â«Â»\u201C\u201D]/)
           if (quoteMatch && quoteMatch[1]) return quoteMatch[1].trim()
           // prefer single-quoted if double not found
-          const singleMatch = s.match(/[\'‘’]([^\'‘’]+)[\'‘’]/)
+          const singleMatch = s.match(/[\'â€˜â€™]([^\'â€˜â€™]+)[\'â€˜â€™]/)
           if (singleMatch && singleMatch[1]) return singleMatch[1].trim()
           // remove parenthetical Japanese/Language annotations
           s = s.replace(/\(\s*Japanese:[^\)]*\)/i, '').replace(/\(\s*Japanese language[^\)]*\)/i, '')
@@ -10029,6 +10057,7 @@ const ctx = {
   resolvedSameSite, secureCookies, lastGlobalActivityTime, hideEvents,
   folderWatchers, db, enrichCache, parsedCache, renderedIndex, scans,
   activeScans, refreshProgress, sseClients, activeEnriches,
+  bgEnrichPaused, pauseBgEnrich, resumeBgEnrich,
   truncateProviderDetail, assignProviderSourceMetadata, ensureSessionKey,
   ensureFile, normalizeManualIdKey, normalizeManualIdValue,
   normalizeAniDbEpisodeId, normalizeManualPathKey, toLooseManualPath,

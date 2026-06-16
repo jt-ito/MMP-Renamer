@@ -4,7 +4,8 @@ module.exports = function createAuthRoutes(ctx) {
   app,
   bcrypt,
   users,
-  requireAuth
+  requireAuth,
+  pauseBgEnrich
 } = ctx;
 
   router.get('/api/csrf-token', (req, res) => {
@@ -50,6 +51,8 @@ router.post('/api/login', (req, res) => {
     if (!user.passwordHash) {
       if (password && String(password).length) return res.status(401).json({ error: 'invalid credentials' });
       req.session.username = username;
+      // Pause background enrichment so the UI stays responsive during the session
+      try { if (typeof pauseBgEnrich === 'function') pauseBgEnrich(); } catch (e) {}
       return res.json({ ok: true, username });
     }
     // compare hashed password
@@ -57,6 +60,8 @@ router.post('/api/login', (req, res) => {
       if (err) return res.status(500).json({ error: 'compare error' });
       if (!same) return res.status(401).json({ error: 'invalid credentials' });
       req.session.username = username;
+      // Pause background enrichment so the UI stays responsive during the session
+      try { if (typeof pauseBgEnrich === 'function') pauseBgEnrich(); } catch (e) {}
       return res.json({ ok: true, username });
     });
   } catch (e) { return res.status(500).json({ error: e && e.message ? e.message : String(e) }); }

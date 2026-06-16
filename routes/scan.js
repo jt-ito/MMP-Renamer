@@ -38,8 +38,16 @@ module.exports = function createScanRoutes(ctx) {
   buildAppliedSourcesSet,
   isHiddenOrAppliedPath,
   sweepEnrichCache,
-  updateEnrichCacheInMemory
+  updateEnrichCacheInMemory,
+  bgEnrichPaused: _bgEnrichPaused,
+  resumeBgEnrich,
+  isProviderComplete
 } = ctx;
+
+  // Local reference so mutations in backgroundEnrichAll can read the current value
+  const isBgEnrichPaused = () => {
+    try { return ctx.bgEnrichPaused === true; } catch (e) { return false; }
+  };
 
   const resolveMetadataProviderOrder = (username) => {
     try {
@@ -81,9 +89,21 @@ module.exports = function createScanRoutes(ctx) {
 
     appendLog(`BACKGROUND_ENRICH_ALL_START scan=${scanId} items=${enrichCandidates.length}`);
     for (let i = 0; i < enrichCandidates.length; i++) {
+      // Check pause flag between each item (never mid-item)
+      if (isBgEnrichPaused()) {
+        appendLog(`BACKGROUND_ENRICH_PAUSED at item=${i}/${enrichCandidates.length} scan=${scanId}`);
+        try { activeScans.delete(lockKey); appendLog(`SCAN_LOCK_RELEASED path=${libPath}`); } catch (ee) {}
+        return;
+      }
       const p = enrichCandidates[i];
       try {
         const fromPath = canonicalize(p);
+        // Skip items that already have a complete provider enrichment
+        const existingEntry = enrichCache[fromPath] || null;
+        if (existingEntry && isProviderComplete && isProviderComplete(existingEntry.provider)) {
+          appendLog(`BACKGROUND_ENRICH_SKIP_COMPLETE path=${fromPath}`);
+          continue;
+        }
         const opts = { username, force: false };
         if (forcedHash) opts.forceHash = true;
         if (skipAnime) opts.skipAnimeProviders = true;
