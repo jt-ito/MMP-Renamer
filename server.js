@@ -10057,7 +10057,7 @@ const ctx = {
   resolvedSameSite, secureCookies, lastGlobalActivityTime, hideEvents,
   folderWatchers, db, enrichCache, parsedCache, renderedIndex, scans,
   activeScans, refreshProgress, sseClients, activeEnriches,
-  bgEnrichPaused, pauseBgEnrich, resumeBgEnrich,
+  bgEnrichPaused, pauseBgEnrich, resumeBgEnrich, isBgEnrichPaused: () => bgEnrichPaused,
   truncateProviderDetail, assignProviderSourceMetadata, ensureSessionKey,
   ensureFile, normalizeManualIdKey, normalizeManualIdValue,
   normalizeAniDbEpisodeId, normalizeManualPathKey, toLooseManualPath,

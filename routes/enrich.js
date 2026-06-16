@@ -39,7 +39,7 @@ module.exports = function createEnrichRoutes(ctx) {
   renderCustomMetadataName,
   hideEventsClientCache,
   HIDE_EVENTS_CACHE_WINDOW_MS,
-  bgEnrichPaused,
+  isBgEnrichPaused,
   resumeBgEnrich,
   pauseBgEnrich
 } = ctx;
@@ -47,7 +47,7 @@ module.exports = function createEnrichRoutes(ctx) {
   // Background enrich pause status and control
   router.get('/api/enrich/bg-status', requireAuth, (req, res) => {
     try {
-      return res.json({ paused: bgEnrichPaused === true });
+      return res.json({ paused: isBgEnrichPaused() === true });
     } catch (e) {
       return res.status(500).json({ error: e && e.message ? e.message : String(e) });
     }

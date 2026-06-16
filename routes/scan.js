@@ -46,7 +46,7 @@ module.exports = function createScanRoutes(ctx) {
 
   // Local reference so mutations in backgroundEnrichAll can read the current value
   const isBgEnrichPaused = () => {
-    try { return ctx.bgEnrichPaused === true; } catch (e) { return false; }
+    try { return typeof ctx.isBgEnrichPaused === 'function' && ctx.isBgEnrichPaused(); } catch (e) { return false; }
   };
 
   const resolveMetadataProviderOrder = (username) => {
