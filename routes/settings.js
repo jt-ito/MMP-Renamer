@@ -286,7 +286,7 @@ router.post('/api/manual-ids', requireAuth, requireAdmin, (req, res) => {
     const rawClear = req && req.body ? req.body.clear : null;
     const clearRequested = rawClear === true || rawClear === 'true' || rawClear === 1 || rawClear === '1';
 
-    manualIds = manualIds || {};
+    // manualIds is always an object and passed by reference as const, do not reassign
     
     // Handle series-level IDs (AniList, TMDB, TVDB)
     if (Object.keys(seriesEntry).length === 0 && !anidbEpisodeId) {
