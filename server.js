@@ -8642,7 +8642,13 @@ async function runAutoRescanCycle() {
             let username = null;
             if (typeof users !== 'undefined' && users) {
               const usernames = Object.keys(users);
-              if (usernames.length > 0) {
+              for (const u of usernames) {
+                if (users[u].settings && (users[u].settings.anidb_username || users[u].settings.tmdb_api_key)) {
+                  username = u;
+                  break;
+                }
+              }
+              if (!username && usernames.length > 0) {
                  username = usernames[0];
               }
             }
