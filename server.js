@@ -8639,7 +8639,32 @@ async function runAutoRescanCycle() {
               }
             }
             
-            const data = await externalEnrich(p, tmdbKey, { forceHash: false });
+            let username = null;
+            if (typeof users !== 'undefined' && users) {
+              const usernames = Object.keys(users);
+              if (usernames.length > 0) {
+                 username = usernames[0];
+              }
+            }
+            
+            let forcedHash = false;
+            let skipAnime = false;
+            if (username && users[username] && users[username].settings && users[username].settings.default_rescan_force_hash !== undefined) {
+              forcedHash = coerceBoolean(users[username].settings.default_rescan_force_hash);
+            } else if (serverSettings && serverSettings.default_rescan_force_hash !== undefined) {
+              forcedHash = coerceBoolean(serverSettings.default_rescan_force_hash);
+            } else {
+              const _refreshProviderOrder = resolveMetadataProviderOrder(username);
+              forcedHash = (_refreshProviderOrder && _refreshProviderOrder.length && _refreshProviderOrder[0] === 'anidb');
+            }
+
+            if (username && users[username] && users[username].settings && users[username].settings.default_rescan_skip_anime !== undefined) {
+              skipAnime = coerceBoolean(users[username].settings.default_rescan_skip_anime);
+            } else if (serverSettings && serverSettings.default_rescan_skip_anime !== undefined) {
+              skipAnime = coerceBoolean(serverSettings.default_rescan_skip_anime);
+            }
+            
+            const data = await externalEnrich(p, tmdbKey, { username: username, forceHash: forcedHash, skipAnimeProviders: skipAnime });
             if (data) {
               const providerRendered = renderProviderName(data, p, null);
               const providerRaw = cloneProviderRaw(extractProviderRaw(data));
